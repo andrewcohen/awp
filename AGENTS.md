@@ -72,6 +72,20 @@ Two things follow, and the second matters more than the first.
 The general shape is worth keeping: when a guard's effect happens in someone
 else's process, assert on what that process sees, not on what you handed it.
 
+**And the reading half was missing.** `currentZmxSession()` returned
+`process.env.ZMX_SESSION` as it stood, so the empty string this function sets
+read back as _a session named nothing_ — in exactly the children that had been
+neutralised. `insideZmxSession()` answered true there, which is the refusal
+the probes are built on, aimed at the one case that is safe.
+
+Seen as three failures in `zmx.test.ts`, each asking a real zmx about a
+session named `""` and being refused by name. Empty is absent now, in the one
+function that reads it; the rule is not "set on the way out" but **set on the
+way out, and treat empty as absent on the way in**, and only the pair is
+coherent. `attachment.test.ts` was reading the variable directly and now asks
+through the same function — a second implementation of a rule is the copy that
+drifts.
+
 ## archive/ is evidence, not truth
 
 It is read like vendored upstream source: consulted, never called, never ported
@@ -4215,6 +4229,52 @@ second. `enqueue` answers the second with the first job, which leaves the thread
 the handler had just made as litter — so the handler compares the thread on the
 returned job's record with the one it created, and removes its own if it lost.
 
+## Two clients on one conversation, and what neither of them could see
+
+`apps/tui` opens the same `ChatOpen` the window does, so a conversation can
+have a terminal client and a window client at once. **No daemon change was
+needed to read one** — the numbered subscriber queues were already a fan-out —
+and the two things that were missing were both about _writing_.
+
+```
+  ChatOpen            already fans out: register, then snapshot          ✓
+  what somebody typed no adapter echoes a user chunk on a live turn      ✗
+  a question answered nothing in ACP says one was                        ✗
+```
+
+Left alone, that is a pair of clients each seeing half a conversation: the TUI
+watched a turn start and an answer arrive with the question missing, and both
+went on offering buttons for a permission the other had settled minutes ago —
+where pressing one earns `that request has already been answered`, which is a
+refusal about somebody else's click.
+
+**The daemon says both, because it is the only process that knows.** `send`
+emits the user's message before the turn edges; `answer` emits
+`status: "answered"` with the option id after the reply.
+
+**The key is the client's, and that is the load-bearing half.** The sender
+paints its copy on the keypress — `mine` in conversation.ts, which exists
+because nothing echoed anything — so the echo names a row that is already on
+screen, and the two need one name to be one row. A key minted by the _reply_
+would arrive after the row it names. So `ChatSend` carries it, both folds
+ignore an echo whose key they already hold, and it is a **uuid**: two clients
+with a counter each would both mint `mine-1`, and one window's second message
+would silently swallow the other's.
+
+**The option id and not its name.** Every client holds the options for the
+request it is drawing, so it can say `Always Allow` in its own words — a name
+on the wire would be a second copy of something already sent, and the one that
+drifts is the copy nobody tests.
+
+Measured against a real adapter, `probe:chat`:
+
+```
+  echoed      yes, under probe-1
+```
+
+which is a check that could not be a test: a fixture would agree with itself
+about an update the adapter does not send.
+
 ## A steer is not a reply, and two turns overlap
 
 Reported as "when you steer the message gets out of order", and every part of
@@ -4423,6 +4483,201 @@ looks stalled". They are the SDK's fields in the SDK's spelling, so they are
 read as `max_retries` first and camelCase second rather than assumed. A
 subagent behind a rate limit and a subagent doing slow work are otherwise the
 same picture, and only one of them is worth waiting for.
+
+### An edit answers with nothing, so the daemon has to say what it changed
+
+A tool call's row is its title, its mark and its output — and the one kind of
+call that changes anything has **no output at all**. So the row for an edit
+said the least about it:
+
+```
+  ran     bun run test           ✓   + 40 lines of what happened
+  edited  apps/.../Fence.tsx     ✓   ← and nothing else. The change is on
+                                       disk and nowhere on screen
+```
+
+What the adapter does send is on the call's `content`, and it is not a patch:
+`{type: "diff", path, oldText, newText}` — two whole texts — and **one block
+per hunk**, so a `MultiEdit` of three places in one file is three of them.
+Read out of the installed adapter's own `tools.js`, 0.70.0 on this machine.
+
+**The daemon diffs, once.** Two clients would otherwise each need a differ,
+and the terminal one has none. What crosses the wire is a unified patch, which
+is the shape both faces already render — amoeba through the same
+`parsePatchFiles` a fenced ` ```diff ` goes through, the TUI through the
+colouring in `Items.tsx`. Same argument as `SessionIdentity`: a client
+re-deriving a daemon's rule is a second implementation.
+
+`diff` (jsdiff) is the differ, and it is not a new kind of dependency —
+`@pierre/diffs` is built on it, and `createTwoFilesPatch` produces exactly
+what `parsePatchFiles` reads back. Verified before anything was built on it,
+because a patch format that nearly parses is the worst outcome.
+
+Three rules follow, each one a way to get it wrong:
+
+- **Replace, never merge.** The adapter sends its guess at the change when the
+  call is made and the real one — out of the SDK's `structuredPatch` — when it
+  has run, about the same file. Merged, the row draws the edit twice, older
+  copy first.
+- **An unchanged block is dropped.** A `Write` of content already on disk
+  sends one, and an empty patch under a row is a row claiming an edit that did
+  not happen.
+- **`oldText: null` is a new file**, and jsdiff makes every line an addition
+  from an empty left side with nothing special asked of it.
+- **Each side gets a trailing newline, and that is not cosmetic.** An
+  `Edit`'s two strings are a _fragment_, so they almost never end in one, and
+  jsdiff says so with git's own marker — which `@pierre/diffs` throws on, from
+  inside its renderer rather than its parser:
+
+  ```
+    \ No newline at end of file
+    → DiffHunksRenderer.processDiffResult: deletionLine and additionLine are
+      null, something is wrong
+  ```
+
+  The patch parses and then the panel dies, so the agent column is a stack
+  trace for an edit that worked. Three of the five shapes an edit takes
+  produce the marker, including every ordinary `Edit`, so it is the common
+  case. A newline is added rather than the marker stripped — the marker is
+  jsdiff telling the truth about what it was handed, and the wrong half is the
+  question: a fragment has no end of file to be missing a newline at. An empty
+  side stays empty, or a `Write` gains a line to delete that never existed.
+
+**And the fold had to stop swallowing it.** `grouped` rolls a run of
+consecutive calls into one block that draws its tail and counts the rest — so
+an edit early in a long run sits behind `+7 earlier calls`, which is the
+change itself folded away. A call carrying a patch now stands alone, and so
+does a question, which was previously excepted one layer lower, where the
+block is drawn. Both are decided in `grouped` now: a guard that can no longer
+fire is one nothing tests.
+
+The TUI's own fold is the same rule and a **different threshold** — it rolls
+up _every_ receipt and keeps three, because that column is the whole screen
+rather than one of three.
+
+**opentui has a `<diff>`, and the wrong conclusion was drawn first.**
+`<code filetype="diff">` was the first version of the TUI's half, on the
+strength of `diff.plus` and `diff.minus` already being in `SYNTAX`. It draws a
+patch in one flat colour: opentui 0.5.11 ships four grammars — javascript,
+typescript, markdown, zig, read out of its own `default-parsers.ts` — and an
+unknown filetype is not an error. That much was right, and the repair chosen
+from it was wrong: colouring the lines by hand, off the first character.
+
+`DiffRenderable` was there the whole time, and it is the same shape as the
+window's half — it takes **the unified patch string**, parses it with the same
+jsdiff that composed it, and does the line numbers, the signs, the row
+backgrounds and the syntax highlighting of the code _inside_ the patch. So
+both faces are now handed one string by the daemon and neither parses
+anything:
+
+```
+  amoeba   <CodeView items=[{type:"diff", fileDiff}]>   parsePatchFiles
+  tui      <diff diff={patch} filetype="typescript">    parsePatch
+```
+
+The lesson is the one about looking for the reader: a missing _grammar_ was
+read as "this library cannot draw a diff", when what was missing was the
+component that does. Grep the component list, not only the one you reached
+for.
+
+Three things it needed that are not obvious:
+
+- **`addedBg` is the content background** when `addedContentBg` is unset, and
+  the line-number gutter's is separately transparent. So sampling a row's
+  colour at its first span reads the page and reports every row as unmarked.
+- **Highlighting is asynchronous.** A frame captured immediately after the
+  first render has white code on the right backgrounds; a second later it is
+  the palette. Both are real frames, and only one is what a person sees.
+- **A hand-written fixture patch is nearly always invalid**, and the
+  renderable says so rather than drawing nonsense —
+  `Error parsing diff: Added line count did not match for hunk at line 5`.
+  The probe's patch comes out of `createTwoFilesPatch` for that reason.
+
+Measured, which is the only way to tell a coloured patch from a flat one:
+
+```
+  the + row      bg #26382c  const #c6a0f6      ← palette, and highlighted
+  the - row      bg #3b2733  const #c6a0f6
+  a context row  bg #1e2030  if    #c6a0f6
+```
+
+`bun run probe:transcript` renders the TUI's own components through
+`createTestRenderer` — no tty, no daemon, no socket — and prints the frame
+plus those four readings. Every state in it is one a live agent happens not to
+be in when somebody looks.
+
+`probe:chat` carries the daemon's half, against a real adapter, and its first
+run is the argument for the replace rule in one screen:
+
+```
+  blocks, all updates   2
+  what a client draws   1
+    notes.txt  -the word is: heron  +the word is: lantern
+```
+
+Two blocks for one `Edit`, on one tool id: the guess when the call was made
+and the structured patch when it had run. A fold that merged would draw both,
+and the stale one first.
+
+**A patch survives being opened again, and it is not quite the same patch.**
+Worth knowing because a chat is read far more often than it is had: the
+adapter is released two minutes after the last client goes, so almost every
+look at an edit made this morning is a `session/load` in a fresh process. If
+the patch were live-only, the panel would show it for a few minutes and then
+quietly stop — which is indistinguishable from a tool that never reported one.
+
+It does come back. Replay walks the transcript through the same
+`toAcpNotifications` the live path uses, and the diff block is built from the
+tool's own **input**, which is in the transcript:
+
+```
+  live     -the word is: heron   +the word is: lantern   ← the SDK's
+                                                            structuredPatch
+  replayed -heron                +lantern                ← the Edit's own
+                                                            old_string/new_string
+```
+
+So a reopened conversation shows the narrower hunk: the strings the agent
+replaced, without the surrounding line. Both are true and neither is wrong to
+draw; nothing tries to reconcile them, because the two are what the two
+sources actually said.
+
+### Escape throws the draft away, in both faces
+
+It did so in the TUI and, in the window, only while the slash menu was open —
+so a key people press by reflex abandoned a half-typed message on one face and
+did nothing at all on the other. Reported as exactly that.
+
+Silently, in both. The TUI used to answer an empty composer with
+`nothing to cancel · ctrl-\ goes back`, which put a sentence in the one slot a
+refusal has to land in, for a key that did nothing.
+
+**Only while there is something to throw away.** An empty composer lets Escape
+past, because it is a window-level gesture elsewhere — with a dialog over this
+panel, what should close is the dialog.
+
+### The status row under the TUI's composer
+
+The same read-only facts the window draws under its own composer — mode,
+model, effort, fast mode, and how full the context is. It replaced a row of
+chords, which were four things that are always true, and this file's own
+argument about the status bar applies: a row that is never anything but
+furniture is a row nobody reads.
+
+Two things it needed that were not there:
+
+```
+  the settings   ChatConfig, asked once when the screen opens. A call and not
+                 a field on the stream — the contract's own reasoning, and
+                 nothing in the list changes unless somebody changes it
+  the figure     `usage` was DROPPED by the TUI's fold, under a note saying it
+                 said nothing a person reads. It is the only place the context
+                 figure exists
+```
+
+A notice still takes the row while it has something to say, because a refusal
+is exactly the thing that has to be read, and the answer keys are a notice of
+that kind.
 
 ## A fence in a message is three different things
 
@@ -4982,6 +5237,78 @@ That line is the whole check, and it is the same shape as every other silent
 failure in this file: read what the other process received, not what was handed
 to it.
 
+## The daemon cannot restart itself, and neither can anything it spawned
+
+Reported as "i tried restarting the daemon from within the acp and failed
+pretty hard", and what was left behind was a session with `exit_code=130`, a
+free port, and a window talking to nothing. The reason is a process tree, not
+a command:
+
+```
+  the daemon ── spawns ──▶ the ACP adapter ── is ──▶ the agent in the chat
+             ── spawns ──▶ zmx attach ──▶ the agent in a terminal it created
+```
+
+Both of those agents die with the daemon. So a restart typed in either one
+runs its first half — the kill — and never reaches the second. The failure has
+no error in it: the command that would have said something is the thing that
+was killed.
+
+**The repair is to hand the restart to a process the daemon is not the parent
+of.** zmx has one — the session server — so the work goes into a session of
+its own:
+
+```
+  bun run dev restart daemon
+    └─ zmx run awp-dev-ops -d bash scripts/dev/restart.sh daemon
+         └─ interrupt awp-dev-daemon · wait for the task · run it again
+```
+
+The caller can then die immediately, which is exactly what it is about to do.
+
+**An interrupt, not `zmx kill`.** `kill` takes the session with it, so the next
+`run` makes a new one and the scrollback of what just happened is gone — which
+is the one thing a person wants after a restart that did not work. `zmx wait`
+rather than a sleep, because a daemon still holding :5274 when the next one
+starts fails with `address already in use` in a log nobody is reading.
+
+### `ended=` is about the last task, not about what is running
+
+The status command got this wrong first, and the reading was flatly
+contradicted by the port:
+
+```
+  daemon   stopped   pid=60689        ← from `ended=… exit_code=130`
+  :5274    bun 54407                  ← answering requests the whole time
+```
+
+A session keeps the `ended`/`exit_code` of its **previous** task after a new
+one starts. It is the same distinction this file already records for
+`SessionInfo.ended` — zmx's is about the task, the daemon's is about the
+process — and it means no field in `zmx ls` answers "is this running".
+
+What answers it is a **child of the session's shell**: a task is a process
+under it, and a session sitting at a prompt has none. `probe:session-start`
+reads a child of the session pid for exactly this reason.
+
+### The dev processes, in one place
+
+`scripts/dev/` holds one script per session, and they are what the sessions
+run — not a line typed into a terminal once and lost. The commands:
+
+```
+  bun run dev up      [daemon|vite|app|all]   idempotent per session
+  bun run dev down    [what]                  interrupt, keep the scrollback
+  bun run dev restart [what]                  through awp-dev-ops
+  bun run dev status                          sessions, and the ports
+  bun run dev logs daemon [lines]
+```
+
+`up` leaves a running session alone, because `up` is what somebody types when
+they are not sure. Each script `exec`s its process so the session's process
+_is_ the thing, rather than a shell holding it — see the note below on why a
+`&` produced a black window twice.
+
 ## Running the app under zmx: two sessions, because one of them does not block
 
 `bun run amoeba` is `dev:all`, which is `vite --clearScreen false & bun run
@@ -5026,6 +5353,14 @@ Vite and an Electron do not.
   ```
   bun run fmt   ·  lint  ·  typecheck  ·  test  ·  doctor
   ```
+
+- **`tsc --build` is incremental, and an incremental gate can pass on a file
+  it did not check.** A prop changed from `focus?: string` to something passed
+  `string | undefined` is an `exactOptionalPropertyTypes` error, and five
+  consecutive `bun run typecheck` runs reported zero errors — then a clean
+  `.tsbuild` failed immediately, and so did somebody else's machine. The
+  script is `tsc --build --force` now: 1.4s for the whole workspace, against a
+  gate that can be wrong.
 
 - **Judge a gate by its exit code, never by grepping its output.** `tsc` colours
   its output, so there are escape codes _between_ the words:

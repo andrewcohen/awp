@@ -239,6 +239,140 @@ describe("updateOf", () => {
     expect(update?.elapsed).toBeUndefined();
   });
 
+  // ── an edit, which is the one call with something to show ──────────────
+  //
+  // The shape is the adapter's own, read out of `tools.ts` in
+  // claude-code-acp 0.16.2: an `Edit` becomes `{type: "diff", path, oldText,
+  // newText}` on the call's content, a `Write` sends `oldText: null`, and the
+  // result path sends **one block per hunk** out of the SDK's structuredPatch.
+  // None of it is a patch, and both faces would otherwise have to diff two
+  // whole texts themselves.
+
+  it("turns an edit into a patch a client can draw", () => {
+    const update = updateOf({
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "toolu_01",
+        kind: "edit",
+        title: "Edit notes.txt",
+        content: [
+          {
+            type: "diff",
+            path: "/repo/notes.txt",
+            oldText: "one\ntwo\nthree\n",
+            newText: "one\n2\nthree\n",
+          },
+        ],
+      },
+    });
+    expect(update?.diffs).toHaveLength(1);
+    expect(update?.diffs?.[0]?.path).toBe("/repo/notes.txt");
+    // Unified, and named on both sides — the name is where a renderer reads
+    // the language from.
+    expect(update?.diffs?.[0]?.patch).toContain("--- notes.txt");
+    expect(update?.diffs?.[0]?.patch).toContain("-two");
+    expect(update?.diffs?.[0]?.patch).toContain("+2");
+    // The context around the change survives, which is the whole reason this
+    // is a diff rather than two blocks of text: a reader has to see where in
+    // the file the change landed.
+    expect(update?.diffs?.[0]?.patch).toContain(" three");
+  });
+
+  it("reads a Write, whose old text is null", () => {
+    // A new file is every line added, and jsdiff produces that on its own from
+    // an empty left-hand side. Getting this wrong draws a new file as nothing.
+    const update = updateOf({
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "toolu_02",
+        kind: "edit",
+        content: [{ type: "diff", path: "/repo/new.ts", oldText: null, newText: "export {};\n" }],
+      },
+    });
+    expect(update?.diffs?.[0]?.patch).toContain("+export {};");
+  });
+
+  it("keeps one patch per hunk, because that is how they arrive", () => {
+    // A MultiEdit of two places in one file is two blocks, each holding only
+    // its own before and after. Concatenating them would make one patch whose
+    // line numbers describe neither.
+    const update = updateOf({
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "toolu_03",
+        content: [
+          { type: "diff", path: "/repo/a.ts", oldText: "alpha\n", newText: "ALPHA\n" },
+          { type: "diff", path: "/repo/a.ts", oldText: "omega\n", newText: "OMEGA\n" },
+        ],
+      },
+    });
+    expect(update?.diffs).toHaveLength(2);
+  });
+
+  it("does not leave the marker that crashes the window's renderer", () => {
+    // An Edit's two sides are a fragment of a file, so they almost never end
+    // in a newline — and jsdiff says so with git's own
+    // `\ No newline at end of file`, which `@pierre/diffs` throws on from
+    // inside its renderer. The patch parses; the panel then dies, and the
+    // agent column becomes a stack trace for an edit that worked.
+    const update = updateOf({
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "toolu_06",
+        kind: "edit",
+        content: [{ type: "diff", path: "/repo/a.ts", oldText: "heron", newText: "lantern" }],
+      },
+    });
+    expect(update?.diffs?.[0]?.patch).not.toContain("No newline");
+    expect(update?.diffs?.[0]?.patch).toContain("-heron");
+    expect(update?.diffs?.[0]?.patch).toContain("+lantern");
+  });
+
+  it("does not invent a line to delete for a new file", () => {
+    // A Write's old side is absent, and giving *that* a newline would put an
+    // empty line in the patch for the file not to have had.
+    const update = updateOf({
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "toolu_07",
+        kind: "edit",
+        content: [{ type: "diff", path: "/repo/new.ts", oldText: null, newText: "one\ntwo" }],
+      },
+    });
+    const patch = update?.diffs?.[0]?.patch ?? "";
+    expect(patch).not.toContain("No newline");
+    expect(patch.split("\n").filter((line) => line.startsWith("-"))).toEqual(["--- new.ts"]);
+  });
+
+  it("says nothing about a block that changed nothing", () => {
+    // The adapter does send them — a Write of content already on disk, and the
+    // no-op hunk in a structured patch. An empty patch under a row is a row
+    // claiming an edit that did not happen.
+    expect(
+      updateOf({
+        update: {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "toolu_04",
+          content: [{ type: "diff", path: "/repo/a.ts", oldText: "same\n", newText: "same\n" }],
+        },
+      })?.diffs,
+    ).toBeUndefined();
+  });
+
+  it("leaves a call that changed no file alone", () => {
+    // Which is most of them. `diffs` absent rather than empty, so a merge in a
+    // client keeps whatever the row already had.
+    expect(
+      updateOf({
+        update: {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "toolu_05",
+          content: [{ type: "content", content: { type: "text", text: "Read notes.txt" } }],
+        },
+      })?.diffs,
+    ).toBeUndefined();
+  });
+
   it("says nothing about an update it has never seen", () => {
     expect(updateOf({ update: { sessionUpdate: "some_future_thing" } })).toBeUndefined();
     expect(updateOf({})).toBeUndefined();

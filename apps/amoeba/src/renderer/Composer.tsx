@@ -74,10 +74,26 @@ const styles = stylex.create({
     borderColor: colors.border,
     borderRadius: "0.4rem",
     backgroundColor: colors.surface,
-    overflow: "hidden",
+    // ── the cap ───────────────────────────────────────────────────────────
+    //
+    // Unfiltered, this list is every command the agent advertises — 57 on
+    // this machine — and an uncapped one takes the whole column and pushes
+    // the conversation off the top to say what typing one more letter would
+    // narrow to three rows. Eight rows is enough to show that there is more
+    // and to scroll for it.
+    //
+    // `overscrollBehavior: contain`, or reaching the end of the menu carries
+    // on scrolling the transcript behind it.
+    maxHeight: "13rem",
+    overflowX: "hidden",
+    overflowY: "auto",
+    overscrollBehavior: "contain",
   },
   slash: {
     display: "flex",
+    // A flex child in a scrolling column shrinks rather than overflowing, so
+    // without this every row is squeezed instead of the list scrolling.
+    flexShrink: 0,
     alignItems: "baseline",
     gap: "0.5rem",
     // Left-aligned, because it is a row in a list rather than a button.
@@ -203,6 +219,8 @@ export const Composer = ({
   draft,
   onDraft,
   onSend,
+  onStop,
+  working,
   onCommand,
   theirs = [],
   config,
@@ -214,6 +232,21 @@ export const Composer = ({
   readonly onDraft: (draft: string) => void;
   /** Enter, or the button. What a message *does* is the caller's. */
   readonly onSend: () => void;
+  /**
+   * Stop the turn the agent is in.
+   *
+   * Separate from `onSend` because it is the opposite act, and the button is
+   * one control that becomes the other — see the send below.
+   */
+  readonly onStop: () => void;
+  /**
+   * Whether the agent is working, which is what makes the send a stop.
+   *
+   * A boolean and not the turn count the panel holds: what the composer needs
+   * is whether there is anything to stop, and two overlapping turns are still
+   * one press.
+   */
+  readonly working: boolean;
   /**
    * One of the window's own commands was chosen from the menu.
    *
@@ -326,6 +359,13 @@ export const Composer = ({
               // what keeps the caret where it was.
               onMouseDown={(event) => event.preventDefault()}
               onClick={() => onCommand(command)}
+              // The list scrolls now, so the arrow keys can walk the
+              // highlight out of sight. `block: "nearest"` moves the menu by
+              // the least that brings the row back — anything more scrolls
+              // the column behind it as well.
+              ref={(node) => {
+                if (node !== null && index === at) node.scrollIntoView({ block: "nearest" });
+              }}
               {...stylex.props(styles.slash, index === at && styles.slashOn)}
             >
               <span {...stylex.props(typeset.address, styles.slashName)}>{command.name}</span>
@@ -400,6 +440,21 @@ export const Composer = ({
                   onDraft("");
                   return;
                 }
+              }
+              // ── escape throws the draft away ──────────────────────────
+              //
+              // The same gesture the TUI's composer has, and it was here only
+              // while the slash menu was open — so the two faces disagreed
+              // about a key somebody presses by reflex: one abandoned the
+              // message, the other did nothing at all.
+              //
+              // Only while there is something to throw away. An empty
+              // composer lets Escape past, because it is a window-level
+              // gesture elsewhere — a dialog over this panel is what closes.
+              if (event.key === "Escape" && draft !== "") {
+                event.stopPropagation();
+                onDraft("");
+                return;
               }
               // The same rule the pane has: Return sends, shift+Return is a
               // newline. A composer where Return inserts a line is one where

@@ -11,6 +11,7 @@
       "@effect/platform-node-shared": "4.0.0-rc.112",
       "@types/react": "19.2.18",
       "@types/react-dom": "19.2.5",
+      "diff": "9.0.0",
       "effect": "4.0.0-rc.112",
       "react": "19.2.8",
       "react-dom": "19.2.8"
@@ -35,6 +36,7 @@
     "doctor:supply-chain": "react-doctor",
     "amoeba": "bun run --filter amoeba dev:all",
     "tui": "bun apps/tui/src/main.tsx",
+    "dev": "bash $PWD/scripts/dev/dev.sh",
     "daemon": "bun run --filter @awp-kit/server daemon",
     "probe:child-env": "bun packages/server/src/probe/child-env.ts",
     "probe:daemon": "bun packages/server/src/probe/daemon-roundtrip.ts",

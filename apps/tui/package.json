@@ -4,12 +4,14 @@
   "type": "module",
   "scripts": {
     "tui": "bun src/main.tsx",
+    "za": "bun src/za-tui.ts",
     "typecheck": "tsc -p tsconfig.json",
     "probe:tui": "bun src/probe/poc.ts",
     "probe:render": "bun src/probe/render.tsx",
     "probe:terminal": "bun src/probe/drive.ts",
     "probe:ceiling": "bun src/probe/ceiling.ts",
-    "probe:join": "bun src/probe/join.ts"
+    "probe:join": "bun src/probe/join.ts",
+    "probe:transcript": "bun src/probe/transcript.tsx"
   },
   "dependencies": {
     "@awp-kit/protocol": "workspace:*",

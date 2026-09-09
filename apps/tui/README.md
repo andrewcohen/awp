@@ -16,6 +16,7 @@ bun src/main.tsx            # or from here
 bun src/za-tui.ts           # the first half on its own: a zmx picker
 bun src/probe/poc.ts        # drives all three screens and says what it saw
 bun src/probe/render.tsx    # a message at a width this file chose
+bun src/probe/transcript.tsx # an edit, a rolled-up run, and the status row
 ```
 
 **Not `bun run --filter tui tui`.** Filtering runs the script in a subprocess
@@ -42,7 +43,16 @@ one muscle memory rather than two. `ctrl-q` quits from anywhere.
 
 The chat screen is a real client of the daemon: history, live updates, a
 composer that steers a running turn, and `ctrl-y`/`ctrl-n` to answer a
-permission request. The terminal screen is a plain `$SHELL` in the checkout's
+permission request. Under the composer is the same read-only row the window
+draws — mode, model, effort, fast mode and how full the context is — which
+took the place of a list of chords, and which a notice borrows while it has
+something to say.
+
+A run of tool calls that changed nothing is rolled up to its last three with a
+count for the rest. A call that **did** change something is not: its patch is
+drawn under it by opentui's own `<diff>` — line numbers, signs, and the code
+inside it highlighted — which is the row's whole content. The daemon composes
+the patch; see AGENTS.md. The terminal screen is a plain `$SHELL` in the checkout's
 directory — never `zmx attach`, because a session takes its size from whoever
 is looking at it and a POC has no business reflowing somebody's work.
 

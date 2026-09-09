@@ -26,6 +26,16 @@ import { conversation } from "../chat";
 
 const WORD = "heron";
 
+/**
+ * The key this probe sends its message under.
+ *
+ * A client mints one so the daemon can echo the message back — see
+ * `ChatSend.key`. The echo is the only thing that makes a second client honest
+ * about the first, and no adapter sends one: measured, zero user chunks on a
+ * live turn.
+ */
+const MINE = "probe-1";
+
 /** What a window would hold: messages in order, tools merged by id. */
 const draw = (updates: ReadonlyArray<ChatUpdate>): void => {
   const tools = new Map<string, ChatUpdate>();
@@ -88,13 +98,19 @@ const program = Effect.gen(function* () {
           Stream.runForEach(updates, (update) => Ref.update(seen, (all) => [...all, update])),
         ),
       );
-      yield* chat.send("Read notes.txt with Bash and tell me the word it names.");
+      yield* chat.send("Read notes.txt with Bash and tell me the word it names.", MINE);
       yield* Effect.sleep("40 seconds");
       return yield* Ref.get(seen);
     }),
   );
   console.log("1. a new session");
   draw(first);
+  const echoed = first.find(
+    (update) => update.kind === "message" && update.role === "user" && update.id === MINE,
+  );
+  console.log(
+    `  echoed      ${echoed === undefined ? "NO — a second client would not see what was typed" : `yes, under ${MINE}`}`,
+  );
 
   // ── the commands, which is where a skill lives ──────────────────────────
   //
@@ -192,7 +208,7 @@ const program = Effect.gen(function* () {
       );
       yield* Effect.sleep("5 seconds");
       const replayed = spoken(yield* Ref.get(seen)).length;
-      yield* copy.send("What word did the file name? Reply with just that word.");
+      yield* copy.send("What word did the file name? Reply with just that word.", "probe-fork");
       yield* Effect.sleep("30 seconds");
       return { id: copy.sessionId, replayed, seen: yield* Ref.get(seen) };
     }),
@@ -274,6 +290,114 @@ const program = Effect.gen(function* () {
   console.log(`   a different session   ${stranger.id !== opened ? "yes" : "NO — it joined it"}`);
   console.log(`   replayed              ${spoken(stranger.seen).length} updates`);
 
+  // ── an edit, which is the only call with something to draw ──────────────
+  //
+  // The shape is read out of the installed adapter's own `tools.js`, and this
+  // is what says it is still that shape: an `Edit` puts
+  // `{type: "diff", path, oldText, newText}` on the tool call's content, the
+  // daemon turns it into a unified patch, and both faces render the patch.
+  // Neither client could do this for itself without diffing two whole texts,
+  // and no fixture can say whether the adapter still sends them.
+  //
+  // Permission is the reason this asks for `acceptEdits`: an edit in Manual
+  // mode stops on a question nobody is here to answer, and the probe would
+  // report an adapter that changed its shape.
+  let edited = "";
+  const edit = yield* Effect.scoped(
+    Effect.gen(function* () {
+      const chat = yield* conversation(spawner, { cwd: dir, model: "sonnet" });
+      edited = chat.sessionId;
+      const updates = yield* chat.updates;
+      const seen = yield* Ref.make<ReadonlyArray<ChatUpdate>>([]);
+      yield* Effect.forkScoped(
+        Effect.ignore(
+          Stream.runForEach(updates, (update) => Ref.update(seen, (all) => [...all, update])),
+        ),
+      );
+      yield* Effect.ignore(chat.set("mode", "acceptEdits"));
+      yield* chat.send(
+        `Use the Edit tool once to change the word in notes.txt from ${WORD} to lantern. Say nothing else.`,
+        "probe-edit",
+      );
+      yield* Effect.sleep("45 seconds");
+      return yield* Ref.get(seen);
+    }),
+  );
+  const patches = edit.flatMap((update) =>
+    update.kind === "tool" ? [...(update.diffs ?? [])] : [],
+  );
+  // What a *client* draws, which is not the same list. The updates merge by
+  // id and `diffs` replaces, so the newest wins — and the two blocks below
+  // are why that rule exists rather than being a preference: the adapter's
+  // guess at the change and the change it actually made are both real, about
+  // one file, and drawn together they read as an edit done twice.
+  const drawn = new Map<string, ChatUpdate>();
+  for (const update of edit) {
+    if (update.kind === "tool" && update.id !== undefined) {
+      drawn.set(update.id, { ...drawn.get(update.id), ...update });
+    }
+  }
+  const final = [...drawn.values()].flatMap((update) => [...(update.diffs ?? [])]);
+  console.log("\n5. an edit, as a patch");
+  console.log(
+    `   blocks, all updates   ${patches.length === 0 ? "NONE — the adapter's shape moved" : String(patches.length)}`,
+  );
+  console.log(`   what a client draws   ${final.length}`);
+  for (const one of final.slice(0, 2)) {
+    console.log(`     ${one.path}`);
+    for (const line of one.patch
+      .split("\n")
+      .filter((row) => /^[+\-@]/u.test(row) && !row.startsWith("---") && !row.startsWith("+++"))
+      .slice(0, 6)) {
+      console.log(`       ${line}`);
+    }
+  }
+
+  // ── and does the patch survive being opened again? ──────────────────────
+  //
+  // Asked because a chat is read far more often than it is had: the adapter is
+  // released two minutes after the last window closes, so almost every look at
+  // an edit somebody made this morning is a `session/load` in a fresh process.
+  // If the patch were live-only, the panel would show it for a few minutes and
+  // then quietly stop.
+  //
+  // Reading the adapter says it should: replay walks the transcript through
+  // the same `toAcpNotifications` the live path uses, and the diff blocks are
+  // built from the tool's own *input* — the `old_string` and `new_string` that
+  // are in the transcript. That is a reason to expect it, not evidence.
+  const reloaded = yield* Effect.scoped(
+    Effect.gen(function* () {
+      const chat = yield* conversation(spawner, { cwd: dir, model: "sonnet", session: edited });
+      const updates = yield* chat.updates;
+      const seen = yield* Ref.make<ReadonlyArray<ChatUpdate>>([]);
+      yield* Effect.forkScoped(
+        Effect.ignore(
+          Stream.runForEach(updates, (update) => Ref.update(seen, (all) => [...all, update])),
+        ),
+      );
+      yield* Effect.sleep("15 seconds");
+      return yield* Ref.get(seen);
+    }),
+  );
+  const replayedDiffs = reloaded.flatMap((update) =>
+    update.kind === "tool" ? [...(update.diffs ?? [])] : [],
+  );
+  console.log("\n6. the same edit, opened again in a new process");
+  console.log(
+    `   replayed              ${spoken(reloaded).length} updates` +
+      `\n   the patch came back   ${
+        replayedDiffs.length === 0
+          ? "NO — an edit is only drawable while the turn is live"
+          : `yes, ${String(replayedDiffs.length)} block(s)`
+      }`,
+  );
+  for (const line of (replayedDiffs[0]?.patch ?? "")
+    .split("\n")
+    .filter((row) => /^[+-]/u.test(row) && !row.startsWith("---") && !row.startsWith("+++"))
+    .slice(0, 4)) {
+    console.log(`       ${line}`);
+  }
+
   rmSync(dir, { recursive: true, force: true });
 
   // The one check that separates a working conversation from a plausible one.
@@ -289,7 +413,10 @@ const program = Effect.gen(function* () {
       `\n  replay      ${spoken(second).length > 0 ? "yes" : "NOTHING — the session was not found"}\n`,
   );
   const readingCame = second.some((update) => update.kind === "usage" && update.used === 1234);
-  return heard &&
+  return patches.length > 0 &&
+    replayedDiffs.length > 0 &&
+    heard &&
+    echoed !== undefined &&
     readingCame &&
     spoken(second).length > 0 &&
     stranger.id !== opened &&

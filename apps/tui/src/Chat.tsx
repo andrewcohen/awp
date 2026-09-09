@@ -8,44 +8,59 @@
 // text rows, a scroll offset, a follow flag and a paint function. A `scrollbox`
 // with `stickyScroll` is all four, and it handles the wheel.
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTerminalDimensions } from "@opentui/react";
 import type { TextareaRenderable } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
-import { chatAnswer, chatSend, said } from "./daemon";
-import { segments, wrap } from "./lines";
+import type { ChatConfigOption } from "@awp-kit/protocol";
+import { chatAnswer, chatCancel, chatConfig, chatSend, said } from "./daemon";
+import { grouped } from "./conversation";
+import { Call, Calls, Message } from "./Items";
+import { wrap } from "./lines";
 import { isBack, isQuit } from "./keys";
-import { CHROME, SPIN, SYNTAX } from "./theme";
+import { CHROME, SPIN } from "./theme";
 import type { Place } from "./Threads";
 import { useConversation, useSpinner } from "./useConversation";
 
 /**
- * A tool row is a receipt: what ran, and whether it worked.
+ * How a setting reads in the status row.
  *
- * Wrapped rather than clipped, but bounded — a title here is whatever command
- * was run, and some of them are a forty-line script. Wrapping one of those
- * unbounded gives a single tool call the whole transcript.
+ * The value's own name, and the setting's name in front of it when the value
+ * would not say which setting it belongs to — `Manual` and `Opus` name
+ * themselves, `On` and `Off` do not. The same rule as the window's chips, and
+ * a second copy of six lines rather than an import: the window's lives in a
+ * file that imports StyleX, which is not loadable here.
  */
-const clip = (text: string, most: number) =>
-  text.length > most ? `${text.slice(0, most - 1)}…` : text;
-
-/**
- * One line, whatever it takes.
- *
- * A title is not a title: it is the command, and a `python3 - <<'PY'` carries
- * its whole script in it, newlines and all. Clipping counts characters and a
- * multi-line string was still multi-line after being clipped — which is why a
- * "one line" row was drawing nine. So the first line is taken *before* the
- * width is applied, and an ellipsis says the rest is there.
- */
-const oneLine = (text: string, most: number): string => {
-  const [first = "", ...rest] = text.split("\n");
-  const trimmed = first.trimEnd();
-  return clip(rest.length > 0 ? `${trimmed} …` : trimmed, most);
+const settingOf = (option: ChatConfigOption): string => {
+  const now =
+    option.values.find((value) => value.value === option.currentValue)?.name ?? option.currentValue;
+  return now === "On" || now === "Off" || now === "Default"
+    ? `${option.name.toLowerCase()}: ${now.toLowerCase()}`
+    : now;
 };
 
-const mark = (status: string) =>
-  status === "completed" ? "✓" : status === "failed" ? "✗" : status === "asking" ? "?" : "…";
+/**
+ * What the status row says when nothing has gone wrong.
+ *
+ * The same read-only facts the window draws under its composer — mode, model,
+ * effort, fast mode, and how full the context is. Read-only because this
+ * client has no select to change one with, and a figure somebody cannot act on
+ * is still the figure they decide `/new` on.
+ */
+const facts = (
+  config: ReadonlyArray<ChatConfigOption>,
+  used: number | undefined,
+  size: number | undefined,
+): string => {
+  const parts = config.map(settingOf);
+  // No floor under the figure, deliberately, and the window's note says why:
+  // the decision it informs — carry on here, or start again — is made before
+  // the context is a problem.
+  if (used !== undefined && size !== undefined && size > 0) {
+    parts.push(`${String(Math.round((used / size) * 100))}% context`);
+  }
+  return parts.join(" · ");
+};
 
 export const Chat = ({
   place,
@@ -67,6 +82,29 @@ export const Chat = ({
   const working = state.running > 0;
   const tick = useSpinner(working);
 
+  // ── the session's own facts, asked for once ─────────────────────────────
+  //
+  // A call rather than a field on the stream, which is the contract's choice
+  // and the right one here too: nothing in this list changes unless somebody
+  // changes it, and this client offers no way to. A refusal is silence — the
+  // row simply has fewer things in it, which is what a conversation the daemon
+  // could not open looks like anyway, and the transcript says that better.
+  const [config, setConfig] = useState<ReadonlyArray<ChatConfigOption>>([]);
+  useEffect(() => {
+    let live = true;
+    chatConfig(place.project, place.workspace).then(
+      (answer) => {
+        if (live) setConfig(answer);
+      },
+      () => {
+        // Nothing. See above.
+      },
+    );
+    return () => {
+      live = false;
+    };
+  }, [place.project, place.workspace]);
+
   // One line until there is more than one line's worth in it, then as many as
   // six. A composer that is three rows tall before anybody types is three rows
   // of transcript nobody can see.
@@ -85,7 +123,12 @@ export const Chat = ({
 
   const ask = state.items
     .toReversed()
-    .find((item) => item.kind === "tool" && item.ask !== undefined);
+    // A settled question is not pending: its buttons are gone, and the answer
+    // keys would otherwise reach for it and earn a refusal about somebody
+    // else's click.
+    .find(
+      (item) => item.kind === "tool" && item.ask !== undefined && item.ask.answered === undefined,
+    );
   const pending = ask?.kind === "tool" ? ask.ask : undefined;
 
   const send = (text: string) => {
@@ -93,14 +136,19 @@ export const Chat = ({
     if (message === "") return;
     setDraft("");
     if (composer.current !== null) composer.current.clear();
-    saidLocally(message);
-    setNotice("sending…");
-    chatSend(place.project, place.workspace, message).then(
-      // `steer` went into the turn already running; `prompt` started one. A
-      // person cannot tell those apart from the screen, and they are the
-      // difference between being read now and waiting.
-      (delivery) =>
-        setNotice(delivery === "steer" ? "steered into the running turn" : "sent as a new turn"),
+    // One name for two copies of the same message: the one drawn here on the
+    // keypress, and the daemon's echo — which exists so the *window* sees what
+    // was typed here. A uuid, because a counter in two clients collides.
+    const key = crypto.randomUUID();
+    saidLocally(message, key);
+    // Nothing is said about it going well. `sending…`, then `sent as a new
+    // turn` or `steered into the running turn`, was three reports of a thing
+    // the transcript shows: the message is on screen, and the agent either
+    // answers it or does not. A row that narrates every success is a row
+    // whose one useful line — a refusal — arrives somewhere the eye has
+    // already learned to skip.
+    chatSend(place.project, place.workspace, message, key).then(
+      () => setNotice(""),
       (error: unknown) => setNotice(said(error)),
     );
   };
@@ -113,7 +161,10 @@ export const Chat = ({
     const option = which === "first" ? pending.options[0] : pending.options.at(-1);
     if (option === undefined) return;
     chatAnswer(place.project, place.workspace, pending.request, option.id).then(
-      () => setNotice(`answered ${option.label}`),
+      // The row itself changes — the buttons go and what was chosen stays, on
+      // whichever client answered. Saying it again here is a second copy of
+      // something already on screen.
+      () => setNotice(""),
       (error: unknown) => setNotice(said(error)),
     );
   };
@@ -129,12 +180,30 @@ export const Chat = ({
       onBack();
       return;
     }
-    // Escape throws the draft away and never leaves the screen. They were one
-    // key once, and the reflex that abandons a half-typed message everywhere
-    // else abandoned the whole window here.
+    // ── escape stops the agent, and only then the draft ──────────────────
+    //
+    // Two meanings, in that order, which is the order the terminal habit
+    // already has: while something is running, the key that interrupts it is
+    // the one everybody reaches for. The draft is what is left when nothing
+    // is running, and it is thrown away silently — emptying a box somebody is
+    // looking at needs no announcement.
+    //
+    // A turn first even with a draft typed: somebody who has been writing a
+    // steer while the agent works and then presses escape means the agent,
+    // not their own half-sentence. Pressing it again clears that.
+    //
+    // Never leaves the screen. That was one key once, and the reflex which
+    // abandons a message everywhere else abandoned the whole session here.
     if (key.name === "escape" || (key.ctrl && key.name === "c")) {
       key.preventDefault();
-      setNotice(draft === "" ? "nothing to cancel · ctrl-\\ goes back" : "message cancelled");
+      if (working) {
+        chatCancel(place.project, place.workspace).then(
+          () => setNotice(""),
+          (error: unknown) => setNotice(said(error)),
+        );
+        return;
+      }
+      setNotice("");
       setDraft("");
       if (composer.current !== null) composer.current.clear();
       return;
@@ -177,76 +246,18 @@ export const Chat = ({
             drawn in two pieces: prose as text, which wraps, and a fence as
             code, highlighted by tree-sitter and left unwrapped because the
             line breaks in a fence are the content. The `markdown` renderable
-            was the obvious answer and cannot be used — see `wrapMarkdown`. */}
-        {state.items.slice(-200).map((item, at) =>
-          item.kind === "said" ? (
-            <box key={at} width={inner} flexDirection="row" paddingBottom={1}>
-              <text
-                width={4}
-                fg={CHROME.muted}
-                content={item.role === "user" ? "you " : item.role === "thought" ? "  ~ " : "··· "}
-              />
-              {item.role === "agent" ? (
-                <box width={inner - 4} flexDirection="column">
-                  {segments(item.text.trimEnd()).map((part, index) =>
-                    part.kind === "code" ? (
-                      <code
-                        key={index}
-                        width={inner - 4}
-                        content={part.text}
-                        filetype={part.language === "" ? "text" : part.language}
-                        syntaxStyle={SYNTAX}
-                      />
-                    ) : (
-                      <text
-                        key={index}
-                        width={inner - 4}
-                        wrapMode="word"
-                        fg={CHROME.text}
-                        content={part.text}
-                      />
-                    ),
-                  )}
-                </box>
-              ) : (
-                <text
-                  width={inner - 4}
-                  wrapMode="word"
-                  fg={item.role === "user" ? CHROME.said : CHROME.muted}
-                  content={item.text.trimEnd()}
-                />
-              )}
-            </box>
+            was the obvious answer and cannot be used — see `wrapMarkdown`.
+
+            Grouped, so a run of receipts is one block — see `grouped`, and
+            note what it does *not* fold: a call that changed a file stands on
+            its own, because the change is the thing worth reading. */}
+        {grouped(state.items.slice(-200)).map((block, at) =>
+          block.kind === "calls" ? (
+            <Calls key={at} items={block.items} inner={inner} />
+          ) : block.item.kind === "said" ? (
+            <Message key={at} item={block.item} inner={inner} />
           ) : (
-            // ── a tool call is one line ──────────────────────────────────
-            //
-            // Truncated rather than wrapped, which is the opposite of the rule
-            // everywhere else here and is the point: a transcript is read for
-            // what was said, and a tool call is a receipt beside it. One
-            // `bun -e` script wrapped over nine rows buries the sentence it
-            // was run for. The output line went with it, for the same reason.
-            //
-            // A question is the exception: it is the one tool row that wants
-            // something from a person, so it keeps a line of its own.
-            <box key={at} width={inner} flexDirection="column" paddingBottom={1}>
-              <text
-                width={inner}
-                wrapMode="none"
-                fg={CHROME.muted}
-                content={`  ${mark(item.status)} ${(item.subagent ?? item.toolKind ?? "tool").padEnd(7)} ${oneLine(
-                  item.title,
-                  Math.max(12, inner - 13),
-                )}`}
-              />
-              {item.ask === undefined ? undefined : (
-                <text
-                  width={inner}
-                  wrapMode="word"
-                  fg={CHROME.ask}
-                  content={`    asks: ${item.ask.options.map((one) => one.label).join("   ")}`}
-                />
-              )}
-            </box>
+            <Call key={at} item={block.item} inner={inner} />
           ),
         )}
         {/* A blank row, then the mark hard against the left edge of the view —
@@ -312,23 +323,37 @@ export const Chat = ({
         />
       </box>
 
-      {/* ── the footer has to fit ────────────────────────────────────────
-          Every chord it could name does not: at 70 columns the old line ran
-          past the edge and took `ctrl-q quit` with it, which is the one thing
-          somebody stuck needs to be able to read. So it says the four that
-          are always true, and swaps in the answer keys only while something
-          is being asked. */}
+      {/* ── the status row ──────────────────────────────────────────────
+          What the window draws under its composer, and for the same reason:
+          these are facts about the *session*, and they read in the right
+          order down here — what you are about to say, then who is about to
+          answer it. Read-only, because this client has no control to change
+          one with; the figures are still the ones somebody decides `/new` on.
+
+          It replaced a row of chords. Those were four things that are always
+          true, which is what teaches an eye to skip a bar — and the one that
+          somebody stuck really needs, `ctrl-\`, is in the header the moment a
+          terminal is attached and in the README either way.
+
+          A notice takes the row, and only a **failure** is one: a refusal
+          from the daemon, or a key that did nothing. Reporting the successes
+          as well — `sending…`, `sent as a new turn`, `answered Allow Once` —
+          was three announcements of things the transcript already shows, and
+          it teaches the eye to skip the row that the one refusal lands in.
+          The answer keys are the exception, because they are an offer rather
+          than a report. */}
       <text
         height={1}
         bg={CHROME.bar}
         fg={notice === "" ? CHROME.muted : CHROME.text}
+        wrapMode="none"
         content={
           notice === ""
             ? pending === undefined
-              ? " ⏎ send · ⇧⏎ or ctrl-o newline · esc cancel · ctrl-\\ back · ctrl-q quit"
+              ? ` ${facts(config, state.used, state.size)}`
               : ` ctrl-y ${pending.options[0]?.label ?? "allow"} · ctrl-n ${
                   pending.options.at(-1)?.label ?? "deny"
-                } · ctrl-\\ back`
+                }`
             : ` ${notice}`
         }
       />

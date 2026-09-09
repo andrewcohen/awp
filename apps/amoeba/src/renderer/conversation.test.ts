@@ -71,7 +71,55 @@ describe("fold", () => {
       toolKind: "execute",
       status: "completed",
       output: "the word is: heron",
+      // Empty rather than absent: a `cat` changed no file, and every row
+      // carries the field so nothing has to test for its presence.
+      diffs: [],
     });
+  });
+
+  it("carries what an edit changed, and replaces it rather than merging", () => {
+    // The adapter sends its guess at the change when the call is made and the
+    // real one — out of the SDK's structuredPatch — when it has run, both
+    // about the same file. Merging the two lists draws the edit twice.
+    const items = (
+      [
+        {
+          kind: "tool",
+          id: "t1",
+          title: "Edit notes.txt",
+          toolKind: "edit",
+          status: "pending",
+          diffs: [{ path: "/repo/notes.txt", patch: "--- notes.txt\n+guessed\n" }],
+        },
+        {
+          kind: "tool",
+          id: "t1",
+          status: "completed",
+          diffs: [{ path: "/repo/notes.txt", patch: "--- notes.txt\n+what happened\n" }],
+        },
+      ] satisfies ReadonlyArray<ChatUpdate>
+    ).reduce((all, update) => fold(all, update), nothing as Conversation);
+
+    expect(items.items[0]).toMatchObject({
+      diffs: [{ path: "/repo/notes.txt", patch: "--- notes.txt\n+what happened\n" }],
+    });
+  });
+
+  it("keeps the patch through an update that says nothing about it", () => {
+    // A progress beat arriving after the edit must not blank the one thing
+    // that row is for — the same rule the ask and the title already follow.
+    const items = (
+      [
+        {
+          kind: "tool",
+          id: "t1",
+          diffs: [{ path: "/repo/a.ts", patch: "+one\n" }],
+        },
+        { kind: "tool", id: "t1", status: "completed" },
+      ] satisfies ReadonlyArray<ChatUpdate>
+    ).reduce((all, update) => fold(all, update), nothing as Conversation);
+
+    expect(items.items[0]).toMatchObject({ status: "completed", diffs: [{ patch: "+one\n" }] });
   });
 
   it("does not blank a field an update said nothing about", () => {
@@ -424,8 +472,17 @@ describe("toolTitle", () => {
 
 const spoke = (key: string) =>
   ({ kind: "said", key, role: "agent", text: "…", queued: false }) as never;
-const called = (key: string) =>
-  ({ kind: "ran", key, title: key, toolKind: "read", status: "completed", output: "" }) as never;
+const called = (key: string, over: Record<string, unknown> = {}) =>
+  ({
+    kind: "ran",
+    key,
+    title: key,
+    toolKind: "read",
+    status: "completed",
+    output: "",
+    diffs: [],
+    ...over,
+  }) as never;
 
 describe("grouped", () => {
   it("makes one block of a run of calls", () => {
@@ -439,6 +496,25 @@ describe("grouped", () => {
     // runs would lose the order they happened in.
     const blocks = grouped([called("a"), spoke("b"), called("c")]);
     expect(blocks.map((block) => block.kind)).toEqual(["calls", "one", "calls"]);
+  });
+
+  it("leaves a call that changed a file out of the fold", () => {
+    // A block draws its tail and counts the rest, so an edit early in a long
+    // run is behind `+7 earlier calls` — which hides the one thing that call
+    // is worth reading. Its patch is the row's whole content.
+    const blocks = grouped([
+      called("a"),
+      called("b", { diffs: [{ path: "x.ts", patch: "+one\n" }] }),
+      called("c"),
+    ]);
+    expect(blocks.map((block) => block.kind)).toEqual(["calls", "one", "calls"]);
+  });
+
+  it("leaves a question out of the fold", () => {
+    // It used to be excepted where the block is drawn. Here instead, so the
+    // two rows that must not be folded are decided in one place.
+    const blocks = grouped([called("a"), called("b", { ask: { kind: "asked" } })]);
+    expect(blocks.map((block) => block.kind)).toEqual(["calls", "one"]);
   });
 
   it("keys a block by its first call, so a growing run keeps its identity", () => {
@@ -472,5 +548,96 @@ describe("the context reading", () => {
       { kind: "usage", used: 18_619, size: 1_000_000 },
     ].reduce((state, update) => fold(state, update as never), nothing);
     expect([after.used, after.size]).toEqual([18_619, 1_000_000]);
+  });
+});
+
+describe("two clients on one conversation", () => {
+  // What the daemon emits so a second client is honest about the first: the
+  // message somebody typed, and the fact that a question was answered.
+  // Neither exists in ACP — measured, zero user chunks on a live turn, and the
+  // adapter's reply *is* the permission answer.
+
+  it("draws a message this client did not send", () => {
+    const after = fold(nothing, {
+      kind: "message",
+      role: "user",
+      text: "count the workers",
+      id: "abc",
+    } as never);
+    expect(after.items).toHaveLength(1);
+    expect(after.items[0]).toMatchObject({ kind: "said", role: "user", text: "count the workers" });
+  });
+
+  it("ignores the echo of a message it sent itself", () => {
+    // The sender painted its copy on the keypress with the key it minted, so
+    // the echo names a row already on screen. Without this the sender sees
+    // everything it types twice.
+    const already = mine(nothing, "count the workers", "abc");
+    const after = fold(already, {
+      kind: "message",
+      role: "user",
+      text: "count the workers",
+      id: "abc",
+    } as never);
+    expect(after.items).toHaveLength(1);
+  });
+
+  it("does not chunk a named message into the one above it", () => {
+    // A whole message, not a fragment: appended to the agent's answer it
+    // would read as the agent saying it.
+    const answered = fold(nothing, { kind: "message", role: "agent", text: "I will" } as never);
+    const after = fold(answered, {
+      kind: "message",
+      role: "agent",
+      text: "no, stop",
+      id: "abc",
+    } as never);
+    expect(after.items).toHaveLength(2);
+  });
+
+  it("settles a question answered somewhere else, on the call it is about", () => {
+    const ran = fold(nothing, {
+      kind: "tool",
+      id: "toolu_01",
+      title: "rm -rf .cache",
+      status: "pending",
+    } as never);
+    const asked = fold(ran, {
+      kind: "permission",
+      id: "perm-1",
+      about: "toolu_01",
+      title: "rm -rf .cache",
+      options: [
+        { id: "a", name: "Allow Once", kind: "allow_once" },
+        { id: "d", name: "Deny", kind: "reject_once" },
+      ],
+    } as never);
+    const after = fold(asked, {
+      kind: "permission",
+      id: "perm-1",
+      status: "answered",
+      chose: "d",
+    } as never);
+    const row = after.items[0];
+    // The words that were on the button, resolved from the options this client
+    // already holds — the wire carries the id.
+    expect(row?.kind === "ran" && row.ask?.answered).toBe("Deny");
+  });
+
+  it("settles a standalone question too, and says so even for an unknown option", () => {
+    const asked = fold(nothing, {
+      kind: "permission",
+      id: "perm-2",
+      title: "a tool wants to run",
+      options: [{ id: "a", name: "Allow Once", kind: "allow_once" }],
+    } as never);
+    const after = fold(asked, {
+      kind: "permission",
+      id: "perm-2",
+      status: "answered",
+      chose: "gone",
+    } as never);
+    const row = after.items[0];
+    expect(row?.kind === "asked" && row.answered).toBe("answered");
   });
 });

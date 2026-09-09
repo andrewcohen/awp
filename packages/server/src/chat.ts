@@ -61,10 +61,12 @@ import {
 } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { realpathSync } from "node:fs";
+import { createTwoFilesPatch } from "diff";
 import type {
   ChatCommand,
   ChatConfigOption,
   ChatDelivery,
+  ChatDiff,
   ChatUpdate,
   WorkspaceStatus,
 } from "@awp-kit/protocol";
@@ -261,7 +263,7 @@ interface Conversation {
    *            agent is, and what a steer becomes on an agent that cannot
    *            be steered
    */
-  readonly send: (text: string) => Effect.Effect<ChatDelivery, ChatError>;
+  readonly send: (text: string, key: string) => Effect.Effect<ChatDelivery, ChatError>;
   /**
    * Every session the adapter sees in this directory.
    *
@@ -272,6 +274,17 @@ interface Conversation {
    */
   readonly sessions: () => Effect.Effect<ReadonlyArray<string>, ChatError>;
   /** Answer a permission request by the id the update carried. */
+  /**
+   * Stop the turn that is running, if one is.
+   *
+   * A notification and not a request: `session/cancel` has no reply, and the
+   * turn's own `session/prompt` is what answers — with a `stopReason` saying
+   * it was cancelled, through the fork that already emits `turn ended`. So
+   * nothing here waits, and nothing here emits: the edge a client draws is
+   * the same edge every other ending produces.
+   */
+  readonly cancel: Effect.Effect<void, ChatError>;
+
   readonly answer: (request: string, option: string) => Effect.Effect<void, ChatError>;
   /** What this session is running as, and what it could be running as instead. */
   readonly config: Effect.Effect<ReadonlyArray<ChatConfigOption>, ChatError>;
@@ -289,6 +302,83 @@ const textOf = (content: unknown): string | undefined => {
     ? block["text"]
     : undefined;
 };
+
+/** How much unchanged code is drawn either side of a change. */
+const CONTEXT = 3;
+
+/**
+ * A side of the change, ending in a newline.
+ *
+ * ── the marker that crashes a renderer ────────────────────────────────────
+ *
+ * An `Edit`'s two sides are `old_string` and `new_string`, which are a
+ * *fragment* of a file and therefore almost never end in a newline. jsdiff
+ * says so in the patch, correctly, with the marker git uses:
+ *
+ *   \ No newline at end of file
+ *
+ * and `@pierre/diffs` throws on it, from inside its renderer rather than its
+ * parser — the patch parses, and then:
+ *
+ *   DiffHunksRenderer.processDiffResult: deletionLine and additionLine are
+ *   null, something is wrong
+ *
+ * which the agent column's error boundary catches, so the whole column is
+ * replaced by a stack trace for an edit that worked. Measured: three of the
+ * five shapes an edit takes produce the marker, including every ordinary
+ * `Edit`, so this is the common case rather than an edge.
+ *
+ * A newline is added rather than the marker stripped, because the marker is
+ * jsdiff telling the truth about what it was handed. What is wrong is the
+ * question: a fragment has no "end of file" to be missing a newline at. An
+ * empty side stays empty — that is a `Write`'s absent old text, and giving it
+ * a newline would invent a line to delete.
+ */
+const ends = (text: string): string => (text === "" || text.endsWith("\n") ? text : `${text}\n`);
+
+/**
+ * What a tool changed, as a patch rather than as two whole texts.
+ *
+ * The adapter reports an edit as `{type: "diff", path, oldText, newText}` and
+ * reports **one per hunk** — a `MultiEdit` of three places in one file is
+ * three of these, each holding only that hunk's before and after. So they are
+ * not concatenated: each becomes its own small patch, drawn one under the
+ * other, which is what a person reading an edit is looking at anyway.
+ *
+ * `oldText` is `null` for a `Write`, which is a new file rather than a change
+ * to one, and jsdiff produces exactly the right thing for that on its own —
+ * every line added. It is the `Read` case that has to be excluded, and it is,
+ * by there being no diff block on it at all.
+ *
+ * Done here and not in a client because there are two of them, and a patch is
+ * the one shape both already render.
+ */
+export const diffsOf = (content: unknown): ReadonlyArray<ChatDiff> =>
+  (Array.isArray(content) ? content : [])
+    .map((one) => one as Record<string, unknown>)
+    .filter((one) => one["type"] === "diff" && typeof one["path"] === "string")
+    .flatMap((one) => {
+      const path = String(one["path"]);
+      const before = typeof one["oldText"] === "string" ? one["oldText"] : "";
+      const after = typeof one["newText"] === "string" ? one["newText"] : "";
+      // A block saying nothing changed is a block with nothing to draw, and
+      // the adapter does send them — a `Write` of a file whose content is
+      // already there, and the no-op hunk in a structured patch.
+      if (before === after) {
+        return [];
+      }
+      const name = path.split("/").at(-1) ?? path;
+      return [
+        {
+          path,
+          // Named on both sides, because the name is where a renderer reads
+          // the language from: `x.ts` highlights and `/dev/null` does not.
+          patch: createTwoFilesPatch(name, name, ends(before), ends(after), undefined, undefined, {
+            context: CONTEXT,
+          }),
+        },
+      ];
+    });
 
 /**
  * What a delegated call is, out of the adapter's own `_meta`.
@@ -407,6 +497,10 @@ export const updateOf = (params: Record<string, unknown>): ChatUpdate | undefine
     const first = Array.isArray(content) ? (content[0] as Record<string, unknown>) : undefined;
     const output =
       typeof update["rawOutput"] === "string" ? update["rawOutput"] : textOf(first?.["content"]);
+    // An edit's content is diffs and its output is nothing, so these two never
+    // compete for the row: `first` is only text when the tool answered with
+    // text. A call that changed no file has an empty list and says nothing.
+    const diffs = diffsOf(content);
     return {
       kind: "tool",
       id,
@@ -414,6 +508,7 @@ export const updateOf = (params: Record<string, unknown>): ChatUpdate | undefine
       ...(typeof update["kind"] === "string" ? { toolKind: update["kind"] } : {}),
       ...(typeof update["status"] === "string" ? { status: update["status"] } : {}),
       ...(output === undefined ? {} : { output }),
+      ...(diffs.length === 0 ? {} : { diffs }),
       ...delegatedTo(update),
     } as ChatUpdate;
   }
@@ -583,6 +678,22 @@ export const conversation = (
           encoder.encode(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`),
         );
         return Effect.sync(() => waiting.delete(id));
+      });
+
+    /**
+     * Tell the adapter something, with no reply expected.
+     *
+     * A JSON-RPC notification is a message with **no `id`**, and that is the
+     * whole difference: a reply carrying a null id is a protocol error at the
+     * other end, so a notification sent as a request would leave this side
+     * waiting for an answer nobody is required to send.
+     */
+    const notify = (method: string, params: unknown): Effect.Effect<void> =>
+      Effect.sync(() => {
+        Queue.offerUnsafe(
+          outbox,
+          encoder.encode(`${JSON.stringify({ jsonrpc: "2.0", method, params })}\n`),
+        );
       });
 
     const lines = Stream.splitLines(Stream.decodeText(handle.stdout));
@@ -907,8 +1018,22 @@ export const conversation = (
       // update, so nothing the adapter sends marks either edge. Without them a
       // window cannot tell an agent that is working from one that answered
       // with nothing — both are an empty space.
-      send: (text: string) =>
+      send: (text: string, key: string) =>
         Effect.gen(function* () {
+          // ── what somebody typed, on the stream ──────────────────────────
+          //
+          // Emitted here because nothing else will: no adapter sends a user
+          // chunk on a live turn — measured, zero of them — so a second client
+          // watching this conversation saw the answers and never the
+          // questions. The sender already has its own copy from the keypress,
+          // which is why the key is the client's: one name, two copies, and
+          // applying it twice is a no-op.
+          //
+          // Before the turn edges, and before the request, so the order on the
+          // stream is the order it happened in even if the adapter is slow to
+          // accept it.
+          yield* emit({ kind: "message", role: "user", text, id: key });
+
           // Steer first, when the agent can be steered.
           //
           // **`idleBehavior: "promptRequired"`, and it is the whole reason this
@@ -964,6 +1089,12 @@ export const conversation = (
               .filter((one) => one !== ""),
         ),
 
+      // Fire and forget, deliberately. The adapter's own handler returns
+      // early when there is no live turn — "there is nothing to do here", in
+      // its words — so cancelling an idle conversation is a no-op rather than
+      // a refusal, and a client does not have to know which it was.
+      cancel: notify("session/cancel", { sessionId }),
+
       answer: (requestId: string, option: string) =>
         Effect.gen(function* () {
           const pending = (yield* Ref.get(asked)).get(requestId);
@@ -978,6 +1109,18 @@ export const conversation = (
             return rest;
           });
           yield* pending.reply({ outcome: { outcome: "selected", optionId: option } });
+          // ── and say that it was answered ────────────────────────────────
+          //
+          // There is no update for this in ACP: the adapter's reply *is* the
+          // answer, so the only process that knows a question has been
+          // settled is this one. Without it a second client goes on offering
+          // buttons for a request that was answered minutes ago — and pressing
+          // one gets "that request has already been answered", which is a
+          // refusal about somebody else's click.
+          //
+          // The option id rather than its name: every client holds the options
+          // for the request already.
+          yield* emit({ kind: "permission", id: requestId, status: "answered", chose: option });
         }),
 
       config: Ref.get(settings),
@@ -1080,6 +1223,8 @@ export class Chat extends Context.Service<
       project: string,
       workspace: string,
       text: string,
+      /** The client's name for this message. See `ChatSend.key`. */
+      key: string,
     ) => Effect.Effect<ChatDelivery, ChatError>;
 
     /**
@@ -1137,6 +1282,14 @@ export class Chat extends Context.Service<
      * transcript is the adapter's business and there is no call for it.
      */
     readonly fresh: (project: string, workspace: string) => Effect.Effect<string, ChatError>;
+
+    /**
+     * Stop the turn it is running.
+     *
+     * Silent when nothing is running: the adapter answers an idle session by
+     * doing nothing, so this is safe to press twice and safe to press early.
+     */
+    readonly cancel: (project: string, workspace: string) => Effect.Effect<void, ChatError>;
 
     /** Answer one of its permission requests. */
     readonly answer: (
@@ -1431,12 +1584,18 @@ export const make = Effect.gen(function* () {
     open: (project: string, workspace: string) =>
       Effect.flatMap(RcMap.get(conversations, keyOf(project, workspace)), (one) => one.updates),
 
-    send: (project: string, workspace: string, text: string) =>
-      held(project, workspace, (one) => one.send(text)),
+    send: (project: string, workspace: string, text: string, key: string) =>
+      held(project, workspace, (one) => one.send(text, key)),
 
     brief: (project: string, workspace: string, text: string) =>
       held(project, workspace, (one) =>
-        Effect.andThen(one.send(text), settled(keyOf(project, workspace))),
+        Effect.andThen(
+          // A key of its own, because there is no client to have minted one:
+          // a brief is a job talking, and the only thing that reads the key is
+          // the dedupe in whatever window opens the conversation later.
+          one.send(text, `brief-${crypto.randomUUID()}`),
+          settled(keyOf(project, workspace)),
+        ),
       ),
 
     /**
@@ -1516,6 +1675,8 @@ export const make = Effect.gen(function* () {
           Effect.map(RcMap.get(conversations, key), (one) => one.sessionId),
         );
       }),
+
+    cancel: (project: string, workspace: string) => held(project, workspace, (one) => one.cancel),
 
     answer: (project: string, workspace: string, request: string, option: string) =>
       Effect.tap(

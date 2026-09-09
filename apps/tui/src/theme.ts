@@ -19,6 +19,10 @@ export const CHROME = {
   live: "#a6da95",
   ask: "#eed49f",
   warn: "#ed8796",
+  /** Behind an added and a removed line in a patch. Dark enough that the
+   *  code on top is still read as code, which is what a diff is for. */
+  addedBg: "#26382c",
+  removedBg: "#3b2733",
 } as const;
 
 /** Braille, because it turns in one cell and reads as motion without colour. */

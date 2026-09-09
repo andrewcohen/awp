@@ -838,9 +838,14 @@ export const layer = AwpRpcs.toLayer(
             .pipe(Effect.mapError((error) => new ChatUnavailable({ reason: error.reason }))),
         ),
 
-      ChatSend: ({ project, workspace, text }) =>
+      ChatSend: ({ project, workspace, text, key }) =>
         chat
-          .send(project, workspace, text)
+          .send(project, workspace, text, key)
+          .pipe(Effect.mapError((error) => new ChatUnavailable({ reason: error.reason }))),
+
+      ChatCancel: ({ project, workspace }) =>
+        chat
+          .cancel(project, workspace)
           .pipe(Effect.mapError((error) => new ChatUnavailable({ reason: error.reason }))),
 
       ChatFork: ({ project, workspace }) =>

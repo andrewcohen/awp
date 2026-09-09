@@ -20,6 +20,7 @@ import {
   verb,
   waiting,
 } from "./conversation";
+import { Patch } from "./Fence";
 import { Markdown } from "./Markdown";
 import {
   chatAnswer,
@@ -164,8 +165,6 @@ const Panel = ({
    * words that were highlighted.
    */
   const [spot, setSpot] = useState<Spot | undefined>(undefined);
-  /** How many messages this window has sent, so each can be named. */
-  const sent = useRef(0);
   /** `/mcp` — a modal, which is why it is state and not a navigation. */
   const [asking, setAsking] = useState(false);
 
@@ -325,8 +324,11 @@ const Panel = ({
     // The reply that says how it was delivered arrives while the list is still
     // growing, so a position in the list would name a different message by
     // then.
-    sent.current += 1;
-    const key = `mine-${String(sent.current)}`;
+    // A uuid rather than a counter, now that the daemon echoes the message
+    // back: two clients on one conversation would both mint `mine-1`, and the
+    // dedupe is by key — so one window's second message would silently swallow
+    // the other's.
+    const key = crypto.randomUUID();
     const working = held.running > 0;
     // Shown immediately rather than waiting for the daemon to echo it back. A
     // message that appears only once the agent has acknowledged it reads as a
@@ -338,7 +340,7 @@ const Panel = ({
     // the note there: dressing it up as an update is what put a steer above
     // the rest of a reply that was still arriving.
     setHeld((current) => mine(current, words, key));
-    void chatSend(project, workspace, words)
+    void chatSend(project, workspace, words, key)
       .then((how) => {
         // Only a message that started a turn of its own while the agent was
         // already working has to wait for it. A steer is being read now, and
@@ -628,10 +630,10 @@ const Calls = ({
   readonly workspace: string;
 }) => {
   const [all, setAll] = useState(false);
-  // Anything with a question on it is drawn whatever else is folded: an agent
-  // waiting on somebody is not something to hide behind a count.
-  const asked = items.some((item) => item.ask !== undefined);
-  const hidden = all || asked ? 0 : Math.max(0, items.length - SHOWN);
+  // A question used to be excepted here, and it is excepted a step earlier
+  // now: `grouped` never puts one in a block, along with anything that
+  // changed a file. A guard that can no longer fire is one nothing tests.
+  const hidden = all ? 0 : Math.max(0, items.length - SHOWN);
   const drawn = hidden === 0 ? items : items.slice(hidden);
 
   return (
@@ -734,15 +736,24 @@ const Tool = ({
         {open && said.more > 0 && (
           <pre {...stylex.props(typeset.address, styles.whole)}>{item.title}</pre>
         )}
-        {open &&
-          item.output !== "" && (
-            // Plain text, and that is a known gap rather than a choice: a tool
-            // that edits a file answers with a patch, and this window already
-            // renders patches properly in the diff panel. `@pierre/diffs` is
-            // where that goes — see #102 — and it is worth doing there rather
-            // than reaching for a second highlighter.
-            <pre {...stylex.props(typeset.address, styles.output)}>{item.output}</pre>
-          )}
+        {/* ── what it changed, drawn as the change ──────────────────────
+            Not behind the disclosure, unlike the output: an edit's output is
+            empty, so the patch *is* the row's content and a shut row would be
+            a title and a tick over the one thing worth reading. The same
+            renderer a ```diff in a message goes through, and the same one the
+            diff panel uses — a change described and a change made must not
+            read as two different things.
+
+            One block per patch, because the adapter reports an edit per hunk:
+            a `MultiEdit` of three places in one file arrives as three. */}
+        {item.diffs.map((diff) => (
+          <div key={diff.path + diff.patch} {...stylex.props(styles.changed)}>
+            <Patch source={diff.patch} />
+          </div>
+        ))}
+        {open && item.output !== "" && (
+          <pre {...stylex.props(typeset.address, styles.output)}>{item.output}</pre>
+        )}
       </div>
     </div>
   );
@@ -784,11 +795,17 @@ const Answering = ({
   // Answered once. The daemon forgets the request as soon as it is replied to,
   // so a second press is a refusal from the other end — and a row that still
   // looks pressable after it has been answered is one somebody will press.
+  //
+  // Two sources, and the second is the point of it: this window's own press,
+  // and `item.answered`, which is what the daemon says when the answer came
+  // from somewhere else — another window, or the TUI. Local first, because a
+  // press should not wait for a round trip to draw.
   const [answered, setAnswered] = useState<string | undefined>(undefined);
+  const said = answered ?? item.answered;
 
   return (
     <>
-      {answered === undefined ? (
+      {said === undefined ? (
         <div {...stylex.props(styles.options)}>
           {item.options.map((option) => (
             <button
@@ -811,7 +828,7 @@ const Answering = ({
           ))}
         </div>
       ) : (
-        <p {...stylex.props(typeset.label, styles.answered)}>{answered}</p>
+        <p {...stylex.props(typeset.label, styles.answered)}>{said}</p>
       )}
     </>
   );
@@ -1090,6 +1107,15 @@ const styles = stylex.create({
     whiteSpace: "pre-wrap",
     overflowWrap: "anywhere",
     marginTop: "0.25rem",
+  },
+  // A patch under a tool row. Bounded, because a whole-file rewrite is a
+  // legitimate edit and a transcript is not the diff panel: past this it
+  // scrolls in its own box, which is the rule every wide thing in this window
+  // follows.
+  changed: {
+    marginTop: "0.25rem",
+    maxHeight: "20rem",
+    overflowY: "auto",
   },
   output: {
     color: colors.muted,

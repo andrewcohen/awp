@@ -1746,6 +1746,31 @@ export const ChatCommand = Schema.Struct({
 
 export type ChatCommand = (typeof ChatCommand)["Type"];
 
+/**
+ * A file a tool changed, as a patch anybody can render.
+ *
+ * The adapter reports an edit as `{type: "diff", path, oldText, newText}` on
+ * the tool call's content — two whole texts, not a patch — and it reports one
+ * per hunk, so a `MultiEdit` is several of these about one file. Neither half
+ * is drawable: a window would have to diff the two texts itself, and a
+ * *terminal* would have to do it a second time.
+ *
+ * So the daemon does it once. What crosses the wire is a unified patch,
+ * which is the shape both faces already render: amoeba parses it with the
+ * same `parsePatchFiles` a fenced ```diff in a message goes through, and the
+ * TUI hands it to the same tree-sitter its fences use, under `diff`. Same
+ * argument as `SessionIdentity` — a client re-deriving a daemon's rule is a
+ * second implementation, and the copy that drifts is the one nobody tests.
+ */
+export const ChatDiff = Schema.Struct({
+  /** As the adapter named it: absolute. A client shortens it to taste. */
+  path: Schema.String,
+  /** One file, unified, with three lines of context. */
+  patch: Schema.String,
+});
+
+export type ChatDiff = (typeof ChatDiff)["Type"];
+
 /** One of the buttons on a permission request. */
 export const ChatPermissionOption = Schema.Struct({
   id: Schema.String,
@@ -1775,8 +1800,16 @@ export const ChatUpdate = Schema.Struct({
   /** message: who, and what they said. Chunks, so they are appended. */
   role: Schema.optional(ChatRole),
   text: Schema.optional(Schema.String),
-
-  /** tool and permission: which one this is about. */
+  /**
+   * Which row this update is about: a tool call, a permission — or a whole
+   * message with a name.
+   *
+   * The third is the daemon's echo of what somebody typed, and only that
+   * carries one — see `ChatSend.key`. It reuses `id` rather than taking a
+   * field of its own because it is asking for the same thing the other two
+   * are: the name of the row, and therefore what makes applying an update
+   * twice a no-op.
+   */
   id: Schema.optional(Schema.String),
   title: Schema.optional(Schema.String),
   /** `execute`, `read`, `edit` — what sort of thing the tool is. */
@@ -1784,8 +1817,32 @@ export const ChatUpdate = Schema.Struct({
   status: Schema.optional(Schema.String),
   output: Schema.optional(Schema.String),
 
+  /**
+   * tool: what it changed on disk, when it changed anything.
+   *
+   * Only an edit carries these, and they **replace** rather than merge: the
+   * adapter sends its guess at the change when the call is made and the real
+   * one — out of the SDK's `structuredPatch` — when it has run, and the second
+   * is the truth about the same file. A merge would draw both.
+   */
+  diffs: Schema.optional(Schema.Array(ChatDiff)),
+
   /** permission: what a person may answer. */
   options: Schema.optional(Schema.Array(ChatPermissionOption)),
+  /**
+   * permission: which option was chosen, once one has been.
+   *
+   * The other half of the two-client problem. **Nothing in ACP says a
+   * permission was answered** — the adapter's reply *is* the answer, so the
+   * only process that knows is the daemon, and a second client went on
+   * offering buttons for a question that had been settled minutes ago. So the
+   * daemon says so itself, with `status: "answered"` and the option id.
+   *
+   * The id and not the name: every client already holds the options for that
+   * request, so it can say `Always Allow` in its own words, and a name on the
+   * wire would be a second copy of something already sent.
+   */
+  chose: Schema.optional(Schema.String),
   /**
    * permission: the tool call this is asking about.
    *
@@ -2095,7 +2152,29 @@ export class AwpRpcs extends RpcGroup.make(
    * sending a message a call that returns when the agent has finished thinking.
    */
   Rpc.make("ChatSend", {
-    payload: { project: Schema.String, workspace: Schema.String, text: Schema.String },
+    /**
+     * `key` names the message, and the client mints it.
+     *
+     * ── two clients on one conversation ────────────────────────────────────
+     *
+     * The daemon echoes what was said back down the update stream, because
+     * nothing else does: no adapter sends a user chunk on a live turn, so a
+     * TUI and a window sharing a conversation each saw only what *they* had
+     * typed. The echo is what makes them honest with each other.
+     *
+     * That leaves the sender with two copies of its own message — the local
+     * one it painted on the keypress and the echo — so the two need one name.
+     * The client mints it rather than the reply carrying it, and that is not
+     * arbitrary: the copy is drawn *before* the reply exists, so a key that
+     * arrived with the reply would name a row already on screen. A uuid, so
+     * two clients cannot collide.
+     */
+    payload: {
+      project: Schema.String,
+      workspace: Schema.String,
+      text: Schema.String,
+      key: Schema.String,
+    },
     success: ChatDelivery,
     error: ChatUnavailable,
   }),
@@ -2168,6 +2247,27 @@ export class AwpRpcs extends RpcGroup.make(
       request: Schema.String,
       option: Schema.String,
     },
+    error: ChatUnavailable,
+  }),
+
+  /**
+   * Stop the turn the agent is in the middle of.
+   *
+   * ── silent when there is nothing to stop ──────────────────────────────
+   *
+   * The adapter answers `session/cancel` on an idle session by doing nothing
+   * — its own handler returns early — so this is a no-op rather than a
+   * refusal, and a client does not have to hold "is a turn running" to know
+   * whether pressing the key was allowed. Which matters, because the two
+   * clients would each be holding their own copy of that.
+   *
+   * There is no update saying "cancelled" either, and none is wanted: the
+   * turn's own `session/prompt` returns with a stop reason, and the daemon
+   * already turns that into the `turn ended` every other ending produces. One
+   * edge, whatever stopped it.
+   */
+  Rpc.make("ChatCancel", {
+    payload: { project: Schema.String, workspace: Schema.String },
     error: ChatUnavailable,
   }),
 

@@ -85,7 +85,7 @@ const program = Effect.gen(function* () {
       );
       yield* Effect.ignore(chat.set("mode", "bypassPermissions"));
 
-      yield* chat.send(SLOW);
+      yield* chat.send(SLOW, "probe-slow");
       // Long enough that the turn is certainly underway and the tool call is
       // running — a steer sent before the agent has started is not a steer.
       yield* Effect.sleep("12 seconds");
@@ -95,7 +95,7 @@ const program = Effect.gen(function* () {
       // had waited on. The answer is in the updates: a refused steer ends its
       // turn with a reason, and a second `turn started` with no `turn ended`
       // after it is a window that says "working" for the rest of the session.
-      const how = yield* chat.send(STEER);
+      const how = yield* chat.send(STEER, "probe-steer");
       console.log(`  delivered as  ${how}\n`);
       yield* Effect.sleep("60 seconds");
       return yield* Ref.get(collected);

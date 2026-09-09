@@ -18,19 +18,48 @@
 //                              overlap and the first `ended` arrives while the
 //                              second is still working
 
-import type { ChatUpdate } from "@awp-kit/protocol";
+import type { ChatDiff, ChatUpdate } from "@awp-kit/protocol";
 
 export type Item =
-  | { kind: "said"; role: "user" | "agent" | "thought"; text: string; turn: number; mine?: boolean }
+  | {
+      kind: "said";
+      role: "user" | "agent" | "thought";
+      text: string;
+      turn: number;
+      mine?: boolean;
+      /**
+       * The daemon's name for a whole message, when it had one.
+       *
+       * Only an echo of what somebody typed carries one — see `ChatSend.key`
+       * — and it is what makes applying the echo twice a no-op: the client
+       * that sent it already drew the row.
+       */
+      key?: string;
+    }
   | {
       kind: "tool";
       id: string;
       title: string;
       status: string;
       output: string;
+      /**
+       * What it changed on disk, as patches. Empty for every call that
+       * changed nothing, which is most of them.
+       *
+       * Composed by the daemon — see `ChatDiff` — so this column and the
+       * window draw the same patch rather than each diffing two texts. It is
+       * also what decides whether a row is worth a block of its own: see
+       * {@link grouped}.
+       */
+      diffs?: ReadonlyArray<ChatDiff>;
       toolKind?: string;
       subagent?: string;
-      ask?: { request: string; options: ReadonlyArray<{ id: string; label: string }> };
+      ask?: {
+        request: string;
+        options: ReadonlyArray<{ id: string; label: string }>;
+        /** What was chosen, once anybody in any client has chosen. */
+        answered?: string;
+      };
     };
 
 export type Conversation = {
@@ -40,6 +69,10 @@ export type Conversation = {
   /** Which turn we are in, so a new turn starts a new block. */
   readonly turn: number;
   readonly asks: number;
+  /** Tokens spent so far, when anything has said. */
+  readonly used?: number;
+  /** The context window those tokens are out of. */
+  readonly size?: number;
 };
 
 export const empty: Conversation = { items: [], running: 0, turn: 0, asks: 0 };
@@ -63,6 +96,18 @@ export const fold = (state: Conversation, update: ChatUpdate): Conversation => {
     const text = update.text ?? "";
     if (text === "") return state;
     const role = roleOf(update);
+    // A named message is the daemon's echo of what somebody typed, in this
+    // client or another one — a whole message rather than a chunk, and
+    // idempotent by key so the sender does not draw its own twice.
+    if (update.id !== undefined) {
+      const key = update.id;
+      return state.items.some((item) => item.kind === "said" && item.key === key)
+        ? state
+        : {
+            ...state,
+            items: [...state.items, { kind: "said", role, text, turn: state.turn, key }],
+          };
+    }
     const last = state.items.at(-1);
     if (last?.kind === "said" && last.role === role && last.turn === state.turn) {
       return {
@@ -86,12 +131,17 @@ export const fold = (state: Conversation, update: ChatUpdate): Conversation => {
     // first time this was written.
     const toolKind = update.toolKind ?? before?.toolKind;
     const subagent = update.subagent ?? before?.subagent;
+    // Replaced, never merged: the adapter sends its guess at the change when
+    // the call is made and the real one when it has run, about the same file,
+    // so a merge draws the edit twice.
+    const diffs = update.diffs ?? before?.diffs;
     const merged: Item = {
       kind: "tool",
       id: update.id,
       title: update.title ?? before?.title ?? "",
       status: update.status ?? before?.status ?? "",
       output: update.output ?? before?.output ?? "",
+      ...(diffs === undefined ? {} : { diffs }),
       ...(toolKind === undefined ? {} : { toolKind }),
       ...(subagent === undefined ? {} : { subagent }),
       ...(before?.ask === undefined ? {} : { ask: before.ask }),
@@ -99,6 +149,30 @@ export const fold = (state: Conversation, update: ChatUpdate): Conversation => {
     return at < 0
       ? { ...state, items: [...state.items, merged] }
       : { ...state, items: state.items.map((item, index) => (index === at ? merged : item)) };
+  }
+
+  // Answered, by whoever answered it. The buttons go and what was chosen
+  // stays: nothing in ACP reports this, so the daemon says it — and without it
+  // this client goes on offering a question settled in the window minutes ago.
+  if (update.kind === "permission" && update.id !== undefined && update.status === "answered") {
+    const id = update.id;
+    return {
+      ...state,
+      asks: Math.max(0, state.asks - 1),
+      items: state.items.map((item) =>
+        item.kind === "tool" && item.ask?.request === id
+          ? {
+              ...item,
+              ask: {
+                ...item.ask,
+                answered:
+                  item.ask.options.find((option) => option.id === update.chose)?.label ??
+                  "answered",
+              },
+            }
+          : item,
+      ),
+    };
   }
 
   if (update.kind === "permission" && update.id !== undefined) {
@@ -137,7 +211,24 @@ export const fold = (state: Conversation, update: ChatUpdate): Conversation => {
     };
   }
 
-  // `usage` says nothing a person reads.
+  // ── the context figure ──────────────────────────────────────────────────
+  //
+  // Dropped here once, under a note saying it said nothing a person reads.
+  // It is the only place the figure exists, and the status row under the
+  // composer is where somebody deciding whether to start a fresh conversation
+  // reads it.
+  //
+  // A whole reading each time and never a delta, and the newest wins: `size`
+  // is not constant — measured 200000 on a turn's first update and 1000000 on
+  // its last, because the adapter learns the model's real window as it goes.
+  if (update.kind === "usage") {
+    return {
+      ...state,
+      ...(update.used === undefined ? {} : { used: update.used }),
+      ...(update.size === undefined ? {} : { size: update.size }),
+    };
+  }
+
   return state;
 };
 
@@ -150,7 +241,54 @@ export const fold = (state: Conversation, update: ChatUpdate): Conversation => {
  * replays it. Which is also the finding: a *second* client sees the turn start
  * and the answer, with the question missing.
  */
-export const mine = (state: Conversation, text: string): Conversation => ({
+export const mine = (state: Conversation, text: string, key: string): Conversation => ({
   ...state,
-  items: [...state.items, { kind: "said", role: "user", text, turn: state.turn, mine: true }],
+  items: [...state.items, { kind: "said", role: "user", text, turn: state.turn, mine: true, key }],
 });
+
+/**
+ * A call that has something to show, as opposed to one that leaves a receipt.
+ *
+ * The line is the patch. A `read`, a `grep`, a `bun run test` says what it did
+ * in its title and nothing else is coming; an edit's whole content is what it
+ * changed, and rolling that away leaves a transcript of an agent that
+ * evidently did some work somewhere.
+ *
+ * A question is the other exception, for the reason it is everywhere else
+ * here: it is the one row that wants something from a person.
+ */
+const standsAlone = (item: Item): boolean =>
+  item.kind === "tool" &&
+  ((item.diffs ?? []).length > 0 || (item.ask !== undefined && item.ask.answered === undefined));
+
+/** The transcript as blocks, with a run of receipts counted as one. */
+export type Block =
+  | { readonly kind: "one"; readonly item: Item }
+  | { readonly kind: "calls"; readonly items: ReadonlyArray<Item> };
+
+/**
+ * Roll up the calls that produced nothing to look at.
+ *
+ * The window's own `grouped` rolls up *every* consecutive tool call, and this
+ * one deliberately does not: a column 80 cells wide has room for one thing at
+ * a time, so an edit hidden behind `+7 earlier calls` is the change itself
+ * folded away. What is folded here is the run of receipts around it.
+ *
+ * Consecutive only, the same as the window's: a call after a sentence is a new
+ * piece of work, and merging across the sentence loses the order things
+ * happened in.
+ */
+export const grouped = (items: ReadonlyArray<Item>): ReadonlyArray<Block> => {
+  const out: Block[] = [];
+  for (const item of items) {
+    if (item.kind !== "tool" || standsAlone(item)) {
+      out.push({ kind: "one", item });
+      continue;
+    }
+    const last = out.at(-1);
+    if (last?.kind === "calls")
+      out[out.length - 1] = { kind: "calls", items: [...last.items, item] };
+    else out.push({ kind: "calls", items: [item] });
+  }
+  return out;
+};

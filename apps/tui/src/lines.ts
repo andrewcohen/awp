@@ -74,8 +74,16 @@ export const linesOf = (items: ReadonlyArray<Item>, width: number): ReadonlyArra
       out.push({ text: `      ${first.slice(0, Math.max(0, body))}`, role: "tool" });
     }
     if (item.ask !== undefined) {
-      const options = item.ask.options.map((option, at) => `${at + 1} ${option.label}`).join("   ");
-      out.push({ text: `    asks: ${options}`, role: "ask" });
+      // Answered, by whoever answered it — see the daemon's `answer`. The
+      // options go, because offering them is offering a refusal.
+      const options =
+        item.ask.answered === undefined
+          ? item.ask.options.map((option, at) => `${at + 1} ${option.label}`).join("   ")
+          : item.ask.answered;
+      out.push({
+        text: item.ask.answered === undefined ? `    asks: ${options}` : `    ${options}`,
+        role: "ask",
+      });
     }
   }
 

@@ -792,9 +792,15 @@ export const watchChat = (
  * window cannot work that out for itself, and it is the difference between a
  * message being read now and a message waiting its turn.
  */
-export const chatSend = (project: string, workspace: string, text: string): Promise<ChatDelivery> =>
+export const chatSend = (
+  project: string,
+  workspace: string,
+  text: string,
+  /** This window's name for the message. See `ChatSend.key` in the contract. */
+  key: string,
+): Promise<ChatDelivery> =>
   runtime.runPromise(
-    Effect.flatMap(AwpClient, (rpc) => rpc.ChatSend({ project, workspace, text })),
+    Effect.flatMap(AwpClient, (rpc) => rpc.ChatSend({ project, workspace, text, key })),
   );
 
 /**
@@ -861,6 +867,18 @@ export const chatSet = (
   );
 
 /** Answer a permission request, by the id its update carried. */
+/**
+ * Stop the turn the agent is in.
+ *
+ * No answer to wait for and nothing to report: an idle conversation ignores
+ * it, and a running one ends the way every turn ends — a `turn` update on the
+ * stream. So the window has nothing to do here but ask.
+ */
+export const chatCancel = (project: string, workspace: string): Promise<void> =>
+  runtime.runPromise(
+    Effect.asVoid(Effect.flatMap(AwpClient, (rpc) => rpc.ChatCancel({ project, workspace }))),
+  );
+
 export const chatAnswer = (
   project: string,
   workspace: string,

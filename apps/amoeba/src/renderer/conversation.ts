@@ -1,4 +1,4 @@
-import type { ChatCommand, ChatUpdate } from "@awp-kit/protocol";
+import type { ChatCommand, ChatDiff, ChatUpdate } from "@awp-kit/protocol";
 
 // What a conversation looks like once the updates have been folded together.
 //
@@ -88,6 +88,15 @@ export interface Ran {
   readonly toolKind: string;
   readonly status: string;
   readonly output: string;
+  /**
+   * What it changed on disk, as patches — empty for everything that changed
+   * nothing.
+   *
+   * The daemon composes these; see `ChatDiff`. A call that edits a file
+   * answers with no output at all, so without them an edit row is a title and
+   * a tick, and the one thing worth reading about it is not on screen.
+   */
+  readonly diffs: ReadonlyArray<ChatDiff>;
   /** Which kind of subagent this call spawned, when it spawned one. */
   readonly subagent: string | undefined;
   /** How long it has been running, in seconds. */
@@ -121,6 +130,16 @@ export interface Asked {
   readonly key: string;
   readonly title: string;
   readonly options: ReadonlyArray<{ id: string; name: string; kind: string }>;
+  /**
+   * What was chosen, once anybody has chosen.
+   *
+   * Said by the daemon, because nothing in ACP does: the adapter's reply *is*
+   * the answer, so a second client on the same conversation went on offering
+   * buttons for a question settled minutes earlier — and pressing one earned
+   * a refusal about somebody else's click. The name and not the id, because
+   * the options are here to look it up in.
+   */
+  readonly answered: string | undefined;
 }
 
 export type Item = Said | Ran | Asked;
@@ -257,6 +276,27 @@ export const fold = (state: Conversation, update: ChatUpdate): Conversation => {
 
   if (update.kind === "message") {
     const role = update.role ?? "agent";
+    // ── a named message is a whole one, and applying it twice is a no-op ──
+    //
+    // The daemon echoes what somebody typed, so a second client sees the
+    // questions as well as the answers. The client that sent it already has
+    // the row — painted on the keypress, see `mine` — and matches on the key
+    // it minted.
+    if (update.id !== undefined) {
+      const key = update.id;
+      if (state.items.some((item) => item.key === key)) {
+        return state;
+      }
+      const where = tail(state.items);
+      return {
+        ...state,
+        items: [
+          ...state.items.slice(0, where),
+          { kind: "said", key, role, text: update.text ?? "", queued: false },
+          ...state.items.slice(where),
+        ],
+      };
+    }
     // Above anything queued. What the agent is still saying belongs to the
     // turn a steer interrupted, so it goes before it rather than after.
     const at = tail(state.items);
@@ -302,6 +342,11 @@ export const fold = (state: Conversation, update: ChatUpdate): Conversation => {
       toolKind: update.toolKind ?? found?.toolKind ?? "",
       status: update.status ?? found?.status ?? "pending",
       output: update.output ?? found?.output ?? "",
+      // Replaced when a later update carries any, kept when it says nothing.
+      // The adapter sends its guess at the change when the call is made and
+      // the real one when it has run — the same file twice — so merging the
+      // two lists would draw the edit above the edit.
+      diffs: update.diffs ?? found?.diffs ?? [],
       // The subagent facts arrive on the progress updates rather than on the
       // call, so they are merged like everything else — and a call that has
       // stopped retrying says nothing about `retry`, which must not blank a
@@ -322,12 +367,34 @@ export const fold = (state: Conversation, update: ChatUpdate): Conversation => {
     };
   }
 
+  // Somebody answered it — here or in another client. The row keeps its
+  // question and loses its buttons, which is what a settled question looks
+  // like: `Always Allow`, in the words that were on the button.
+  if (update.kind === "permission" && update.id !== undefined && update.status === "answered") {
+    const id = update.id;
+    const said = (asked: Asked): Asked => ({
+      ...asked,
+      answered: asked.options.find((option) => option.id === update.chose)?.name ?? "answered",
+    });
+    return {
+      ...state,
+      items: state.items.map((item) =>
+        item.kind === "ran" && item.ask?.key === id
+          ? { ...item, ask: said(item.ask) }
+          : item.kind === "asked" && item.key === id
+            ? said(item)
+            : item,
+      ),
+    };
+  }
+
   if (update.kind === "permission" && update.id !== undefined) {
     const asked: Asked = {
       kind: "asked",
       key: update.id,
       title: update.title ?? "a tool wants to run",
       options: (update.options ?? []).map((option) => ({ ...option })),
+      answered: undefined,
     };
     // On the call it is about, when that call is on screen — which it nearly
     // always is, because the adapter emits the tool call before it asks.
@@ -456,15 +523,32 @@ export type Block =
   | { readonly kind: "one"; readonly key: string; readonly item: Item }
   | { readonly kind: "calls"; readonly key: string; readonly items: ReadonlyArray<Ran> };
 
+/**
+ * A call the fold must not swallow.
+ *
+ * A block draws its tail and counts the rest, so anything earlier in a long
+ * run is behind `+7 earlier calls`. That is right for receipts and wrong for
+ * the two kinds of row that carry something to read:
+ *
+ *   an edit      its patch is the row's whole content — folded away, the one
+ *                call that changed something is the one saying least
+ *   a question   an agent waiting on somebody, hidden behind a count
+ *
+ * The question was already an exception in the drawing; the patch made it
+ * worth stating once, here, where the fold is decided.
+ */
+const standsAlone = (item: Item): boolean =>
+  item.kind === "ran" && (item.diffs.length > 0 || item.ask !== undefined);
+
 export const grouped = (items: ReadonlyArray<Item>): ReadonlyArray<Block> => {
   const out: Array<Block> = [];
   for (const item of items) {
     const last = out.at(-1);
-    if (item.kind === "ran" && last?.kind === "calls") {
+    if (item.kind === "ran" && !standsAlone(item) && last?.kind === "calls") {
       out[out.length - 1] = { ...last, items: [...last.items, item] };
       continue;
     }
-    if (item.kind === "ran") {
+    if (item.kind === "ran" && !standsAlone(item)) {
       out.push({ kind: "calls", key: item.key, items: [item] });
       continue;
     }

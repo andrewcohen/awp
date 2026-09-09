@@ -1,7 +1,7 @@
 import { parsePatchFiles } from "@pierre/diffs";
 import { CodeView } from "@pierre/diffs/react";
 import * as stylex from "@stylexjs/stylex";
-import { type ReactNode, isValidElement, useEffect, useId, useState } from "react";
+import { type ReactNode, isValidElement, useEffect, useId, useMemo, useState } from "react";
 import { THEME } from "./highlighting";
 import { useColorScheme } from "./theme";
 import { typeset } from "./typeset";
@@ -103,13 +103,24 @@ export const Fence = ({ children }: { readonly children: ReactNode }) => {
  * first and draws whatever came back, the same way the diff panel does — and
  * when nothing came back, the text is still a patch to *read*, so it goes
  * through shiki's own `diff` grammar rather than being thrown away.
+ *
+ * Exported, because a tool that edits a file is the other place a patch turns
+ * up in a conversation — see `Tool` in Chat.tsx. A change an agent *described*
+ * in a fence and the same change it actually *made* should not read as two
+ * different things, which is the same argument that put this on the diff
+ * panel's own renderer rather than on a second highlighter.
  */
-const Patch = ({ source }: { readonly source: string }) => {
+export const Patch = ({ source }: { readonly source: string }) => {
   const scheme = useColorScheme();
   // Parsed in a try, because this string was written by a model. The library
   // throws on input it cannot make sense of, and a throw here is the whole
   // panel replaced by a stack trace.
-  const items = (() => {
+  //
+  // Memoised on the source, which matters here and did not when this only
+  // drew fences: a tool row is in a transcript that re-renders on every chunk
+  // of the answer being written under it, and parsing an edit's patch again
+  // per token is a parse for a string that cannot have changed.
+  const items = useMemo(() => {
     try {
       return parsePatchFiles(source, "message").flatMap((one) =>
         one.files.map((fileDiff, index) => ({
@@ -121,7 +132,7 @@ const Patch = ({ source }: { readonly source: string }) => {
     } catch {
       return [];
     }
-  })();
+  }, [source]);
 
   if (items.length === 0) {
     return <Code source={source} language="diff" />;

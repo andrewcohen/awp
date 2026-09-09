@@ -3,6 +3,7 @@ import { describe, expect, test } from "vitest";
 import { Attachment, AttachError } from "./attachment";
 import * as AttachmentImpl from "./attachment";
 import { Multiplexer, type Session } from "./multiplexer";
+import { currentZmxSession } from "./zmx-session";
 import { makeFake } from "./pty-fake";
 
 // No pty, no zmx, no subprocess. Both dependencies are tags, so a fake pty and
@@ -135,7 +136,11 @@ describe("what attach refuses", () => {
   });
 
   test("the session this process is running in", async () => {
-    const own = process.env.ZMX_SESSION;
+    // Asked through the same function the refusal reads, not off the
+    // environment: the marker is neutralised by being set to the empty string,
+    // so `process.env.ZMX_SESSION` is `""` in every child this daemon spawns
+    // and reading it directly makes this a test about a session named nothing.
+    const own = currentZmxSession();
     if (own === undefined) {
       return;
     }

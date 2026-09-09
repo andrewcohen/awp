@@ -11,8 +11,14 @@ import { watchChat } from "./daemon";
 
 export type Chat = {
   readonly state: Conversation;
-  /** Add what this client just typed, before anything has echoed it back. */
-  readonly saidLocally: (text: string) => void;
+  /**
+   * Add what this client just typed, before anything has echoed it back.
+   *
+   * The key is the sender's own name for the message — see `ChatSend.key`. It
+   * is what makes the daemon's echo, which exists so a *second* client sees
+   * what was typed here, a no-op in the client that drew it already.
+   */
+  readonly saidLocally: (text: string, key: string) => void;
 };
 
 /**
@@ -50,7 +56,7 @@ export const useConversation = (project: string, workspace: string): Chat => {
 
   return {
     state,
-    saidLocally: (text: string) => setState((was) => mine(was, text)),
+    saidLocally: (text: string, key: string) => setState((was) => mine(was, text, key)),
   };
 };
 

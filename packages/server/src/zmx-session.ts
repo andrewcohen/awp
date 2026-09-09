@@ -19,8 +19,25 @@
 //   - Testing or probing against a REAL zmx: refuse to run inside a session.
 //     Not strip — refuse. There is no environment edit that makes it safe.
 
-/** The session this process is running inside, if any. */
-export const currentZmxSession = (): string | undefined => process.env.ZMX_SESSION;
+/**
+ * The session this process is running inside, if any.
+ *
+ * **Empty is absent**, and that is the reading half of the rule `childEnv`
+ * writes: a marker is neutralised by being *set* to the empty string, because
+ * bun-pty's `Command` inherits the parent environment and a key left out is a
+ * key left alone. So every child this daemon spawns carries `ZMX_SESSION=""`
+ * — and read as a name, that is a process claiming to be inside a session
+ * called nothing.
+ *
+ * What it cost was the guards reading it: `insideZmxSession` answered true in
+ * exactly the children that had been neutralised, and the probes' refusal
+ * fires there. Seen as three failures in `zmx.test.ts`, each asking zmx about
+ * a session named `""` and being refused by name.
+ */
+export const currentZmxSession = (): string | undefined => {
+  const marker = process.env.ZMX_SESSION;
+  return marker === undefined || marker === "" ? undefined : marker;
+};
 
 /** Whether this process is running inside a zmx session. */
 export const insideZmxSession = (): boolean => currentZmxSession() !== undefined;

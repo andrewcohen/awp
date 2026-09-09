@@ -10,7 +10,7 @@
 // and its interruption, which is what makes the daemon's end of a stream close
 // when this process stops caring.
 
-import type { ChatDelivery, ChatUpdate } from "@awp-kit/protocol";
+import type { ChatConfigOption, ChatDelivery, ChatUpdate } from "@awp-kit/protocol";
 import {
   AwpClient,
   type AwpClientShape,
@@ -116,9 +116,26 @@ export const watchChat = (
  * and answers which way it went: `steer` into the turn already running, or
  * `prompt` for a turn of its own.
  */
-export const chatSend = (project: string, workspace: string, text: string): Promise<ChatDelivery> =>
+export const chatSend = (
+  project: string,
+  workspace: string,
+  text: string,
+  /** This client's name for the message. See `ChatSend.key` in the contract. */
+  key: string,
+): Promise<ChatDelivery> =>
   runtime.runPromise(
-    Effect.flatMap(AwpClient, (rpc) => rpc.ChatSend({ project, workspace, text })),
+    Effect.flatMap(AwpClient, (rpc) => rpc.ChatSend({ project, workspace, text, key })),
+  );
+
+/**
+ * Stop the turn the agent is in.
+ *
+ * Nothing comes back and nothing needs to: an idle conversation ignores it,
+ * and a running one ends the way every turn ends, on the update stream.
+ */
+export const chatCancel = (project: string, workspace: string): Promise<void> =>
+  runtime.runPromise(
+    Effect.asVoid(Effect.flatMap(AwpClient, (rpc) => rpc.ChatCancel({ project, workspace }))),
   );
 
 /** Answer a permission request by the id its update carried. */
@@ -133,6 +150,21 @@ export const chatAnswer = (
       Effect.flatMap(AwpClient, (rpc) => rpc.ChatAnswer({ project, workspace, request, option })),
     ),
   );
+
+/**
+ * What this session is running as: the mode, the model, the effort, fast mode.
+ *
+ * A call and not a field on the stream, which is the contract's own reasoning
+ * — a list of every model the agent offers would otherwise cross the wire
+ * several times a turn. Read once when the screen opens, which is all the
+ * status row under the composer needs: nothing here changes without somebody
+ * changing it, and this client offers no way to.
+ */
+export const chatConfig = (
+  project: string,
+  workspace: string,
+): Promise<ReadonlyArray<ChatConfigOption>> =>
+  runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.ChatConfig({ project, workspace })));
 
 /** Every thread, newest first — the list this POC opens on. */
 export const threads = () =>
