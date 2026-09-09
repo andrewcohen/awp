@@ -30,6 +30,7 @@ import { sessionName } from "./naming";
 import { makeFake } from "./pty-fake";
 import * as sessions from "./sessions";
 import { migrations as reviewMigrations, layer as reviewsLayer } from "./reviews";
+import { layer as pagesLayer } from "./pages";
 import { layer as projectsLayer, migrations as projectMigrations } from "./projects";
 import * as workspaceState from "./workspace-state";
 import { migrations as threadMigrations, layer as threadsLayer } from "./threads";
@@ -252,6 +253,7 @@ const run = <A>(body: (rpc: Client) => Effect.Effect<A, unknown, Scope.Scope>, f
             send: () => Effect.succeed("prompt" as const),
             brief: () => Effect.void,
             openTerminal: () => Effect.succeed("forked-1"),
+            fresh: () => Effect.succeed("fresh-1"),
             statuses: () => Stream.empty,
             answer: () => Effect.void,
             config: () => Effect.succeed([]),
@@ -403,6 +405,9 @@ const run = <A>(body: (rpc: Client) => Effect.Effect<A, unknown, Scope.Scope>, f
           }),
         ),
         Layer.provide(sessions.layer),
+        // The real one: it holds a PubSub and a rule about urls, has no
+        // dependencies, and a fake would only restate the rule.
+        Layer.provide(pagesLayer),
         // Pointed at a file that is not there, which answers with an empty
         // table — the honest state for a machine that has only ever run
         // amoeba, and the one this suite is about. `workspace-state.test.ts`
@@ -519,6 +524,50 @@ describe("the thread a checkout belongs to", () => {
     );
 
     expect(got.thread).toBeUndefined();
+  });
+
+  it("pointing the web panel records the page against the thread that claims the checkout", async () => {
+    // The panel keys its page by thread and the caller has a directory. Only
+    // the daemon holds both halves — the workspaces convention, and the table
+    // that says which piece of work claims a checkout — which is why the
+    // resolution is here rather than in whoever calls it.
+    const got = await run((rpc) =>
+      Effect.gen(function* () {
+        const made = yield* rpc.ThreadCreate({ title: "tabular exports" });
+        yield* rpc.ThreadAttach({
+          thread: made.id,
+          member: { project: "rowan", workspace: "tabular-exports" },
+        });
+        const page = yield* rpc.PageOpen({
+          from: dirOf("rowan", "tabular-exports"),
+          url: "https://example.invalid/build/412",
+        });
+        return { made: made.id, page };
+      }),
+    );
+
+    expect(got.page.thread).toBe(got.made);
+    expect(got.page.url).toBe("https://example.invalid/build/412");
+  });
+
+  it("pointing it from a workspace no thread claims carries no thread", async () => {
+    const got = await run((rpc) =>
+      rpc.PageOpen({ from: dirOf("rowan", "unclaimed"), url: "https://example.invalid/" }),
+    );
+
+    expect(got.thread).toBeUndefined();
+  });
+
+  it("a url that is not one is refused, not guessed at", async () => {
+    // The address bar guesses — a bare host gets a scheme, prose becomes a
+    // search — because a person is watching. This call's caller is not.
+    const failed = await run((rpc) =>
+      rpc
+        .PageOpen({ from: dirOf("rowan", "unclaimed"), url: "effect schema v4" })
+        .pipe(Effect.flip),
+    );
+
+    expect(failed).toMatchObject({ reason: expect.stringContaining("not a url") });
   });
 
   it("a directory outside the workspaces root refuses by name", async () => {

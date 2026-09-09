@@ -331,6 +331,16 @@ const handlers = AwpRpcs.toLayer({
     Stream.fromArray([{ kind: "message" as const, role: "agent" as const, text: "hello" }]),
   ChatSend: () => Effect.succeed("prompt" as const),
   ChatFork: () => Effect.succeed("forked-1"),
+  ChatFresh: () => Effect.succeed("fresh-1"),
+  McpStatus: (payload) =>
+    Effect.succeed({
+      name: "awp",
+      command: "/usr/local/bin/bun",
+      args: ["run", "/packages/server/src/mcp-main.ts"],
+      cwd: `/Users/x/.awp/workspaces/${payload.project}/${payload.workspace}`,
+      url: "ws://127.0.0.1:5274",
+      tools: [{ name: "awp_thread", description: "The work this checkout is part of." }],
+    }),
   ChatAnswer: () => Effect.void,
   ChatConfig: () => Effect.succeed([]),
   ChatSet: () => Effect.succeed([]),
@@ -340,6 +350,11 @@ const handlers = AwpRpcs.toLayer({
   ReviewList: () => Effect.succeed([comment]),
   ReviewAdd: () => Effect.succeed(comment),
   ReviewAt: () => Effect.succeed({ project: "thicket", workspace: "lantern", comments: [comment] }),
+  PageOpen: ({ url }) => Effect.succeed({ thread: "th-1", url, at: 1_787_000_000_000 }),
+  PageChanges: () =>
+    Stream.fromArray([
+      { thread: "th-1", url: "https://example.invalid/build/412", at: 1_787_000_000_000 },
+    ]),
   ReviewFile: () =>
     Effect.succeed({
       comment,

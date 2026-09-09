@@ -1,5 +1,6 @@
-import type { Inbox, PullRequest } from "@awp-kit/protocol";
+import type { Inbox, Page, PullRequest } from "@awp-kit/protocol";
 import { Atom } from "effect/unstable/reactivity";
+import { rememberedPages } from "./remembered";
 
 // State that outlives the component holding it.
 //
@@ -78,3 +79,34 @@ export const prsFailureAtom = Atom.make<Record<string, string>>({});
 
 /** The key every one of those records uses. One function, so they agree. */
 export const prKey = (project: string, number: number): string => `${project}#${number}`;
+
+/**
+ * The page each thread's web panel is showing, by thread id — `""` for a
+ * workspace no thread claims, which is the panel's own bucket for one.
+ *
+ * ── an atom because the subscriber outlives the panel ─────────────────────
+ *
+ * The same argument as the inbox above, one step further. The inbox is an atom
+ * so a *fetch* that finishes after the panel unmounted is not wasted; this is
+ * an atom because the thing that writes it — `PageChanges`, an agent asking for
+ * a page — arrives at a window whose web panel is very probably not mounted at
+ * all. Base UI unmounts a hidden tab, and the moment an agent has something to
+ * show somebody is the moment they are reading the diff.
+ *
+ * Seeded from localStorage rather than from the daemon, and that is deliberate:
+ * the daemon keeps no table of pages to replay (see pages.ts), because a
+ * navigation is an event and replaying yesterday's would move the page under
+ * somebody on launch. What survives a quit is the window's own memory of what
+ * it was last shown.
+ */
+export const pagesAtom = Atom.make<Record<string, string>>(rememberedPages());
+
+/**
+ * The last navigation anybody asked for, or nothing since this window opened.
+ *
+ * Kept beside the pages rather than folded into them, because the panel has to
+ * tell "this thread's page is X" from "somebody has just asked for X". Asking
+ * for the page already loaded is a real request — it means reload — and two
+ * value-equal urls are only distinguishable by the `at` the daemon stamped.
+ */
+export const pageAskedAtom = Atom.make<Page | undefined>(undefined);

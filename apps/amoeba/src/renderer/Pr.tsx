@@ -5,6 +5,7 @@ import * as stylex from "@stylexjs/stylex";
 import { useState } from "react";
 import { Markdown } from "./Markdown";
 import { repair } from "./daemon";
+import { typeset } from "./typeset";
 import { colors, space, text } from "./tokens.stylex";
 import { usePullRequest } from "./usePullRequest";
 
@@ -52,8 +53,8 @@ const styles = stylex.create({
   // The number is the one accent on this panel, and it earns it the way the
   // sidebar's does: it is the thing pointing outside the window, and there is
   // exactly one of it here rather than one per row.
-  number: { flexShrink: 0, color: colors.accent, fontFamily: text.mono, fontSize: text.small },
-  title: { fontSize: text.lead, fontWeight: text.medium, lineHeight: 1.35 },
+  number: { flexShrink: 0, color: colors.accent },
+  title: { lineHeight: 1.35 },
   // What pushes the controls to the far edge. Its own element rather than
   // `margin-inline-start: auto` on the first button, because there are two of
   // them and the rule would have to know which is first.
@@ -149,8 +150,6 @@ const styles = stylex.create({
   section: {
     marginBlockStart: "0.9rem",
     color: colors.muted,
-    fontSize: text.small,
-    fontWeight: text.strong,
   },
   // Only the space around it. The markdown renderer owns everything inside —
   // `pre-wrap` here would keep the source's own newlines *as well as* the
@@ -179,8 +178,6 @@ const styles = stylex.create({
     backgroundColor: colors.base,
     borderRadius: "0.25rem",
     color: colors.muted,
-    fontFamily: text.mono,
-    fontSize: text.small,
     lineHeight: 1.5,
     whiteSpace: "pre-wrap",
   },
@@ -369,12 +366,12 @@ export function Pr({
                 ? "asked to fix it and push"
                 : "asked to investigate and report, and to change nothing"}
             </div>
-            <div {...stylex.props(styles.box)}>{prompt}</div>
+            <div {...stylex.props(typeset.address, styles.box)}>{prompt}</div>
           </div>
         )}
 
         <div {...stylex.props(styles.head)}>
-          <span {...stylex.props(styles.number)}>#{pr.number}</span>
+          <span {...stylex.props(typeset.address, styles.number)}>#{pr.number}</span>
 
           {/* The number reads left and the controls read right, with the row
               between them empty. They were adjacent, which put a
@@ -419,7 +416,7 @@ export function Pr({
             github
           </button>
         </div>
-        <div {...stylex.props(styles.title)}>{pr.title}</div>
+        <div {...stylex.props(typeset.heading, styles.title)}>{pr.title}</div>
 
         <div {...stylex.props(styles.facts)}>
           <span>{pr.state}</span>
@@ -459,7 +456,7 @@ export function Pr({
 
         {pr.remarks.length > 0 && (
           <>
-            <div {...stylex.props(styles.section)}>
+            <div {...stylex.props(typeset.subhead, styles.section)}>
               {pr.remarks.length} {pr.remarks.length === 1 ? "remark" : "remarks"}
             </div>
             {pr.remarks.map((remark, at) => (

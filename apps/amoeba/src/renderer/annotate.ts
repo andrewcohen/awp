@@ -321,10 +321,28 @@ export const pickerSource = (): string => `
     draw(el);
   };
 
+  // ── picked on pointerdown, and that is not a preference ─────────────────
+  //
+  // This listened for \`click\`, and **a disabled control dispatches none**.
+  // Measured over one, in the shipping engine:
+  //
+  //   disabled   pointerdown · pointerup
+  //   enabled    pointerdown · mousedown · pointerup · mouseup · click
+  //
+  // So the highlight drew over a disabled button and the click that would have
+  // picked it was never dispatched at all — the overlay invited a gesture the
+  // browser then swallowed. Reported as "i cant select things like the send
+  // button or the tool call lines", and both of those are disabled: the send
+  // while the box is empty, and a tool row's title when the call has no output
+  // to disclose.
+  //
+  // \`pointerdown\` is delivered for both, so it is what picks. Cancelling it
+  // also suppresses the compatibility mouse events — mousedown, mouseup and
+  // click — which is how picking a link still does not navigate and picking
+  // "delete" still does not delete. \`swallow\` below is the belt for an engine
+  // that synthesises one anyway.
   const clicked = (event) => {
     if (!on) { return; }
-    // Cancelled in the capture phase, before the page's own handler. Picking a
-    // link must not navigate, and picking "delete" must not delete.
     event.preventDefault();
     event.stopPropagation();
     const el = over || document.elementFromPoint(event.clientX, event.clientY);
@@ -353,12 +371,29 @@ export const pickerSource = (): string => `
     }
   };
 
+  // A click that arrives after a pick, cancelled and then forgotten.
+  //
+  // Settling takes the picker's listeners off, so without this the click that
+  // follows the pointerdown we just cancelled would reach the page and
+  // activate whatever was picked. One shot, and a timer in case no click ever
+  // comes — which is the ordinary case for a cancelled pointerdown.
+  const swallow = (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    document.removeEventListener("click", swallow, true);
+  };
+
+  const shield = () => {
+    document.addEventListener("click", swallow, true);
+    setTimeout(() => document.removeEventListener("click", swallow, true), 400);
+  };
+
   const arm = () => {
     if (on) { return; }
     on = true;
     if (!box.isConnected) { document.body.appendChild(box); }
     document.addEventListener("mousemove", moved, true);
-    document.addEventListener("click", clicked, true);
+    document.addEventListener("pointerdown", clicked, true);
     document.addEventListener("keydown", keyed, true);
   };
 
@@ -367,8 +402,9 @@ export const pickerSource = (): string => `
     on = false;
     over = null;
     document.removeEventListener("mousemove", moved, true);
-    document.removeEventListener("click", clicked, true);
+    document.removeEventListener("pointerdown", clicked, true);
     document.removeEventListener("keydown", keyed, true);
+    shield();
   };
 
   // And take the paint off. A highlight left over somebody's page is

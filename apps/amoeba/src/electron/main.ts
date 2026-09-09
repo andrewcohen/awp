@@ -285,6 +285,30 @@ if (!app.requestSingleInstanceLock()) {
   // ends. `unref` matters: this timer must never be the reason the loop is
   // still alive, only the thing that fires if something else is.
   app.on("window-all-closed", () => {
+    // ── on macOS a closed window is not a closed application ──────────────
+    //
+    // This quit unconditionally, which is the Windows and Linux convention,
+    // and on this platform it means a stray cmd+W ends amoeba — and the
+    // `activate` handler above, which exists precisely to make a window again,
+    // could never run: the app was gone before anything could activate it.
+    //
+    // Reported as "where did the app go i think it died". It had not died; it
+    // had done what it was told, cleanly, with exit code 0 and nothing in the
+    // log:
+    //
+    //   [amoeba] renderer: http://127.0.0.1:5273
+    //   ZMX_TASK_COMPLETED:0        ← seven minutes later, no error above it
+    //
+    // Which is the worst shape a shutdown can have: indistinguishable from a
+    // crash, because the absence of a complaint is all either one leaves.
+    //
+    // So on darwin the app stays running with no window, and cmd+tab or the
+    // dock icon brings one back through `activate`. Quitting is Quit — the
+    // menu item, cmd+Q — which is what it means here as it does everywhere
+    // else on this platform.
+    if (process.platform === "darwin") {
+      return;
+    }
     app.quit();
     const giveUp = setTimeout(() => {
       console.error(`[amoeba] quit did not finish in ${QUIT_GRACE_MS}ms — exiting`);

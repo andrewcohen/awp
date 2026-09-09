@@ -50,6 +50,18 @@ const draw = (updates: ReadonlyArray<ChatUpdate>): void => {
   }
 };
 
+/**
+ * The transcript's own updates, which is what "replayed nothing" is about.
+ *
+ * A fresh session emits an `available_commands_update` of its own accord — the
+ * adapter pushes the slash-command list on open — so counting *every* update
+ * would report a brand-new conversation as having replayed something. That is
+ * a check that would fail for a working fork, and it did on the first run
+ * after commands stopped being dropped.
+ */
+const spoken = (updates: ReadonlyArray<ChatUpdate>): ReadonlyArray<ChatUpdate> =>
+  updates.filter((update) => update.kind === "message" || update.kind === "tool");
+
 const program = Effect.gen(function* () {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 
@@ -84,6 +96,30 @@ const program = Effect.gen(function* () {
   console.log("1. a new session");
   draw(first);
 
+  // ── the commands, which is where a skill lives ──────────────────────────
+  //
+  // The whole reason this is here: `available_commands_update` used to be
+  // dropped, and no test could have said whether the adapter ever sends one —
+  // a fixture would only agree with itself. What is being checked is that a
+  // list arrives at all, and that a *skill* is in it, since a skill is
+  // indistinguishable from a built-in command on this wire.
+  //
+  // This directory is a fresh temp dir with no `.claude` of its own, so
+  // anything here came from the machine's own — which is the case the chat
+  // needs to work for.
+  const advertised = first.filter((update) => update.kind === "commands").at(-1)?.commands ?? [];
+  console.log(`\n  commands    ${advertised.length}`);
+  for (const command of advertised.slice(0, 8)) {
+    console.log(
+      `    ${command.name.padEnd(18)} ${(command.hint ?? "").padEnd(12)} ` +
+        `${command.description.split("\n")[0]?.slice(0, 50) ?? ""}`,
+    );
+  }
+  console.log(
+    `  updates     ${String(first.filter((update) => update.kind === "commands").length)} ` +
+      `command list(s) — pushed, never asked for`,
+  );
+
   // Second conversation, a new process, given the id the first ended up on.
   //
   // Handed over rather than looked up, because looking it up is the bug: every
@@ -91,7 +127,14 @@ const program = Effect.gen(function* () {
   // included, and taking the newest joins whatever somebody else is doing.
   const second = yield* Effect.scoped(
     Effect.gen(function* () {
-      const chat = yield* conversation(spawner, { cwd: dir, model: "sonnet", session: opened });
+      // Seeded with a reading, because a load sends none of its own — see
+      // `ChatOptions.usage`. The count below is what says the seed arrives.
+      const chat = yield* conversation(spawner, {
+        cwd: dir,
+        model: "sonnet",
+        session: opened,
+        usage: { used: 1234, size: 200_000 },
+      });
       const updates = yield* chat.updates;
       const seen = yield* Ref.make<ReadonlyArray<ChatUpdate>>([]);
       yield* Effect.forkScoped(
@@ -104,7 +147,18 @@ const program = Effect.gen(function* () {
     }),
   );
   console.log("\n2. opened again, in a new process");
-  console.log(`  replayed    ${second.length} updates`);
+  console.log(`  replayed    ${spoken(second).length} updates`);
+  // ── the context figure, on a conversation nobody has spoken to ──────────
+  //
+  // Measured 2026-09-09: a live turn sends four `usage_update`s and a load
+  // sends **none**, so the composer's figure was absent exactly when somebody
+  // was deciding whether to carry on in an old conversation. There is no call
+  // that asks, so the daemon stores the reading and hands it back — and this
+  // is the line that says the hand-back works.
+  const seeded = second.filter((update) => update.kind === "usage");
+  console.log(
+    `  usage       ${seeded.length === 0 ? "NONE — the seeded reading did not arrive" : `used=${String(seeded[0]?.used)} size=${String(seeded[0]?.size)}`}`,
+  );
   const words = second
     .filter((update) => update.kind === "message")
     .map((update) => `${String(update.role)}: ${String(update.text).trim().slice(0, 40)}`);
@@ -137,7 +191,7 @@ const program = Effect.gen(function* () {
         ),
       );
       yield* Effect.sleep("5 seconds");
-      const replayed = (yield* Ref.get(seen)).length;
+      const replayed = spoken(yield* Ref.get(seen)).length;
       yield* copy.send("What word did the file name? Reply with just that word.");
       yield* Effect.sleep("30 seconds");
       return { id: copy.sessionId, replayed, seen: yield* Ref.get(seen) };
@@ -184,7 +238,7 @@ const program = Effect.gen(function* () {
   console.log(
     `   reopened by id        ${
       reopened.id === forked.id
-        ? `yes, replaying ${String(reopened.seen.length)} updates`
+        ? `yes, replaying ${String(spoken(reopened.seen).length)} updates`
         : `NO — a fresh process got ${reopened.id.slice(0, 8)}… instead`
     }`,
   );
@@ -218,7 +272,7 @@ const program = Effect.gen(function* () {
   );
   console.log("\n4. opened with no id, beside the ones that exist");
   console.log(`   a different session   ${stranger.id !== opened ? "yes" : "NO — it joined it"}`);
-  console.log(`   replayed              ${stranger.seen.length} updates`);
+  console.log(`   replayed              ${spoken(stranger.seen).length} updates`);
 
   rmSync(dir, { recursive: true, force: true });
 
@@ -232,12 +286,14 @@ const program = Effect.gen(function* () {
   console.log(
     `\n  the word    ${heard ? "came back" : "DID NOT come back"}` +
       `\n  tool ids    ${merged.size} for ${String(first.filter((u) => u.kind === "tool").length)} updates` +
-      `\n  replay      ${second.length > 0 ? "yes" : "NOTHING — the session was not found"}\n`,
+      `\n  replay      ${spoken(second).length > 0 ? "yes" : "NOTHING — the session was not found"}\n`,
   );
+  const readingCame = second.some((update) => update.kind === "usage" && update.used === 1234);
   return heard &&
-    second.length > 0 &&
+    readingCame &&
+    spoken(second).length > 0 &&
     stranger.id !== opened &&
-    stranger.seen.length === 0 &&
+    spoken(stranger.seen).length === 0 &&
     forked.id !== opened &&
     remembered &&
     reopened.id === forked.id

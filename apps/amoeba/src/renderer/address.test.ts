@@ -8,6 +8,7 @@ import {
   pathOf,
   placeAt,
   sessionAt,
+  threadLink,
 } from "./address";
 
 // An address is what selection *is* now, so these are the tests that used to be
@@ -240,5 +241,43 @@ describe("placeAt", () => {
     // to hold a conversation in and the pane is the only honest face for it.
     expect(placeAt({ at: "session", name: "someone-elses-shell" }, [], [])).toBeUndefined();
     expect(placeAt(nowhere, [], [])).toBeUndefined();
+  });
+});
+
+describe("a thread address", () => {
+  it("is read back off the route, and written as /t/<id>", () => {
+    expect(addressFrom({ thread: "20260909-9lf3" })).toEqual({
+      at: "thread",
+      id: "20260909-9lf3",
+    });
+    expect(pathOf({ at: "thread", id: "20260909-9lf3" })).toBe("/t/20260909-9lf3");
+  });
+
+  it("resolves to nothing on its own — it is a link, not a place", () => {
+    // A thread holds several checkouts and the agent column needs one session,
+    // so `App` swaps the address for a workspace. Both questions answering
+    // undefined is what stops a thread being drawn as though it were one.
+    const address: Address = { at: "thread", id: "20260909-9lf3" };
+    expect(sessionAt(address, [])).toBeUndefined();
+    expect(placeAt(address, [], [])).toBeUndefined();
+  });
+
+  it("the pasteable form carries the window's own origin", () => {
+    // Composed from the location rather than written down: the renderer is
+    // served by a dev server in development and over `app://` in a build, and
+    // only the window knows which.
+    expect(threadLink("20260909-9lf3", { origin: "app://amoeba", pathname: "/" })).toBe(
+      "app://amoeba/#/t/20260909-9lf3",
+    );
+    expect(threadLink("20260909-9lf3", { origin: "http://127.0.0.1:5273", pathname: "/" })).toBe(
+      "http://127.0.0.1:5273/#/t/20260909-9lf3",
+    );
+  });
+
+  it("with no location at all it is still an address", () => {
+    // This module is the pure half — no router, and no document either — so
+    // it is imported on Node by every test here. A throw would make the
+    // module unusable rather than the link unusable.
+    expect(threadLink("20260909-9lf3", undefined)).toBe("#/t/20260909-9lf3");
   });
 });

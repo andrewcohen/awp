@@ -6,7 +6,8 @@ import { useState } from "react";
 import { Inbox } from "./Inbox";
 import { Sidebar } from "./Sidebar";
 import { rememberLeft, rememberedLeft } from "./remembered";
-import { colors, text } from "./tokens.stylex";
+import { typeset } from "./typeset";
+import { colors } from "./tokens.stylex";
 import type { Facts } from "./useFacts";
 
 // The left column: what is running here, or what is waiting elsewhere.
@@ -71,8 +72,6 @@ const styles = stylex.create({
     borderRadius: "0.25rem",
     color: colors.muted,
     font: "inherit",
-    fontSize: text.small,
-    fontWeight: text.medium,
     cursor: "pointer",
     transitionProperty: "background-color, color",
     transitionDuration: "100ms",
@@ -135,10 +134,16 @@ export function LeftColumn({
       {...stylex.props(styles.column)}
     >
       <Tabs.List {...stylex.props(styles.list)}>
-        <Tabs.Tab value="work" {...stylex.props(styles.tab, open === "work" && styles.on)}>
+        <Tabs.Tab
+          value="work"
+          {...stylex.props(typeset.control, styles.tab, open === "work" && styles.on)}
+        >
           work
         </Tabs.Tab>
-        <Tabs.Tab value="inbox" {...stylex.props(styles.tab, open === "inbox" && styles.on)}>
+        <Tabs.Tab
+          value="inbox"
+          {...stylex.props(typeset.control, styles.tab, open === "inbox" && styles.on)}
+        >
           inbox
         </Tabs.Tab>
       </Tabs.List>

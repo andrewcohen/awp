@@ -27,7 +27,7 @@ import { type Daemon, answer, parseLine } from "./mcp";
 const url = process.env["AWP_DAEMON_URL"] ?? client.DEFAULT_DAEMON_URL;
 
 /**
- * The daemon, as the four calls `mcp.ts` asks for.
+ * The daemon, as the five calls `mcp.ts` asks for.
  *
  * Each maps the rpc's typed refusal onto `{ reason }`, which is all the
  * dispatch wants — it renders a sentence either way, and a tool result has
@@ -39,7 +39,7 @@ const url = process.env["AWP_DAEMON_URL"] ?? client.DEFAULT_DAEMON_URL;
  * Whatever the daemon or the socket said, as one sentence.
  *
  * Two error channels reach here and both have to render. The rpc's own
- * refusals carry `reason` — `NotAWorkspace`, `ReviewFileFailed` — and the
+ * refusals carry `reason` — `NotAWorkspace`, `PageRefused` — and the
  * transport's carry `message`. A tool result has nowhere to put a tag, so what
  * is kept is the prose, which is the interface an agent reads.
  *
@@ -67,6 +67,14 @@ const over = (rpc: client.AwpClientShape): Daemon => ({
       Effect.mapError(refusal),
     ),
   file: (finding) => rpc.ReviewFile(finding).pipe(Effect.mapError(refusal)),
+  browse: (from, address) =>
+    rpc.PageOpen({ from, url: address }).pipe(
+      // The thread comes back rather than being asked for again: the page
+      // belongs to the piece of work and not to this checkout, and the tool's
+      // sentence says so.
+      Effect.map((opened) => ({ thread: opened.thread, url: opened.url })),
+      Effect.mapError(refusal),
+    ),
   board: (filter) => rpc.TaskBoard(filter).pipe(Effect.mapError(refusal)),
 });
 

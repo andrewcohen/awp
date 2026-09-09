@@ -15,6 +15,8 @@ import type {
   Effort,
   Face,
   Inbox,
+  McpStatus,
+  Page,
   PageNote,
   Patch,
   Project,
@@ -737,6 +739,36 @@ export const sendTask = (project: string, workspace: string, task: AgentTask): P
  * reader does not have to know which it is looking at. That is `session/load`
  * doing the work rather than anything here.
  */
+// ── the web panel's page ───────────────────────────────────────────────────
+
+/**
+ * Point the panel at a page, from a directory inside the workspace asking.
+ *
+ * The window has this as well as the address bar, and the reason it goes
+ * through the daemon rather than straight into the panel's own state is the
+ * other subscriber: two windows on one thread, and an agent, are all looking
+ * at the same page, and the daemon is the only place that can tell all of them.
+ */
+export const openPage = (from: string, url: string): Promise<Page> =>
+  runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.PageOpen({ from, url })));
+
+/**
+ * Watch for pages anybody sets, until the returned function is called.
+ *
+ * Subscribed for the window's life rather than by the panel, and that is the
+ * whole of why {@link usePageWatch} exists: Base UI unmounts a hidden tab, so a
+ * subscription owned by the web panel is a subscription that is not there
+ * whenever somebody is looking at the diff — which is most of the time an agent
+ * would have something to show them.
+ *
+ * Nothing is replayed on connect. A navigation is an event, and the daemon
+ * deliberately keeps no table of them to replay — see pages.ts.
+ */
+export const watchPages = (onPage: (page: Page) => void): (() => void) =>
+  subscribe((rpc) =>
+    Stream.runForEach(rpc.PageChanges(), (page) => Effect.sync(() => onPage(page))),
+  );
+
 export const watchChat = (
   project: string,
   workspace: string,
@@ -774,6 +806,29 @@ export const chatSend = (project: string, workspace: string, text: string): Prom
  */
 export const chatFork = (project: string, workspace: string): Promise<string> =>
   runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.ChatFork({ project, workspace })));
+
+/**
+ * Start this workspace's chat again from nothing.
+ *
+ * Resolves to the new session id, which is when the panel should remount: the
+ * daemon has already forgotten the old session and thrown away the adapter
+ * that was holding it. The old conversation is not deleted — it is on disk and
+ * still loadable — it simply is not this workspace's any more.
+ */
+export const chatFresh = (project: string, workspace: string): Promise<string> =>
+  runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.ChatFresh({ project, workspace })));
+
+/**
+ * The MCP server this workspace's conversation is handed.
+ *
+ * A call rather than something on the stream, and one with no failure: it is a
+ * description of what the daemon passes on every open, composed from the same
+ * functions that pass it. A workspace with no conversation open still has an
+ * answer, which is the right one — the question is what the agent will be able
+ * to do.
+ */
+export const mcpStatus = (project: string, workspace: string): Promise<McpStatus> =>
+  runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.McpStatus({ project, workspace })));
 
 /**
  * What the session is running as: the model, the effort, the permission mode.

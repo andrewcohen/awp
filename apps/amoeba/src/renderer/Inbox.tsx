@@ -16,6 +16,7 @@ import * as stylex from "@stylexjs/stylex";
 import { useState } from "react";
 import { said, startReview } from "./daemon";
 import { guide } from "./stacks";
+import { typeset } from "./typeset";
 import { colors, space, text } from "./tokens.stylex";
 import { useInbox } from "./useInbox";
 
@@ -92,8 +93,6 @@ const styles = stylex.create({
   section: {
     padding: `0.5rem ${space.gutter} 0.2rem`,
     color: colors.muted,
-    fontSize: text.small,
-    fontWeight: text.strong,
   },
   empty: { padding: `0.5rem ${space.gutter}`, color: colors.muted, fontSize: text.small },
   trouble: {
@@ -129,8 +128,6 @@ const styles = stylex.create({
   guide: {
     flexShrink: 0,
     color: colors.muted,
-    fontFamily: text.mono,
-    fontSize: text.small,
     whiteSpace: "pre",
     userSelect: "none",
     WebkitUserSelect: "none",
@@ -148,7 +145,7 @@ const styles = stylex.create({
   //
   // Monospace still says what it needs to: this is an address, and somebody
   // will type it somewhere else.
-  number: { flexShrink: 0, color: colors.muted, fontFamily: text.mono, fontSize: text.small },
+  number: { flexShrink: 0, color: colors.muted },
   title: {
     flex: 1,
     minWidth: 0,
@@ -188,7 +185,7 @@ const styles = stylex.create({
   muted: { color: colors.muted },
   // What is happening to this row — see `doing`. Words rather than a spinner,
   // and monospace so a step name changing does not shuffle the row's width.
-  state: { flexShrink: 0, fontFamily: text.mono, fontSize: text.small },
+  state: { flexShrink: 0 },
 });
 
 /**
@@ -564,7 +561,7 @@ export function Inbox({
           }
           return (
             <div key={bucket}>
-              <div {...stylex.props(styles.section)}>
+              <div {...stylex.props(typeset.subhead, styles.section)}>
                 {bucketLabel(bucket)} ({rows.length})
               </div>
               {rows.map((item, index) => {
@@ -588,7 +585,7 @@ export function Inbox({
                           see `guide`. Empty for everything that is not stacked,
                           and for the root of a stack. */}
                       {lines !== "" && (
-                        <span aria-hidden {...stylex.props(styles.guide)}>
+                        <span aria-hidden {...stylex.props(typeset.address, styles.guide)}>
                           {lines}
                         </span>
                       )}
@@ -605,10 +602,13 @@ export function Inbox({
                       >
                         {icon !== undefined && <icon.Icon size={14} weight="bold" aria-hidden />}
                       </span>
-                      <span {...stylex.props(styles.number)}>#{item.number}</span>
+                      <span {...stylex.props(typeset.address, styles.number)}>#{item.number}</span>
                       <span {...stylex.props(styles.title)}>{item.title}</span>
                       {state !== undefined && (
-                        <span title={state.why} {...stylex.props(styles.state, toned(state.tone))}>
+                        <span
+                          title={state.why}
+                          {...stylex.props(typeset.address, styles.state, toned(state.tone))}
+                        >
                           {state.says}
                         </span>
                       )}

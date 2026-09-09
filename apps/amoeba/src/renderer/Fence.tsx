@@ -1,10 +1,11 @@
 import { parsePatchFiles } from "@pierre/diffs";
-import { CodeView, File } from "@pierre/diffs/react";
+import { CodeView } from "@pierre/diffs/react";
 import * as stylex from "@stylexjs/stylex";
 import { type ReactNode, isValidElement, useEffect, useId, useState } from "react";
 import { THEME } from "./highlighting";
 import { useColorScheme } from "./theme";
-import { colors, text } from "./tokens.stylex";
+import { typeset } from "./typeset";
+import { colors } from "./tokens.stylex";
 
 // A fenced block in a message, drawn as the thing it is.
 //
@@ -72,7 +73,7 @@ export const Fence = ({ children }: { readonly children: ReactNode }) => {
   // A fence with no language is not code this can say anything about, and
   // guessing one is how a shell transcript gets highlighted as JavaScript.
   if (language === undefined) {
-    return <pre {...stylex.props(styles.plain)}>{source}</pre>;
+    return <pre {...stylex.props(typeset.address, styles.plain)}>{source}</pre>;
   }
 
   if (PATCH.has(language)) {
@@ -147,20 +148,52 @@ const Patch = ({ source }: { readonly source: string }) => {
   );
 };
 
-/** Code, highlighted by the pool the diff panel already keeps three workers in. */
+/**
+ * Code, highlighted by the pool the diff panel already keeps three workers in.
+ *
+ * ── `File` renders nothing, and `CodeView` renders the same file ──────────
+ *
+ * This was `<File file={…}>`, which is the component the library documents for
+ * exactly this — one file, no diff. It mounts, builds its shadow root, and
+ * draws no rows at all: measured on the style guide's fixture transcript, a
+ * `<pre>` 939px wide and **0px tall**, the shadow root holding nothing but the
+ * icon sprite, and not one console message about it.
+ *
+ *   pre                939 x 0, empty
+ *   diffs-container    <svg data-icon-sprite> and nothing else
+ *   console            []
+ *
+ * `CodeView` with a single `type: "file"` item is the same renderer with a
+ * coordinator in front of it, and it is the path the diff panel drives all day
+ * — so it is the one that is known to work in this window rather than the one
+ * that reads best in the library's README. A fenced block in a message had
+ * therefore been invisible since it was written, and nothing said so: the
+ * message around it rendered, so what a person saw was an agent that had
+ * mentioned code without showing any.
+ *
+ * Found by the style guide's fake transcript, which is what that fixture is
+ * for — the state was otherwise reachable only by waiting for a live agent to
+ * answer with a fenced block.
+ */
 const Code = ({ source, language }: { readonly source: string; readonly language: string }) => {
   const scheme = useColorScheme();
   return (
     <div {...stylex.props(styles.block)}>
-      <File
-        file={{
-          // A name, because that is what the library infers a language from,
-          // and the language as well: a fence says `ts`, and shiki knows that
-          // name where a filename would have to be invented from it.
-          name: `block.${language}`,
-          contents: source,
-          lang: language as never,
-        }}
+      <CodeView
+        items={[
+          {
+            id: "block",
+            type: "file",
+            file: {
+              // A name, because that is what the library infers a language
+              // from, and the language as well: a fence says `ts`, and shiki
+              // knows that name where a filename would have to be invented.
+              name: `block.${language}`,
+              contents: source,
+              lang: language,
+            },
+          },
+        ]}
         options={{
           theme: THEME,
           themeType: scheme,
@@ -170,6 +203,7 @@ const Code = ({ source, language }: { readonly source: string; readonly language
           // diff panel keeps them because a line number there is an address
           // somebody comments on; here nothing points at one.
           disableLineNumbers: true,
+          enableLineSelection: false,
         }}
       />
     </div>
@@ -269,8 +303,10 @@ const Mermaid = ({ source }: { readonly source: string }) => {
   if (failed !== undefined) {
     return (
       <div {...stylex.props(styles.block)}>
-        <p {...stylex.props(styles.broken)}>this diagram did not draw — {failed.split("\n")[0]}</p>
-        <pre {...stylex.props(styles.plain)}>{source}</pre>
+        <p {...stylex.props(typeset.label, styles.broken)}>
+          this diagram did not draw — {failed.split("\n")[0]}
+        </p>
+        <pre {...stylex.props(typeset.address, styles.plain)}>{source}</pre>
       </div>
     );
   }
@@ -279,7 +315,7 @@ const Mermaid = ({ source }: { readonly source: string }) => {
     // Not a spinner: the jobs panel's rule, and a diagram arrives in a frame
     // or two. What this reserves is a line of text saying what is coming, so
     // the transcript does not jump by the diagram's height when it lands.
-    <p {...stylex.props(styles.drawing)}>drawing…</p>
+    <p {...stylex.props(typeset.label, styles.drawing)}>drawing…</p>
   ) : (
     <div
       {...stylex.props(styles.block, styles.diagram)}
@@ -313,8 +349,6 @@ const styles = stylex.create({
   // fence gets — the two disagreeing meant a fence's language decided whether
   // its alignment survived.
   plain: {
-    fontFamily: text.mono,
-    fontSize: text.small,
     color: colors.text,
     backgroundColor: colors.surface,
     borderRadius: "0.3rem",
@@ -324,6 +358,6 @@ const styles = stylex.create({
     whiteSpace: "pre",
     overflowX: "auto",
   },
-  drawing: { fontFamily: text.ui, fontSize: text.small, color: colors.muted },
-  broken: { fontFamily: text.ui, fontSize: text.small, color: colors.muted },
+  drawing: { color: colors.muted },
+  broken: { color: colors.muted },
 });

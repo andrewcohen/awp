@@ -425,6 +425,29 @@ export const groupByThread = (
  * holding a frontend and an api workspace has a pull request for each, and the
  * one to show beside a workspace is that workspace's.
  */
+/**
+ * The thread that claims a checkout, if one does.
+ *
+ * A workspace belongs to at most one thread — a UNIQUE constraint in the store
+ * rather than a rule this code remembers — so this is a find and not a filter.
+ * Archived threads are skipped: the claim survives archiving in the record,
+ * and what every caller here means is the work somebody is doing.
+ */
+export const threadOf = (
+  identity: { readonly project: string; readonly workspace: string } | undefined,
+  threads: ReadonlyArray<Thread>,
+): Thread | undefined =>
+  identity === undefined
+    ? undefined
+    : threads.find(
+        (thread) =>
+          thread.archivedAt === undefined &&
+          thread.members.some(
+            (member) =>
+              member.project === identity.project && member.workspace === identity.workspace,
+          ),
+      );
+
 export const prOf = (
   identity: { readonly project: string; readonly workspace: string } | undefined,
   threads: ReadonlyArray<Thread>,
@@ -432,13 +455,7 @@ export const prOf = (
   if (identity === undefined) {
     return undefined;
   }
-  const holding = threads.find(
-    (thread) =>
-      thread.archivedAt === undefined &&
-      thread.members.some(
-        (member) => member.project === identity.project && member.workspace === identity.workspace,
-      ),
-  );
+  const holding = threadOf(identity, threads);
   const mine = holding?.prs.filter((pr) => pr.project === identity.project) ?? [];
   return mine[0] ?? holding?.prs[0];
 };

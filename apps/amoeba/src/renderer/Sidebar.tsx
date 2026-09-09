@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { ArchiveThread } from "./ArchiveThread";
 import { type Facts, factsKey } from "./useFacts";
 import { rememberLooseOpen, rememberedLooseOpen } from "./remembered";
+import { typeset } from "./typeset";
 import { colors, space, text } from "./tokens.stylex";
 import {
   PRIMARY,
@@ -161,8 +162,6 @@ const styles = stylex.create({
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
     color: colors.text,
-    fontSize: text.small,
-    fontWeight: text.strong,
     letterSpacing: "0.03em",
   },
   loose: { color: colors.muted, fontWeight: text.medium, letterSpacing: "normal" },
@@ -295,11 +294,9 @@ const styles = stylex.create({
     backgroundColor: "transparent",
     color: colors.text,
     font: "inherit",
-    fontSize: text.lead,
     // The one weight change that does most of the work. A name and the caption
     // under it were the same size and the same weight, so the only thing
     // separating them was a colour that was itself failing contrast.
-    fontWeight: text.medium,
     textAlign: "left",
     cursor: "pointer",
   },
@@ -608,7 +605,7 @@ function Row({
               onOpen(pair.project, pair.workspace);
             }
           }}
-          {...stylex.props(styles.title, shut && styles.titleShut)}
+          {...stylex.props(typeset.heading, styles.title, shut && styles.titleShut)}
         >
           <Dot live={live} status={facts?.status} unread={facts?.unread === true} />
           <span {...stylex.props(styles.label)}>{shown}</span>
@@ -814,7 +811,7 @@ function Group({
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
       >
-        <span {...stylex.props(styles.threadName)}>{group.title}</span>
+        <span {...stylex.props(typeset.subhead, styles.threadName)}>{group.title}</span>
         {more}
       </div>
     ) : (
@@ -835,7 +832,9 @@ function Group({
           <span aria-hidden {...stylex.props(styles.caret)}>
             {folded ? "▸" : "▾"}
           </span>
-          <span {...stylex.props(styles.threadName, styles.loose)}>{group.title}</span>
+          <span {...stylex.props(typeset.subhead, styles.threadName, styles.loose)}>
+            {group.title}
+          </span>
           <span {...stylex.props(styles.count)}>{group.workspaces.length}</span>
         </button>
         {more}

@@ -135,6 +135,20 @@ console.log(
   `  awp_thread    ${thread.failed ? "REFUSED " : ""}${thread.text.replaceAll("\n", "\n                ")}`,
 );
 
+// ── the browse tool, and why the probe refuses to use it properly ─────────
+//
+// `awp_browse` moves the web panel of *this* thread, which is the panel
+// somebody has open beside this work. So the probe drives the half that proves
+// the wire without touching it: a url the daemon must refuse. That still
+// crosses every hop — the tool, the rpc, the daemon's rule — and the refusal
+// carries the daemon's own sentence, which is the interface a model reads.
+//
+// The same shape as `probe:workspace` guarding on `ours()` rather than
+// refusing outright: a guard on the property that matters is stronger than a
+// blanket refusal, and it is what keeps the check runnable at all.
+const browsed = await tool("awp_browse", { url: "effect schema v4" });
+console.log(`  awp_browse    ${browsed.failed ? "refused: " : "NOT REFUSED — "}${browsed.text}`);
+
 // ── the task board, which is the reason the store exists ───────────────────
 //
 // Read against the real daemon, because the one thing a test cannot say is

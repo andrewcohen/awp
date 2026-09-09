@@ -1194,3 +1194,100 @@ So:
 
 Related: #112 (the same 306MB lesson, one package earlier), #40 (the bootstrap
 hook that runs `bun install`), #103 (what a workspace starts on its own).
+
+## 125. cmd+click a thread to open it in a second window
+
+Asked for directly: cmd+click on a row in the sidebar should open that thread
+in a new window rather than moving the selection in this one.
+
+cmd+click is the platform's own "open elsewhere", so nothing has to be
+explained — and the shape it wants already exists. Selection is an **address**
+(`/w/$project/$workspace/$kind`, see `address.ts`), the renderer is served over
+`app://` in a build and from the dev server in development, and a window is a
+`BrowserWindow` the main process makes. So a second window is the same renderer
+opened at a different hash, and the daemon is already a separate process that
+outlives any of them — which is the reason this is cheap here and would not
+have been in a design where the window owned the sessions.
+
+Three things to decide, and two of them are traps:
+
+the pane a session takes its size from whoever is looking at it, and two
+windows attached to one session is two clients with two
+viewports. AGENTS.md records what that costs — a terminal
+reflowing under somebody as a probe ran. Whether the second
+window attaches, or opens on the chat face, is the first
+question and it is not a detail
+localStorage every window preference is keyed globally today: the columns,
+the appearance, the panel per thread. Two windows sharing one
+origin share all of it, and the mirror of the address
+(`amoeba.place`, read once at launch) is written by whichever
+window moved last
+the count nothing tracks windows. `overlays.ts` counts modals per window
+and the web panel's native view belongs to a window id, so a
+second window is a second set of both
+
+Smallest honest first step: cmd+click sends the address to the main process,
+which opens a `BrowserWindow` at that hash and does not attach the pane —
+opening on the chat face, which needs no pty and no size. The terminal in a
+second window is a separate decision with a measurement attached to it.
+
+## 126. The chat has to show a running shell
+
+Asked for directly: "acp chat needs to show running shells". A long command in
+the chat face is a tool call that sits at `in_progress` with its output arriving
+only when it ends — so a `bun install`, a test run or a dev server started from
+the chat is a row that says nothing for minutes and then says everything at
+once. The terminal beside it has the opposite problem and none of this one: it
+shows every line as it lands and cannot be asked what it is doing.
+
+What is known, before deciding anything:
+
+- **A tool call is already a patch stream.** `tool_call` then several
+  `tool_call_update` sharing one id, merged by `fold` — so partial output has a
+  place to go without a new update kind, if the adapter sends it.
+- **Whether it does is the question to measure first.** `probe:chat` runs a
+  real adapter against a temp directory and prints every update for a turn;
+  the check is a command that writes slowly (`for i in 1 2 3; do echo $i;
+sleep 2; done`) and whether `output` grows across updates or arrives once at
+  `completed`. Do not design against a guess here — the last two things
+  believed about this wire were both wrong, in opposite directions.
+- **#119 is the neighbouring task, not the same one.** That one is about awp
+  owning the terminals a _terminal_ agent spawns, so a long command is
+  watchable and killable. This is the chat's own rendering, and the killing
+  half may well end up shared with it.
+
+The shape that follows if output does stream: the row keeps its disclosure and
+opens itself while `in_progress` — a live command is the one output somebody
+wants without asking, which is the same argument that opens a failed call's
+output today. If it does not stream, this becomes a question about the adapter
+rather than about the panel, and the honest interim is to say `running` with
+the elapsed time, which the row already does past ten seconds.
+
+## 127. A window chord pressed inside the web panel reaches nothing
+
+The web panel is a real `WebContentsView` — a separate `webContents` — so while
+somebody is reading a page in it, the keyboard belongs to _that_ process. Every
+window-level chord is therefore inert there: cmd+P, cmd+N, cmd+shift+N, and the
+column chords. Nothing about it reads as a shortcut problem from the panel's
+side; the keys simply do nothing, which is what a broken binding looks like.
+
+Measured, and worth knowing before designing: cmd+P from inside the **pane**
+does work — the emulator installs its keydown on its own container in the
+bubble phase, and the window's listener is capture-at-window, so it is decided
+first. The panel is a different failure with the same symptom, one process over.
+
+The shape that fits what is already here: `before-input-event` on each guest
+view in the main process, and for a chord the window owns, focus the window's
+own webContents and replay the key into it with `sendInputEvent`. That needs no
+new renderer code at all — the existing capture listener would see it — and
+`sendInputEvent`'s synthesised `code` is the thing to verify first, because
+this window's shortcuts are matched on `event.code` and not `event.key`.
+
+The alternative is a dedicated channel and an action the renderer performs, and
+it is worse for the reason `awp_browse` is worse than a second RPC would be:
+every chord would then have to be listed twice, once as a key and once as a
+message.
+
+Related: the annotator's note box needed `CH.focus` for the mirror image of
+this — a control the _renderer_ draws because of a click that happened in the
+page.

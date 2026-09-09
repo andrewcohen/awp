@@ -7,11 +7,14 @@ import { XIcon } from "@phosphor-icons/react/X";
 import { GitBranchIcon } from "@phosphor-icons/react/GitBranch";
 import * as stylex from "@stylexjs/stylex";
 import { useEffect, useState } from "react";
+import { FOLD_MS } from "./columns";
 import { startThread, threadBases } from "./daemon";
 import { ImportProject } from "./ImportProject";
 import { Chip } from "./Chip";
+import { growth, useGrow } from "./grow";
 import { useOverlay } from "./overlays";
 import { type Face, rememberFaceDefault, rememberedFaceDefault } from "./remembered";
+import { typeset } from "./typeset";
 import { colors, text } from "./tokens.stylex";
 
 // Starting a thread: a composer, not a form.
@@ -138,8 +141,6 @@ const styles = stylex.create({
     //
     // Every portal in this window needs this line. There are three — this, the
     // chip menu below, and MoveToThread's.
-    fontFamily: text.ui,
-    fontSize: text.body,
     boxShadow: "0 1rem 3rem rgba(0, 0, 0, 0.35)",
     // No padding of its own. Each band pads itself, so the rules between them
     // run the full width — a rule stopping short of the edge reads as a
@@ -191,14 +192,12 @@ const styles = stylex.create({
   },
   /** The row of other repositories, quieter than the bar above it. */
   barAlso: { paddingTop: 0, flexWrap: "wrap", rowGap: "0.3rem" },
-  alsoSaid: { fontFamily: text.ui, fontSize: text.small, color: colors.muted },
+  alsoSaid: { color: colors.muted },
   /** A chosen repository, and the control that removes it. */
   pill: {
     display: "flex",
     alignItems: "center",
     gap: "0.25rem",
-    fontFamily: text.mono,
-    fontSize: text.small,
     padding: "0.1rem 0.35rem",
     borderStyle: "solid",
     borderWidth: 1,
@@ -223,11 +222,17 @@ const styles = stylex.create({
     gap: "0.6rem",
     padding: "0.8rem",
   },
+  // ── one line, growing with what is in it ────────────────────────────────
+  //
+  // It was two rows over a 5rem floor, which is three lines of nothing under
+  // every empty form — and still three when somebody pastes twelve. The
+  // height follows the value instead, from `grow.ts`, which is the same box
+  // the chat composer is. `overflowY: auto` so the cap is an honest end to
+  // "grows as you fill it" rather than a place text disappears.
   brief: {
     flex: 1,
     minWidth: 0,
-    minHeight: "5rem",
-    maxHeight: "18rem",
+    overflowY: "auto",
     padding: "0.25rem",
     backgroundColor: "transparent",
     // Borderless on purpose: the popup's own edge is the box. A border here
@@ -286,8 +291,6 @@ const styles = stylex.create({
     // a person will type at jj afterwards. The model and effort menus share the
     // component and get it too, which is the cost of one component for four
     // chips and is a smaller cost than four components.
-    fontFamily: text.mono,
-    fontSize: text.small,
     boxShadow: "0 0.5rem 1.5rem rgba(0, 0, 0, 0.3)",
   },
   item: {
@@ -365,6 +368,10 @@ function Composer({
     projects.some((p) => p.name === request.project) ? (request.project ?? first) : first,
   );
   const [typed, setTyped] = useState("");
+  // One line at rest, measured rather than assumed — this box is `text.lead`
+  // with padding of its own, so what one line is belongs to the element. See
+  // grow.ts, where a constant floor clipped exactly this textarea.
+  const hold = useGrow(typed);
   // A revset: `trunk()`, or a bookmark name the daemon offered.
   const [base, setBase] = useState(TRUNK);
   const [bases, setBases] = useState<ReadonlyArray<ThreadBase>>([]);
@@ -585,12 +592,12 @@ function Composer({
           sixteen is a control nobody reads. */}
       {(extras.length > 0 || spare.length > 0) && (
         <div {...stylex.props(styles.bar, styles.barAlso)}>
-          <span {...stylex.props(styles.alsoSaid)}>also in</span>
+          <span {...stylex.props(typeset.label, styles.alsoSaid)}>also in</span>
           {extras.map((name) => (
             <button
               key={name}
               type="button"
-              {...stylex.props(styles.pill)}
+              {...stylex.props(typeset.address, styles.pill)}
               title={`${name} — starts from its own main line, because this thread's bookmark is in ${project}`}
               aria-label={`remove ${name}`}
               disabled={busy}
@@ -634,10 +641,13 @@ function Composer({
           // Focus on mount, which is the moment the modal opened. A callback
           // ref rather than `autoFocus`, which react-doctor flags because the
           // attribute fires on any render the element mounts in.
-          ref={(node) => node?.focus()}
+          ref={(node) => {
+            hold(node);
+            node?.focus();
+          }}
           value={typed}
           disabled={busy}
-          rows={2}
+          rows={1}
           placeholder="what are you working on?"
           onChange={(event) => setTyped(event.target.value)}
           onKeyDown={(event) => {
@@ -650,7 +660,7 @@ function Composer({
               submit();
             }
           }}
-          {...stylex.props(styles.brief)}
+          {...stylex.props(styles.brief, growth.eased(FOLD_MS))}
         />
         <button
           type="button"
@@ -774,7 +784,7 @@ export function NewThread({
     >
       <Dialog.Portal>
         <Dialog.Backdrop {...stylex.props(styles.backdrop)} />
-        <Dialog.Popup {...stylex.props(styles.popup)}>
+        <Dialog.Popup {...stylex.props(typeset.prose, styles.popup)}>
           <Dialog.Title {...stylex.props(styles.hidden)}>new thread</Dialog.Title>
           <Composer
             request={request}

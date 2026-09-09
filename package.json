@@ -26,7 +26,7 @@
     "fmt": "oxfmt .",
     "fmt:check": "oxfmt --check .",
     "lint": "oxlint",
-    "typecheck": "tsc --build",
+    "typecheck": "tsc --build --force",
     "test": "vitest run",
     "test:watch": "vitest",
     "doctor": "react-doctor --no-supply-chain",

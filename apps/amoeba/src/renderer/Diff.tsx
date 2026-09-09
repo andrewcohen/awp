@@ -35,6 +35,7 @@ import {
 } from "./remembered";
 import { useReview } from "./review";
 import type { ColorScheme } from "@awp-kit/pane";
+import { typeset } from "./typeset";
 import { colors, text } from "./tokens.stylex";
 
 // What the workspace on screen has changed, and what a person has to say about
@@ -345,8 +346,6 @@ const styles = stylex.create({
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
     color: colors.accent,
-    fontFamily: text.mono,
-    fontSize: text.small,
   },
 
   // ── the boundary between the two ─────────────────────────────────────────
@@ -1427,7 +1426,7 @@ export function Diff({
                   rows still line up on the change id when most of them carry
                   no bookmark at all — which is the ordinary case. */}
               {one.bookmarks.map((name) => (
-                <span key={name} title={name} {...stylex.props(styles.bookmark)}>
+                <span key={name} title={name} {...stylex.props(typeset.address, styles.bookmark)}>
                   {name}
                 </span>
               ))}

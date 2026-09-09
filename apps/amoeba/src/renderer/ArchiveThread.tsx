@@ -3,7 +3,9 @@ import { Menu } from "@base-ui/react/menu";
 import type { Thread } from "@awp-kit/protocol";
 import * as stylex from "@stylexjs/stylex";
 import { useState } from "react";
+import { threadLink } from "./address";
 import { archiveThread, said } from "./daemon";
+import { typeset } from "./typeset";
 import { colors, text } from "./tokens.stylex";
 
 // Putting a thread away, and taking its checkouts back with it.
@@ -58,7 +60,6 @@ const styles = stylex.create({
   positioner: { zIndex: 20 },
   menu: {
     // Portalled, so the family is stated rather than inherited.
-    fontFamily: text.ui,
     minWidth: "10rem",
     padding: "0.25rem",
     backgroundColor: colors.surface,
@@ -67,7 +68,6 @@ const styles = stylex.create({
     borderColor: colors.border,
     borderRadius: "0.35rem",
     color: colors.text,
-    fontSize: text.small,
     boxShadow: "0 0.5rem 1.5rem rgba(0, 0, 0, 0.35)",
   },
   item: {
@@ -102,11 +102,9 @@ const styles = stylex.create({
     borderColor: colors.border,
     borderRadius: "0.5rem",
     color: colors.text,
-    fontFamily: text.ui,
-    fontSize: text.body,
     boxShadow: "0 1rem 3rem rgba(0, 0, 0, 0.45)",
   },
-  title: { margin: 0, fontSize: text.lead, fontWeight: 600 },
+  title: { margin: 0 },
   said: { margin: 0, color: colors.muted, fontSize: text.small },
   /** What is going, by name. Addresses, so the mono face. */
   list: {
@@ -115,8 +113,6 @@ const styles = stylex.create({
     gap: "0.15rem",
     maxHeight: "10rem",
     overflowY: "auto",
-    fontFamily: text.mono,
-    fontSize: text.small,
   },
   keep: { color: colors.muted },
   choice: {
@@ -137,8 +133,6 @@ const styles = stylex.create({
     borderColor: colors.border,
     borderRadius: "0.3rem",
     color: colors.text,
-    fontFamily: text.ui,
-    fontSize: text.small,
     cursor: "pointer",
   },
   danger: { backgroundColor: colors.warn, borderColor: colors.warn, color: colors.base },
@@ -177,11 +171,27 @@ export function ArchiveThread({
       .finally(() => setBusy(false));
   };
 
+  /**
+   * Whether the last copy landed, or nothing has been pressed.
+   *
+   * Three states rather than a boolean: `undefined` is the resting label, and
+   * a refusal has to be able to say so — see the note on the item.
+   */
+  const [copied, setCopied] = useState<boolean | undefined>(undefined);
+
   const title = thread.title === "" ? "this thread" : thread.title;
 
   return (
     <>
-      <Menu.Root>
+      <Menu.Root
+        onOpenChange={(open) => {
+          if (open) {
+            // A menu reopened an hour later saying `copied` would be
+            // reporting a press nobody remembers making.
+            setCopied(undefined);
+          }
+        }}
+      >
         <Menu.Trigger
           aria-label={`more for ${title}`}
           title="more"
@@ -191,10 +201,40 @@ export function ArchiveThread({
         </Menu.Trigger>
         <Menu.Portal>
           <Menu.Positioner sideOffset={4} align="end" {...stylex.props(styles.positioner)}>
-            <Menu.Popup {...stylex.props(styles.menu)}>
+            <Menu.Popup {...stylex.props(typeset.label, styles.menu)}>
               {/* The ellipsis says there is more; the item's own ellipsis says
                   it will ask first, which is the convention everywhere else a
                   menu opens a dialog. */}
+              {/* ── the link is to the THREAD, not to a checkout ──────────
+
+                  A thread survives its checkouts being renamed, added and
+                  removed, so a link naming one of them goes stale the first
+                  time somebody reorganises the work. `/t/<id>` resolves to
+                  whichever checkout the thread holds first — see the `thread`
+                  variant in address.ts.
+
+                  `closeOnClick={false}`, and that is the whole of the
+                  feedback: the clipboard can be refused — a renderer served
+                  over a custom protocol is not always a secure context — and
+                  a menu that closed on a copy that did not happen would be a
+                  control that silently did nothing. So the item stays and
+                  says which it was. */}
+              <Menu.Item
+                closeOnClick={false}
+                onClick={() => {
+                  navigator.clipboard
+                    ?.writeText(threadLink(thread.id))
+                    .then(() => setCopied(true))
+                    .catch(() => setCopied(false));
+                }}
+                {...stylex.props(styles.item)}
+              >
+                {copied === undefined
+                  ? "copy link"
+                  : copied
+                    ? "copied"
+                    : "the clipboard was refused"}
+              </Menu.Item>
               <Menu.Item
                 onClick={() => {
                   setBookmarks(false);
@@ -213,8 +253,10 @@ export function ArchiveThread({
       <AlertDialog.Root open={asking} onOpenChange={setAsking}>
         <AlertDialog.Portal>
           <AlertDialog.Backdrop {...stylex.props(styles.backdrop)} />
-          <AlertDialog.Popup {...stylex.props(styles.popup)}>
-            <AlertDialog.Title {...stylex.props(styles.title)}>Archive {title}?</AlertDialog.Title>
+          <AlertDialog.Popup {...stylex.props(typeset.prose, styles.popup)}>
+            <AlertDialog.Title {...stylex.props(typeset.heading, styles.title)}>
+              Archive {title}?
+            </AlertDialog.Title>
 
             <AlertDialog.Description {...stylex.props(styles.said)}>
               {thread.members.length === 0
@@ -223,7 +265,7 @@ export function ArchiveThread({
             </AlertDialog.Description>
 
             {thread.members.length > 0 && (
-              <div {...stylex.props(styles.list)}>
+              <div {...stylex.props(typeset.address, styles.list)}>
                 {thread.members.map((member) => (
                   <span key={`${member.project}/${member.workspace}`}>
                     {member.project}/{member.workspace}
@@ -257,12 +299,14 @@ export function ArchiveThread({
             {failure !== undefined && <div {...stylex.props(styles.failure)}>{failure}</div>}
 
             <div {...stylex.props(styles.buttons)}>
-              <AlertDialog.Close {...stylex.props(styles.button)}>cancel</AlertDialog.Close>
+              <AlertDialog.Close {...stylex.props(typeset.label, styles.button)}>
+                cancel
+              </AlertDialog.Close>
               <button
                 type="button"
                 disabled={busy}
                 onClick={go}
-                {...stylex.props(styles.button, styles.danger)}
+                {...stylex.props(typeset.label, styles.button, styles.danger)}
               >
                 {busy ? "archiving…" : "archive"}
               </button>

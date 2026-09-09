@@ -10,7 +10,8 @@ import { Web } from "./Web";
 import { debugTools } from "./debug";
 import type { ColorScheme } from "@awp-kit/pane";
 import { rememberPanel, rememberedPanels } from "./remembered";
-import { colors, space, text } from "./tokens.stylex";
+import { typeset } from "./typeset";
+import { colors, space } from "./tokens.stylex";
 
 // The accessory column: a set of panels, one at a time.
 //
@@ -94,10 +95,47 @@ export interface PanelContext {
   readonly scheme: ColorScheme;
 }
 
+/**
+ * What one panel is handed: the column's context, plus whether it is the panel
+ * on screen.
+ *
+ * `shown` is not on {@link PanelContext} because the column's caller has no
+ * per-panel answer to give — it is computed here, against the selected tab.
+ * Only a `keepMounted` panel ever sees `false`; every other panel is unmounted
+ * when it is not selected, which is the point of that default.
+ */
+export type PanelView = PanelContext & { readonly shown: boolean };
+
 interface Panel {
   readonly id: string;
   readonly label: string;
-  readonly render: (context: PanelContext) => ReactNode;
+  readonly render: (view: PanelView) => ReactNode;
+  /**
+   * Stay in the tree when another panel is selected.
+   *
+   * ── unmounting is the wrong way to hide a native overlay ──────────────
+   *
+   * Everything else here wants the default: a hidden panel is unmounted, its
+   * state goes, and the diff leans on that to re-read the patch on the way
+   * back. The web panel is a `WebContentsView` the *main process* draws over
+   * this window, and the only thing that had been taking it down was this
+   * component's cleanup — so hiding a native overlay depended on React
+   * choosing to unmount, and anything that stopped it unmounting left a page
+   * drawn over the column with nothing able to reach it.
+   *
+   * That is not hypothetical: a hot reload that failed to apply left the tree
+   * stale, the panel never unmounted, and the page sat over the accessory
+   * column through every tab switch. Electrobun had only teardown to offer —
+   * the old `toggleHidden` was its whole vocabulary — and Electron has
+   * `setVisible`, so the view now lives for as long as the column does and is
+   * shown or hidden by a fact rather than by a lifecycle.
+   *
+   * Two other things fall out of it, both improvements: switching tabs no
+   * longer reloads the page — a login, a scroll position and a half-filled
+   * form all survive — and the create/destroy round trip per switch is gone,
+   * which was where the orphan hazard lived.
+   */
+  readonly keepMounted?: boolean;
 }
 
 const panels: ReadonlyArray<Panel> = [
@@ -122,8 +160,9 @@ const panels: ReadonlyArray<Panel> = [
   {
     id: "web",
     label: "web",
-    render: ({ project, workspace, thread }) => (
-      <Web project={project} workspace={workspace} thread={thread} />
+    keepMounted: true,
+    render: ({ project, workspace, thread, shown }) => (
+      <Web project={project} workspace={workspace} thread={thread} shown={shown} />
     ),
   },
   { id: "jobs", label: "jobs", render: () => <Jobs /> },
@@ -201,8 +240,6 @@ const styles = stylex.create({
     borderRadius: "0.25rem",
     color: colors.muted,
     font: "inherit",
-    fontSize: text.small,
-    fontWeight: text.medium,
     cursor: "pointer",
     // A tab that does nothing on hover reads as a label. The window is full of
     // words; the ones that respond to a pointer have to say so before it
@@ -231,6 +268,15 @@ const styles = stylex.create({
   },
   // The panel scrolls, not the column and certainly not the window.
   panel: { flex: 1, minHeight: 0, overflowY: "auto" },
+  /**
+   * A `keepMounted` panel that is not the one selected.
+   *
+   * Base UI marks it `hidden`, and the UA rule for that attribute would do the
+   * job — but a class setting `display` would silently outrank it, and this
+   * repo has been caught before trusting a mechanism read out of somebody
+   * else's source. Said here, where it cannot be lost.
+   */
+  tucked: { display: "none" },
 });
 
 export function Accessory({ onFold, ...context }: PanelContext & { readonly onFold: () => void }) {
@@ -294,7 +340,7 @@ export function Accessory({ onFold, ...context }: PanelContext & { readonly onFo
           <Tabs.Tab
             key={panel.id}
             value={panel.id}
-            {...stylex.props(styles.tab, panel.id === open && styles.tabOn)}
+            {...stylex.props(typeset.control, styles.tab, panel.id === open && styles.tabOn)}
           >
             {panel.label}
           </Tabs.Tab>
@@ -333,8 +379,13 @@ export function Accessory({ onFold, ...context }: PanelContext & { readonly onFo
       </Tabs.List>
 
       {shown.map((panel) => (
-        <Tabs.Panel key={panel.id} value={panel.id} {...stylex.props(styles.panel)}>
-          {panel.render(context)}
+        <Tabs.Panel
+          key={panel.id}
+          value={panel.id}
+          keepMounted={panel.keepMounted ?? false}
+          {...stylex.props(styles.panel, panel.id !== open && styles.tucked)}
+        >
+          {panel.render({ ...context, shown: panel.id === open })}
         </Tabs.Panel>
       ))}
     </Tabs.Root>

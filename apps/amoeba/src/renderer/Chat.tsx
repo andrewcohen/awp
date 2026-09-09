@@ -1,7 +1,9 @@
 import type { ChatConfigOption } from "@awp-kit/protocol";
 import * as stylex from "@stylexjs/stylex";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Chip } from "./Chip";
+import { type Command, agentCommands, commandOf } from "./commands";
+import { Composer } from "./Composer";
+import { Mcp } from "./Mcp";
 import {
   type Asked,
   type Conversation,
@@ -9,16 +11,27 @@ import {
   type Ran,
   type Said,
   fold,
+  grouped,
   mine,
   nothing,
   stalled,
+  toolTitle,
   took,
   verb,
   waiting,
 } from "./conversation";
 import { Markdown } from "./Markdown";
-import { chatAnswer, chatConfig, chatFork, chatSend, chatSet, watchChat } from "./daemon";
+import {
+  chatAnswer,
+  chatConfig,
+  chatFork,
+  chatFresh,
+  chatSend,
+  chatSet,
+  watchChat,
+} from "./daemon";
 import { type Spot, spotIn, withQuote } from "./quote";
+import { typeset } from "./typeset";
 import { colors, text } from "./tokens.stylex";
 
 // The agent as a conversation rather than as a picture of one.
@@ -54,9 +67,19 @@ const mark = (status: string): string =>
 export const Chat = ({
   project,
   workspace,
+  focus,
 }: {
   readonly project: string;
   readonly workspace: string;
+  /**
+   * Changes when the window has moved somewhere on purpose, which is when the
+   * caret belongs in the box.
+   *
+   * There was no focus call here at all: every arrival at a chat needed a
+   * click in the composer before a key did anything, which for the one face
+   * that is nothing *but* typing is the whole of using it.
+   */
+  readonly focus?: string | undefined;
 }) => {
   const [again, setAgain] = useState(0);
   const [forking, setForking] = useState(false);
@@ -72,8 +95,33 @@ export const Chat = ({
       .finally(() => setForking(false));
   }, [project, workspace]);
 
+  /**
+   * `/new`: this workspace's chat starts again from nothing.
+   *
+   * The same remount as the fork, and for the same reason — everything the
+   * panel holds is about a conversation that no longer applies, and a key is
+   * the whole of saying so. Nothing is deleted: the daemon forgets which
+   * session this workspace continues, and the transcript stays on disk.
+   */
+  const fresh = useCallback(() => {
+    void chatFresh(project, workspace)
+      .then(() => setAgain((was) => was + 1))
+      .catch(() => {
+        // Same channel as every other chat failure: the stream the panel is
+        // already reading.
+      });
+  }, [project, workspace]);
+
   return (
-    <Panel key={again} project={project} workspace={workspace} onFork={fork} forking={forking} />
+    <Panel
+      key={again}
+      project={project}
+      workspace={workspace}
+      onFork={fork}
+      forking={forking}
+      onFresh={fresh}
+      focus={focus}
+    />
   );
 };
 
@@ -82,11 +130,17 @@ const Panel = ({
   workspace,
   onFork,
   forking,
+  onFresh,
+  focus,
 }: {
   readonly project: string;
   readonly workspace: string;
   readonly onFork: () => void;
   readonly forking: boolean;
+  /** `/new` — handled above this component, which is replaced by it. */
+  readonly onFresh: () => void;
+  /** See the note on `Chat`. */
+  readonly focus?: string | undefined;
 }) => {
   const [held, setHeld] = useState<Conversation>(nothing);
   const items = held.items;
@@ -112,6 +166,28 @@ const Panel = ({
   const [spot, setSpot] = useState<Spot | undefined>(undefined);
   /** How many messages this window has sent, so each can be named. */
   const sent = useRef(0);
+  /** `/mcp` — a modal, which is why it is state and not a navigation. */
+  const [asking, setAsking] = useState(false);
+
+  /**
+   * Run one of the window's own commands.
+   *
+   * The box is cleared first in both cases. A command is not a message and
+   * leaving it in the box would read as one that failed to send — and `/new`
+   * replaces this component, so anything set after the call is set on a
+   * component that is about to go.
+   */
+  const run = useCallback(
+    (command: Command) => {
+      setDraft("");
+      if (command.name === "/mcp") {
+        setAsking(true);
+        return;
+      }
+      onFresh();
+    },
+    [onFresh],
+  );
 
   useEffect(
     () =>
@@ -215,9 +291,33 @@ const Panel = ({
     box.current?.focus();
   }, []);
 
+  // The caret, on arrival. The composer is mounted by then — the effect runs
+  // after the first paint — and a face whose whole purpose is typing should
+  // not need a click before a key does anything.
+  useEffect(() => {
+    // The value is read rather than merely watched: nobody having asked means
+    // nobody's focus should move, which is what makes this safe to leave on a
+    // component a fixture also renders.
+    if (focus === undefined) {
+      return;
+    }
+    box.current?.focus();
+  }, [focus]);
+
   const say = useCallback(() => {
     const words = draft.trim();
     if (words === "") {
+      return;
+    }
+    // ── the window's commands are intercepted, and narrowly ──────────────
+    //
+    // Exact match on the whole draft: `/new` is a command and `/tmp/build.log
+    // is missing` is a message about a path. Sent as text these would reach
+    // the agent as a sentence *about* a command, and the agent would answer
+    // it — which is the failure this catch prevents. See commands.ts.
+    const command = commandOf(words);
+    if (command !== undefined) {
+      run(command);
       return;
     }
     setDraft("");
@@ -250,7 +350,7 @@ const Panel = ({
       .catch(() => {
         // The stream is where a conversation that cannot be had says so.
       });
-  }, [draft, held.running, project, workspace]);
+  }, [draft, held.running, project, workspace, run]);
 
   return (
     <div {...stylex.props(styles.chat)} data-column-part="chat">
@@ -265,11 +365,11 @@ const Panel = ({
           // screen; the bar would carry it on every conversation, including
           // the ones it would overwrite.
           <div {...stylex.props(styles.empty)}>
-            <p {...stylex.props(styles.nothing)}>nothing said yet</p>
+            <p {...stylex.props(typeset.label, styles.nothing)}>nothing said yet</p>
             <button
               type="button"
               data-nav-item
-              {...stylex.props(styles.option)}
+              {...stylex.props(typeset.label, styles.option)}
               title="copy the conversation the terminal is having and continue it here — the terminal's own is left alone"
               disabled={forking}
               onClick={onFork}
@@ -278,9 +378,7 @@ const Panel = ({
             </button>
           </div>
         ) : (
-          items.map((item) => (
-            <Row key={item.key} item={item} project={project} workspace={workspace} />
-          ))
+          <Transcript items={items} project={project} workspace={workspace} />
         )}
 
         {/* A word, not a spinner. The jobs panel's rule holds here for the same
@@ -291,7 +389,7 @@ const Panel = ({
             also what an agent that answered with nothing looks like. */}
         {held.running > 0 && <p {...stylex.props(styles.working)}>working…</p>}
         {held.stopped !== undefined && (
-          <p {...stylex.props(styles.stopped)}>the turn ended: {held.stopped}</p>
+          <p {...stylex.props(typeset.label, styles.stopped)}>the turn ended: {held.stopped}</p>
         )}
         <div ref={bottom} />
       </div>
@@ -301,117 +399,47 @@ const Panel = ({
           about — which is the thing a selection cannot survive. */}
       {spot !== undefined && <Quote spot={spot} onQuote={quote} />}
 
-      <div {...stylex.props(styles.composer)}>
-        <div {...stylex.props(styles.box)}>
-          <textarea
-            ref={box}
-            {...stylex.props(styles.input)}
-            value={draft}
-            rows={2}
-            placeholder="say something"
-            onChange={(event) => setDraft(event.target.value)}
-            onKeyDown={(event) => {
-              // The same rule the pane has: Return sends, shift+Return is a
-              // newline. A composer where Return inserts a line is one where
-              // every message needs a second gesture to leave.
-              if (event.key === "Enter" && !event.shiftKey) {
-                event.preventDefault();
-                say();
-              }
-            }}
-          />
-          <div {...stylex.props(styles.under)}>
-            <span {...stylex.props(styles.hint)}>
-              {draft.includes("\n") ? "shift+return for a new line" : ""}
-            </span>
-            <button
-              type="button"
-              data-nav-item
-              {...stylex.props(styles.send, draft.trim() === "" && styles.shut)}
-              onClick={say}
-              disabled={draft.trim() === ""}
-            >
-              send
-            </button>
-          </div>
-        </div>
+      {/* `/mcp`. A dialog rather than a panel in the accessory strip: it is a
+          question asked once, about this conversation, and the answer is read
+          and dismissed. It also announces itself as an overlay, which is what
+          stops the web panel's native view being drawn over the top of it. */}
+      {asking && <Mcp project={project} workspace={workspace} onClose={() => setAsking(false)} />}
 
-        {/* ── what this session is running as ──────────────────────────────
-
-            Under the composer rather than in the agent bar, because these are
-            facts about the *session* and the bar is the window's own chrome.
-            They also read in the right order down here: what you are about to
-            say, and then who is about to answer it.
-
-            One shape for all of them. The adapter answers `mode`, `model`,
-            `effort` and `fast` as four selects with the same fields, so there
-            is nothing bespoke per setting — and a fifth appearing upstream is
-            a row that shows up rather than a thing to add here. */}
-        {(config.length > 0 || held.full !== undefined) && (
-          <div {...stylex.props(styles.settings)}>
-            {config.map((option) => (
-              <Chip
-                key={option.id}
-                id={`chat-${option.id}`}
-                label={nameOf(option)}
-                title={option.description ?? option.name}
-                value={option.currentValue}
-                onChange={(value) => {
-                  // Painted before the daemon answers, and corrected by the
-                  // answer. A select that snaps back for a moment reads as a
-                  // control that did not take.
-                  setConfig((all) =>
-                    all.map((one) =>
-                      one.id === option.id ? { ...one, currentValue: value } : one,
-                    ),
-                  );
-                  void chatSet(project, workspace, option.id, value)
-                    .then(setConfig)
-                    .catch(() => setConfig(config));
-                }}
-                options={option.values.map((value) => ({ value: value.value, label: value.name }))}
-                quiet
-              />
-            ))}
-
-            <span {...stylex.props(styles.spacer)} />
-
-            {/* Nothing until it is worth saying, which is the status bar's
-                rule. A percentage that is on screen from the first message is
-                furniture, and teaches the eye to skip the corner it will
-                eventually need to look at. */}
-            {held.full !== undefined && held.full >= FULL_ENOUGH && (
-              <span {...stylex.props(styles.full, held.full >= NEARLY_FULL && styles.warn)}>
-                {Math.round(held.full * 100)}% context
-              </span>
-            )}
-          </div>
-        )}
-      </div>
+      {/* Everything below the transcript, and it is a component now — the
+          style guide draws it, and a copy on that page would be a copy that
+          drifts. What stayed here is what has a consequence: what a message
+          does, what a command does, and what an option change tells the
+          daemon. */}
+      <Composer
+        draft={draft}
+        onDraft={setDraft}
+        onSend={say}
+        onCommand={run}
+        theirs={agentCommands(held.commands)}
+        config={config}
+        onSetOption={(option, value) => {
+          // Painted before the daemon answers, and corrected by the answer. A
+          // select that snaps back for a moment reads as a control that did
+          // not take.
+          setConfig((all) =>
+            all.map((one) => (one.id === option ? { ...one, currentValue: value } : one)),
+          );
+          void chatSet(project, workspace, option, value)
+            .then(setConfig)
+            .catch(() => setConfig(config));
+        }}
+        usage={
+          held.full === undefined
+            ? undefined
+            : { full: held.full, used: held.used, size: held.size }
+        }
+        onBox={(node) => {
+          box.current = node;
+        }}
+      />
     </div>
   );
 };
-
-/**
- * How a setting reads on its chip.
- *
- * The value's own name, and the setting's name when the value would not say
- * which setting it belongs to. `Manual` and `Opus` name themselves; `On` and
- * `Off` do not, so fast mode says `fast: off`.
- */
-const nameOf = (option: ChatConfigOption): string => {
-  const current = option.values.find((value) => value.value === option.currentValue);
-  const said = current?.name ?? option.currentValue;
-  return said === "On" || said === "Off" || said === "Default"
-    ? `${option.name.toLowerCase()}: ${said.toLowerCase()}`
-    : said;
-};
-
-/** Past this, the context figure is worth a person seeing. */
-const FULL_ENOUGH = 0.5;
-
-/** Past this, it is worth them minding. */
-const NEARLY_FULL = 0.85;
 
 /**
  * Past this, how long a tool call has taken is worth saying, in seconds.
@@ -422,7 +450,16 @@ const NEARLY_FULL = 0.85;
  */
 const WORTH_SAYING = 10;
 
-const Row = ({
+/**
+ * One item of a transcript, and the only piece of this panel the style guide
+ * borrows.
+ *
+ * Exported for that alone. It takes a pair rather than reading one, so a
+ * fixture can render every shape — a message, a tool call, a question — with
+ * no daemon behind it: the buttons then refuse, which is the honest outcome
+ * for a workspace that does not exist.
+ */
+export const Row = ({
   item,
   project,
   workspace,
@@ -499,7 +536,7 @@ const QUOTE_HEIGHT = 24;
 const Message = ({ item }: { readonly item: Said }) => {
   return (
     <div {...stylex.props(styles.item, styles.said, item.role === "thought" && styles.thought)}>
-      <span {...stylex.props(styles.who, item.role === "user" && styles.mine)}>
+      <span {...stylex.props(typeset.control, styles.who, item.role === "user" && styles.mine)}>
         {item.role === "user" ? "you" : item.role === "thought" ? "thinking" : "agent"}
         {/* ── a steer says that it is waiting ───────────────────────────────
           Measured: a message sent mid-turn is answered only once the turn it
@@ -508,7 +545,7 @@ const Message = ({ item }: { readonly item: Said }) => {
           as an answer to the wrong thing. */}
         {item.queued && (
           <span
-            {...stylex.props(styles.queued)}
+            {...stylex.props(typeset.label, styles.queued)}
             title="sent — the agent is finishing what it was doing and will answer this next"
           >
             queued
@@ -527,10 +564,91 @@ const Message = ({ item }: { readonly item: Said }) => {
           typed, and rendering it would mean a message containing `# ` silently
           becoming a heading — which is a window editing what somebody said. */}
       {item.role === "agent" ? (
-        <Markdown>{item.text}</Markdown>
+        <Markdown reading>{item.text}</Markdown>
       ) : (
-        <p {...stylex.props(styles.words)}>{item.text}</p>
+        <p {...stylex.props(typeset.prose, styles.words, styles.reading)}>{item.text}</p>
       )}
+    </div>
+  );
+};
+
+/**
+ * A conversation, drawn.
+ *
+ * Exported for the style guide, and that is not a nicety: it draws the
+ * grouping as well as the rows, and only `Row` was exported before — so the
+ * page showed a run of tool calls as a run of paragraphs while the panel drew
+ * it as one block. A page that lies about the thing it exists to let somebody
+ * criticise is worse than no page.
+ */
+export const Transcript = ({
+  items,
+  project,
+  workspace,
+}: {
+  readonly items: ReadonlyArray<Item>;
+  readonly project: string;
+  readonly workspace: string;
+}) => (
+  <>
+    {grouped(items).map((block) =>
+      block.kind === "calls" ? (
+        <Calls key={block.key} items={block.items} project={project} workspace={workspace} />
+      ) : (
+        <Row key={block.key} item={block.item} project={project} workspace={workspace} />
+      ),
+    )}
+  </>
+);
+
+/**
+ * A run of tool calls, as one block.
+ *
+ * ── the tail is the part worth drawing ────────────────────────────────────
+ *
+ * A dozen calls between two sentences is ordinary, and the ones a person is
+ * looking at are the recent ones — the earlier ones are how the agent got
+ * here, which is worth having and not worth the height. So a long run draws
+ * its last few and offers the rest, and the offer says how many so the number
+ * is the reason to press it.
+ *
+ * Left-ruled rather than boxed. A border on four sides makes a panel out of
+ * something that is a passage in a document; a rule down the side says "this
+ * belongs together" and takes eight pixels to do it.
+ */
+const SHOWN = 4;
+
+const Calls = ({
+  items,
+  project,
+  workspace,
+}: {
+  readonly items: ReadonlyArray<Ran>;
+  readonly project: string;
+  readonly workspace: string;
+}) => {
+  const [all, setAll] = useState(false);
+  // Anything with a question on it is drawn whatever else is folded: an agent
+  // waiting on somebody is not something to hide behind a count.
+  const asked = items.some((item) => item.ask !== undefined);
+  const hidden = all || asked ? 0 : Math.max(0, items.length - SHOWN);
+  const drawn = hidden === 0 ? items : items.slice(hidden);
+
+  return (
+    <div {...stylex.props(styles.calls)}>
+      {hidden > 0 && (
+        <button
+          type="button"
+          data-nav-item
+          onClick={() => setAll(true)}
+          {...stylex.props(typeset.label, styles.earlier)}
+        >
+          {`${String(hidden)} earlier ${hidden === 1 ? "call" : "calls"}`}
+        </button>
+      )}
+      {drawn.map((item) => (
+        <Tool key={item.key} item={item} project={project} workspace={workspace} />
+      ))}
     </div>
   );
 };
@@ -551,40 +669,70 @@ const Tool = ({
   // where it did not, so that case opens itself.
   const [open, setOpen] = useState(item.status === "failed");
 
+  // What the row draws, and what it keeps back. See `toolTitle`: the important
+  // half of a title is its basename or its first line, and the rest either
+  // clips or is counted.
+  const said = toolTitle(item.subagent === undefined ? item.title : `a ${item.subagent}`);
+  // Openable for anything held back, not only for output. A twelve-line
+  // heredoc drawn as its first line with no way to see the other eleven is a
+  // row that has quietly lost the command.
+  const holds = item.output !== "" || said.more > 0;
+
   return (
     <div {...stylex.props(styles.item, styles.ran)}>
-      <span {...stylex.props(styles.status, item.status === "failed" && styles.failed)}>
+      <span
+        {...stylex.props(typeset.address, styles.status, item.status === "failed" && styles.failed)}
+      >
         {mark(item.status)}
       </span>
       <div {...stylex.props(styles.grow)}>
         <button
           type="button"
           data-nav-item
-          disabled={item.output === ""}
+          disabled={!holds}
+          // The whole of it, for the one that was clipped. A tooltip costs no
+          // pixels until it is asked for, which is the trade every address in
+          // this window makes.
+          title={item.title}
           onClick={() => setOpen((was) => !was)}
           {...stylex.props(styles.command)}
         >
-          <span {...stylex.props(styles.verb)}>{verb(item)}</span>
+          <span {...stylex.props(typeset.label, styles.verb)}>{verb(item)}</span>
           {/* ── a delegated call, labelled ────────────────────────────────
               A spawn used to read as `ran  Task`, which says neither that
               work was handed off nor to what. There is no subagent update
               kind in ACP — a subagent's own messages never arrive — so this
               is one tool call named honestly rather than a tree. */}
-          <span {...stylex.props(styles.what)}>
-            {item.subagent === undefined ? item.title : `a ${item.subagent}`}
+          <span {...stylex.props(styles.subject)}>
+            {said.lead !== "" && (
+              <span {...stylex.props(typeset.address, styles.lead)}>{said.lead}</span>
+            )}
+            <span {...stylex.props(typeset.address, styles.what)}>{said.name}</span>
           </span>
+          {said.more > 0 && (
+            <span {...stylex.props(typeset.label, styles.aside)}>
+              {`+${String(said.more)} line${said.more === 1 ? "" : "s"}`}
+            </span>
+          )}
           {item.elapsed !== undefined && item.elapsed >= WORTH_SAYING && (
-            <span {...stylex.props(styles.verb)}>{took(item.elapsed)}</span>
+            <span {...stylex.props(typeset.label, styles.aside)}>{took(item.elapsed)}</span>
           )}
         </button>
         {/* Why a spawn is sitting still. A subagent waiting out a rate limit
             and a subagent doing slow work are the same picture without this,
             and only one of them is worth waiting for. */}
-        {stalled(item) !== undefined && <p {...stylex.props(styles.retry)}>{stalled(item)}</p>}
+        {stalled(item) !== undefined && (
+          <p {...stylex.props(typeset.label, styles.retry)}>{stalled(item)}</p>
+        )}
         {/* The question about this call, on this call. See the note on `ask`:
             a separate row was a second copy of the command already above it. */}
         {item.ask !== undefined && (
           <Answering item={item.ask} project={project} workspace={workspace} />
+        )}
+        {/* The command in full, once, and only when the row could not hold
+            it. Above the output because it is what produced it. */}
+        {open && said.more > 0 && (
+          <pre {...stylex.props(typeset.address, styles.whole)}>{item.title}</pre>
         )}
         {open &&
           item.output !== "" && (
@@ -593,7 +741,7 @@ const Tool = ({
             // renders patches properly in the diff panel. `@pierre/diffs` is
             // where that goes — see #102 — and it is worth doing there rather
             // than reaching for a second highlighter.
-            <pre {...stylex.props(styles.output)}>{item.output}</pre>
+            <pre {...stylex.props(typeset.address, styles.output)}>{item.output}</pre>
           )}
       </div>
     </div>
@@ -618,7 +766,7 @@ const Permission = ({
   readonly workspace: string;
 }) => (
   <div {...stylex.props(styles.item, styles.asked)}>
-    <p {...stylex.props(styles.question)}>{item.title}</p>
+    <p {...stylex.props(typeset.address, styles.question)}>{item.title}</p>
     <Answering item={item} project={project} workspace={workspace} />
   </div>
 );
@@ -648,6 +796,7 @@ const Answering = ({
               type="button"
               data-nav-item
               {...stylex.props(
+                typeset.label,
                 styles.option,
                 option.kind.startsWith("allow") && styles.allow,
                 option.kind.startsWith("reject") && styles.reject,
@@ -662,7 +811,7 @@ const Answering = ({
           ))}
         </div>
       ) : (
-        <p {...stylex.props(styles.answered)}>{answered}</p>
+        <p {...stylex.props(typeset.label, styles.answered)}>{answered}</p>
       )}
     </>
   );
@@ -714,7 +863,7 @@ const styles = stylex.create({
     // are one thought and want to sit together; two turns want air.
     gap: "1.1rem",
   },
-  nothing: { color: colors.muted, fontFamily: text.ui, fontSize: text.small },
+  nothing: { color: colors.muted },
   /** The empty state, which is a sentence and an offer rather than a sentence. */
   empty: { display: "flex", flexDirection: "column", alignItems: "flex-start", gap: "0.6rem" },
   item: {
@@ -736,23 +885,16 @@ const styles = stylex.create({
   said: { display: "flex", flexDirection: "column", gap: "0.15rem" },
   thought: { opacity: 0.7 },
   who: {
-    fontFamily: text.ui,
-    fontSize: text.small,
-    fontWeight: text.medium,
     color: colors.muted,
   },
   mine: { color: colors.accent },
   /** Quiet, and beside the name rather than under it — it qualifies "you". */
   queued: {
     marginInlineStart: "0.4rem",
-    fontFamily: text.ui,
-    fontSize: text.small,
     fontWeight: text.regular,
     color: colors.muted,
   },
   words: {
-    fontFamily: text.ui,
-    fontSize: text.body,
     color: colors.text,
     whiteSpace: "pre-wrap",
     // A flex child will not shrink below its content, and a long unbroken
@@ -760,10 +902,44 @@ const styles = stylex.create({
     minWidth: 0,
     overflowWrap: "anywhere",
   },
+  /**
+   * What somebody typed, at the size they will read the answer in.
+   *
+   * The same step and the same line height `Markdown`'s `reading` uses — see
+   * the note there. Two sizes in one transcript would read as two documents.
+   */
+  reading: { fontSize: text.lead, lineHeight: 1.7 },
+  /**
+   * The block a run of tool calls lives in.
+   *
+   * A rule down the left and the rows tight against each other, so a dozen
+   * calls read as one passage rather than as a dozen paragraphs. The gap
+   * between rows is deliberately smaller than the gap between items in the
+   * transcript: inside a block, the rows are a list.
+   */
+  calls: {
+    display: "flex",
+    flexDirection: "column",
+    gap: "0.15rem",
+    paddingInlineStart: "0.6rem",
+    borderInlineStartWidth: 2,
+    borderInlineStartStyle: "solid",
+    borderInlineStartColor: colors.border,
+  },
+  /** `9 earlier calls` — a count, because the count is the reason to press it. */
+  earlier: {
+    alignSelf: "flex-start",
+    padding: "0.1rem 0.3rem",
+    marginInlineStart: "-0.3rem",
+    backgroundColor: { default: "transparent", ":hover": colors.raised },
+    borderStyle: "none",
+    borderRadius: "0.2rem",
+    color: colors.muted,
+    font: "inherit",
+    cursor: "pointer",
+  },
   ran: { display: "flex", gap: "0.5rem", alignItems: "flex-start" },
   status: {
-    fontFamily: text.mono,
-    fontSize: text.small,
     color: colors.muted,
     paddingTop: "0.1rem",
   },
@@ -782,21 +958,73 @@ const styles = stylex.create({
     backgroundColor: "transparent",
     cursor: { default: "pointer", ":disabled": "default" },
   },
-  /** What sort of thing it was — ui, because it is a word and not an address. */
+  /**
+   * What sort of thing it was — ui, because it is a word and not an address.
+   *
+   * A fixed width, so the subjects line up down the block. `read`, `edited`
+   * and `searched` are three different widths, and a column of subjects that
+   * each start somewhere else is the specific thing that made a run of these
+   * hard to scan: the eye has no edge to run down.
+   */
   verb: {
     flexShrink: 0,
-    fontFamily: text.ui,
-    fontSize: text.small,
+    // Wide enough for `spawned`, the longest of the seven, and **right
+    // aligned**: that puts a clean edge on both sides of the column, where
+    // left-aligning it leaves a ragged gap after every short verb. What made
+    // a run of these hard to scan is that the subjects each started somewhere
+    // else — the eye had no edge to run down.
+    width: "4rem",
+    textAlign: "end",
+    color: colors.muted,
+  },
+  /** The meta at the end — an elapsed time, a line count. */
+  aside: {
+    flexShrink: 0,
+    color: colors.muted,
+  },
+  // ── the subject, on one line ────────────────────────────────────────────
+  //
+  // One row per call, whatever it was passed. It wrapped before, mid-word,
+  // and a screenful of tool calls was an unreadable block — the row is a
+  // scannable index into the transcript, and an index whose entries are three
+  // lines long is not one. What is clipped is on the tooltip and, for a
+  // multi-line command, behind the disclosure.
+  subject: {
+    display: "flex",
+    flex: 1,
+    minWidth: 0,
+    alignItems: "baseline",
+    // `nowrap` here as well: the flex line must not break between the two
+    // halves of a path.
+    whiteSpace: "nowrap",
+    overflow: "hidden",
+  },
+  /** A path's directories: muted, and the part allowed to disappear first. */
+  lead: {
+    // A large factor, not merely `1`. Shrink is shared in proportion to base
+    // size, so two shrinkable children both give ground and a path ends up
+    // clipped at *both* ends; this makes the directories absorb nearly all of
+    // it and the basename give way only once they have gone.
+    flexShrink: 999,
+    minWidth: 0,
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
     color: colors.muted,
   },
   /** What it actually did — mono, because it is a command. */
   what: {
-    flex: 1,
+    // Shrinks last, not never. `flexShrink: 0` was the first answer and it is
+    // wrong for the case with no `lead` at all — a long command is entirely
+    // this span, so an unshrinkable one ran past the right edge of the panel
+    // with no ellipsis and no scrollbar to say so. Measured at 820px: the row
+    // reached 1560px.
+    flexShrink: 1,
     minWidth: 0,
-    fontFamily: text.mono,
-    fontSize: text.small,
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
     color: colors.text,
-    overflowWrap: "anywhere",
   },
   failed: { color: colors.warn },
   /**
@@ -838,11 +1066,9 @@ const styles = stylex.create({
   /** A sentence about a stall, not a state — see the note on the row. */
   retry: {
     marginTop: "0.15rem",
-    fontFamily: text.ui,
-    fontSize: text.small,
     color: colors.waiting,
   },
-  answered: { fontFamily: text.ui, fontSize: text.small, color: colors.muted },
+  answered: { color: colors.muted },
   working: {
     fontFamily: text.ui,
     fontSize: text.small,
@@ -857,10 +1083,15 @@ const styles = stylex.create({
     animationDuration: { default: "260ms", "@media (prefers-reduced-motion: reduce)": "0s" },
     animationTimingFunction: "cubic-bezier(0.32, 0.72, 0, 1)",
   },
-  stopped: { fontFamily: text.ui, fontSize: text.small, color: colors.muted },
+  stopped: { color: colors.muted },
+  /** The command in full, when the row showed one line of it. */
+  whole: {
+    color: colors.text,
+    whiteSpace: "pre-wrap",
+    overflowWrap: "anywhere",
+    marginTop: "0.25rem",
+  },
   output: {
-    fontFamily: text.mono,
-    fontSize: text.small,
     color: colors.muted,
     whiteSpace: "pre-wrap",
     overflowWrap: "anywhere",
@@ -880,15 +1111,11 @@ const styles = stylex.create({
     backgroundColor: colors.surface,
   },
   question: {
-    fontFamily: text.mono,
-    fontSize: text.small,
     color: colors.text,
     overflowWrap: "anywhere",
   },
   options: { display: "flex", gap: "0.4rem", flexWrap: "wrap" },
   option: {
-    fontFamily: text.ui,
-    fontSize: text.small,
     padding: "0.25rem 0.6rem",
     borderRadius: "0.25rem",
     borderStyle: "solid",
@@ -900,77 +1127,5 @@ const styles = stylex.create({
   },
   allow: { borderColor: colors.live, color: colors.live },
   reject: { borderColor: colors.warn, color: colors.warn },
-  // ── the composer ────────────────────────────────────────────────────────
-  //
-  // One box with the button inside it rather than a field and a button side by
-  // side. Two controls in a row makes the field look short and puts the send
-  // where a person's eye is not — at the end of a line they are not looking at
-  // — where inside the box it sits under the last word they typed.
-  composer: {
-    padding: "0.9rem 1.25rem 1.1rem",
-    borderTopStyle: "solid",
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
-    backgroundColor: colors.page,
-  },
-  box: {
-    display: "flex",
-    flexDirection: "column",
-    gap: "0.4rem",
-    padding: "0.55rem 0.6rem 0.5rem",
-    borderStyle: "solid",
-    borderWidth: 1,
-    // The whole box takes the focus ring, because the whole box is the
-    // control. `:focus-within` and not `:focus` — the thing being focused is
-    // the textarea inside it.
-    borderColor: { default: colors.border, ":focus-within": colors.accent },
-    borderRadius: "0.5rem",
-    // One step off the page, so the box somebody types into is visibly a
-    // control sitting on the document rather than part of it.
-    backgroundColor: colors.surface,
-    transitionProperty: "border-color",
-    transitionDuration: { default: "160ms", "@media (prefers-reduced-motion: reduce)": "0s" },
-  },
-  input: {
-    width: "100%",
-    minWidth: 0,
-    resize: "none",
-    fontFamily: text.ui,
-    fontSize: text.body,
-    lineHeight: 1.5,
-    color: colors.text,
-    backgroundColor: "transparent",
-    borderStyle: "none",
-    padding: 0,
-    outline: "none",
-  },
-  under: { display: "flex", alignItems: "center", gap: "0.5rem" },
-  /** What Return does, said once and quietly rather than in the placeholder. */
-  hint: { flex: 1, minWidth: 0, fontFamily: text.ui, fontSize: text.small, color: colors.muted },
-  send: {
-    fontFamily: text.ui,
-    fontSize: text.small,
-    fontWeight: text.medium,
-    padding: "0.25rem 0.7rem",
-    borderRadius: "0.3rem",
-    borderStyle: "none",
-    backgroundColor: colors.accent,
-    color: colors.base,
-    cursor: "pointer",
-  },
-  /** Present and plainly unavailable, rather than gone. */
-  shut: { backgroundColor: colors.border, color: colors.muted, cursor: "default" },
-  settings: {
-    display: "flex",
-    alignItems: "center",
-    gap: "0.35rem",
-    marginTop: "0.55rem",
-    // Wrapping rather than scrolling: this is inside the composer, and the
-    // window's rule is that nothing grows a sideways scrollbar. Four chips in
-    // a narrow agent column become two rows.
-    flexWrap: "wrap",
-  },
-  spacer: { flex: 1 },
-  full: { fontFamily: text.ui, fontSize: text.small, color: colors.muted },
   warn: { color: colors.warn },
 });

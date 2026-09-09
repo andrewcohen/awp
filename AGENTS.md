@@ -579,6 +579,46 @@ can turn a global hook off. `[]` and an absent key mean the same thing, so "run
 nothing" is not currently expressible; the day it needs to be, `merge` is the
 line that changes.
 
+**The model, the effort and the mode are one block, and both faces read it.**
+They were in two places and neither could be read: the model and the permission
+mode were words inside the `agent` string — `claude --permission-mode auto
+--model opus`, which is the _terminal's_ command line and says nothing to the
+chat — and the effort was nowhere at all. So the chat ran on whatever the
+adapter defaulted to while the terminal ran on opus, and no file said what the
+machine's answer was.
+
+```json
+  "defaults": { "model": "opus", "effort": "medium", "mode": "auto" }
+```
+
+Named `defaults` rather than `chat` or `agent`, because it is one answer for
+both faces and a block named after either is a second one waiting to disagree.
+Three layers, and the order is the whole of it:
+
+```
+  the `agent` line     claude --permission-mode auto --model opus
+  defaults             applied over it — a file that names a model in one place
+                       and another on the command line contradicts itself, and
+                       this is the clearer half
+  the modal's choice    wins over both. "From settings" means choosing nothing,
+                       which is why those are `undefined` and not a value
+```
+
+The terminal gets them as argv through `agentWith`; the chat gets them through
+the adapter's own `session/set_config_option`, which is the only way that does
+not lie — `configOptions` is what the open reply carries and what the panel
+draws, so setting a model any other way leaves the chips reporting the opposite
+of the truth. That already happened once, to the mode.
+
+**`mode` absent leaves each face where it was**: the terminal keeps whatever the
+`agent` line says and the chat stays in Manual, which is the decision `MODE`
+argues for at length. Writing `auto` in the file is how somebody opts out of
+being asked — a decision worth having to write down rather than inherit.
+
+Read per conversation, not per daemon: `settings.ts` is deliberately read per
+call, so an edit takes effect on the next chat opened without restarting a
+daemon holding a dozen ptys.
+
 **Read from the source repository, never from the new workspace.** `.awp/` is
 untracked, so a fresh `jj workspace add` has no copy of it — the Go
 implementation symlinked one in for exactly this reason. `input.repo` is the
@@ -1107,6 +1147,47 @@ than a `gh` call.
 The router _is_ now used, and the reason is worth stating because the obvious
 one is wrong. The window has one screen and no navigation to speak of, so
 "needs routes" was never going to be what earned it.
+
+### A running job changes the sidebar, so waiting for it to stop is too late
+
+The window re-read the sessions and the threads when the set of **finished**
+jobs changed, on the premise that a finished job is when there is something new
+to see. A chat-face thread proved the premise wrong:
+
+```
+  1 workspace   jj workspace add
+  2 bookmark    jj bookmark set
+  3 session     zmx run -d            ← the sidebar can draw a row from here
+  4 claim       the thread takes it   ← and the row belongs under its thread
+  5 brief       Chat.brief — sends, then WAITS for the turn to end, up to 20
+                minutes. The job is `running` for the whole first answer
+```
+
+So on a chat-face create the two things the sidebar needs land at steps 3 and 4,
+and the job does not go terminal until the agent has finished answering — or,
+if it stopped to ask a permission nobody can see, not at all. Reported as "i
+cant connect to the chat in the new opentui thread", and what was on screen was
+a thread reading **`nothing yet`** over a workspace that was on disk, with a
+session running in it and a briefed agent halfway through a turn. The row is
+how a person gets into it, so "no row" and "no chat" are the same sentence from
+outside.
+
+Measured while it was happening, which is what separated the window from the
+daemon: `ChatOpen` over the rpc replayed a live conversation — tool calls, a
+`permission-0` with three options, `working…` — and the panel rendered it
+perfectly when addressed by route. Nothing was broken except when the window
+looked.
+
+`progressKey` keys on `id:status:done.length` per job. A step boundary is a
+record save and therefore a push down `JobChanges`, so the claim now reaches the
+sidebar in the second it happens. The cost is a re-read per step of every job —
+four for a create, two socket round trips each, against a daemon holding both
+answers in memory.
+
+**The terminal face hid it**, because `zmx send` returns immediately and the job
+was terminal a second after the claim. The general shape is the one this file
+keeps recording: a trigger derived from a _proxy_ for the event works until
+something changes how long the proxy takes.
 
 ### A stream carries changes from now, so it is not a substitute for asking
 
@@ -1857,6 +1938,77 @@ of the _font_, and `paneFontSize`'s note was written about Maple Mono. It was
 re-measured rather than carried over — JetBrains Mono wastes 1.7% at 18px where
 Maple Mono wasted 7%.
 
+### The type roles, and why the scale was not the thing to name
+
+Asked as "should our text scale have some semantic tokens?", and the answer
+came out of counting rather than taste. Before `typeset.ts` existed, 168 style
+entries in the renderer set a type property, in 21 combinations:
+
+```
+  text.small   135 of 156 sized entries   87%
+  text.body     11
+  text.lead      6
+  text.title     2
+  a literal 10   2   ← two status dots, deliberately under the floor
+  a literal 600  1   ← a weight that was not from the scale. Fixed
+```
+
+So the **scale is not what was being used**: one size does 87% of the work and
+the other three are headings. Naming sizes semantically would have renamed four
+things, three of which appear twice. What repeats is a _pair_:
+
+```
+  small + mono   28   a slug, a path, a revision, a command, a hex
+  small + ui     15   a hint, a state word, a caption
+  body  + ui      7   a container children read in
+  small + medium  6   a tab, a button, the send
+  small + strong  3   a section heading inside a panel
+  lead  + medium  5   a panel or dialog title
+```
+
+64 entries, six shapes, each of them the same decision restated by hand once
+per panel. Those six are the roles: `prose · heading · subhead · control ·
+label · address`.
+
+**They compose at the call site, and that is StyleX's doing.** `create` cannot
+include another entry — there is no `include` in 0.19 — so a role is applied
+where a style is:
+
+```
+  {...stylex.props(typeset.address, styles.slug)}
+                                    └─ still there: it holds the colour and
+                                       the truncation. The role holds the face
+                                       and the size
+```
+
+**One 16px weight, not two.** `lead + medium` and `lead + strong` were both in
+use for the same thing — a title over a panel and a title over a dialog — so
+`heading` is `medium`, the majority and what the style guide's own specimen
+advertises. Exactly one thing changed appearance: the archive dialog's title
+lost 100 of weight.
+
+**Proved a no-op by measuring, not by reading the diff.** Every element's
+painted `fontSize | fontWeight | fontFamily` was captured before and after, on
+`#/styleguide` and on `#/`:
+
+```
+  styleguide   449 elements   0 differing triples
+  window       186 elements   0 differing triples
+```
+
+The first run was _not_ zero: twelve cells of the terminal band had fallen back
+to inherited prose. The rewriter had skipped one call site —
+`stylex.props(styles.cellName, literal.ink(legible(hex, palette)))`, two levels
+of nested parens — and the entry had already lost its own properties. Which is
+the shape worth keeping: **a refactor that strips a declaration and misses its
+call site is silent**, and the only thing that catches it is asking the browser
+what it painted. An audit over every `stylex.props` call naming a converted key
+is what found it in one line.
+
+Four hand-written pairs are left on purpose: the top bar's address and title,
+an import field, and the style guide's own h1. Each is one site, and a role for
+one site is a name with nothing to hold together.
+
 ### The type floor is 14px, and it is about text
 
 Stated as a requirement — "stop using such tiny fonts in headers my eyesight
@@ -1963,6 +2115,26 @@ that knows the language it dies on the first `import type`.
 sheet.** It does not fail; it serves a handful of rules instead of ninety, which
 looks exactly like a StyleX bug. Restart Vite after adding or moving a PostCSS
 config.
+
+**An identifier in a static style is a build error, and it has now happened
+three times.** `${FOLD_MS}ms` inside `stylex.create` — a constant from
+`columns.ts`, not from a `.stylex.ts` file — fails the Babel pass with a
+message about _theming rules_, which is not what is wrong:
+
+```
+  [BabelError] Could not resolve the path to the imported file.
+  Please ensure that the theme file has a .stylex.js or .stylex.ts extension
+  > 5 | import { FOLD_MS } from "./columns";
+```
+
+The module then answers **500** and the page renders nothing — and fmt, lint,
+typecheck, test and doctor are all green, because only Vite runs that pass. A
+dynamic style takes the value at runtime and asks no such question. The check
+is to fetch the module from the dev server:
+
+```
+  curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:5273/src/renderer/Composer.tsx
+```
 
 **`border` and `background` shorthands are dropped in silence.** No error, no
 warning; the declaration is simply not in the output. `border: "none"` on a
@@ -2086,6 +2258,58 @@ and back fires `resizeEmitter` twice and reflows the real session.
 What is left of task #23 is the patch. `patches/ghostty-web@0.4.0.patch` already
 exists, and a `setTheme` that rebuilds the wasm config while keeping the buffer
 is where it goes.
+
+## A second app instance is a client too, and its flags go to the wrong place
+
+The rule above is about a _headless browser_ opening a route. There is a third
+door and it is worse, because it looks like the safest possible test: launch the
+**real application** with the debugger attached and drive it.
+
+```
+  electron . --remote-debugging-port=9333 --user-data-dir=<scratch>
+                                          └─ goes to the APP, not to Chromium
+```
+
+Flags after the app path are the app's argv. Electron picks up
+`--remote-debugging-port` anyway, so the probe _looks_ like it worked — and the
+window came up on the **default profile**, read `amoeba.place` out of somebody's
+real localStorage, and opened the workspace they had been looking at. Which
+means it attached to that session and sized it to the probe window:
+
+```
+  [amoeba] window 1692x1370 …
+  [amoeba] window 1275x1370 …    ← a real terminal reflowed three times
+  [amoeba] window 1123x1370 …
+```
+
+So, for a debuggable instance: put every Chromium switch **before** the app
+path, and drive the window to `#/` as the first thing after connecting, before
+touching anything else. `#/` attaches to nothing and still has the accessory
+column, so the web panel, the tabs and every layout question can be answered
+there.
+
+**What the debugger is worth, once it is safe.** It is the only way to exercise
+a native webview at all: CDP screenshots do not include layers the compositor
+draws over the page, `screencapture` needs a permission this machine has not
+granted, and Playwright has no Electron driver here. What it _can_ do is press a
+real tab and read the renderer's side of the contract:
+
+```
+  before   diff selected · web panel mounted · display:none, hidden
+  on web   web selected  · display:block
+  on diff  web unselected · display:none, hidden
+```
+
+**A synthetic `.click()` does not move a Base UI tab.** It listens for pointer
+events, so the first attempt reported `web:false` after clicking web and read as
+a broken control. `Input.dispatchMouseEvent` — mouseMoved, mousePressed,
+mouseReleased, at the tab's own rectangle — is what works.
+
+**And `contextBridge` objects cannot be wrapped.** Recording what the renderer
+told the main process by patching `window.awpHost` fails with `Cannot redefine
+property`, which is the bridge working as intended. Assert on the state the
+renderer reaches instead, and on what the other process _does_ only where it
+has a channel to say so.
 
 ## A browser probe attaches to a session, and resizes it
 
@@ -2549,6 +2773,71 @@ Outside the app window the bridge is simply absent, and the panel says so in
 words rather than showing an empty box — because an empty box is also what a
 page that failed to load looks like.
 
+## Hiding a native overlay must not depend on unmounting
+
+The web panel was hidden by being **torn down**: Base UI unmounts a hidden tab,
+the panel's cleanup ran, and the cleanup was the only thing that took the
+`WebContentsView` down. That is electrobun's vocabulary — its tag offered
+teardown and a mask and nothing else — and under Electron it is the wrong shape,
+because it makes a native overlay's visibility depend on React choosing to
+unmount.
+
+Reported as "i cant switch off the web pane on the right it doesnt hide when i
+switch to diff", and the cause was not in the panel at all:
+
+```
+  9:44:30  [renderer] [vite] SyntaxError: The requested module
+                       '/src/renderer/refresh.ts' does not provide an export
+                       named 'finishedKey'
+  9:44:30  [renderer] [vite] Failed to reload /src/renderer/App.tsx
+```
+
+A hot reload that could not be applied left the tree stale, so the panel never
+unmounted, so the page sat over the accessory column through every tab switch —
+with no `z-index` and no gesture able to reach it. **Any tree that fails to
+unmount produces this**, which is one reason too many for a thing this visible.
+
+So the panel is `keepMounted` and the view is hidden by `setVisible`:
+
+```
+  before   tab switch → unmount → destroy → create again on the way back
+           (a reload per switch, a round trip per switch, and the orphan
+            hazard living in that round trip)
+  after    the view lives as long as the column, and `shown` hides it
+```
+
+Three things follow, and the second is the one to copy:
+
+- **The panel is told, not left to infer.** `shown` comes from the selected
+  tab. A `ResizeObserver` reading 0x0 nearly does it, and "nearly" is the
+  problem — it measures a _consequence_ where the selected tab is the cause.
+  The box is still watched, because a folded column has no other tell.
+- **`display: none` is written here rather than inherited from `[hidden]`.**
+  Base UI marks the hidden panel `hidden` and the UA rule would do the job,
+  until some class sets `display` and silently outranks it. Same rule as
+  everything else in this file: do not depend on a mechanism read out of
+  somebody else's source.
+- **Nothing is built until the tab is first opened.** `keepMounted` puts the
+  component in the tree from the first render of the column, and a native view
+  is a process. The flag only goes false → true, so the creation effect still
+  runs exactly once and the back button keeps its history.
+
+Two improvements fall out rather than being arranged: switching tabs no longer
+reloads the page — a login, a scroll position and a half-filled form survive —
+and the create/destroy round trip per switch is gone, which is where the orphan
+hazard lived.
+
+**And a rule about working here at all: renaming an exported symbol breaks the
+hot reload of every module that imports it.** This repo is edited from inside
+the application it builds, so the cost is not a stale console message — it is a
+window that keeps running until somebody notices it is lying. The failure is in
+the app's own log, which `main.ts` forwards from the renderer, and the app runs
+in a zmx session:
+
+```
+  zmx history awp-dev-app | grep -i 'failed to reload'
+```
+
 ## An orphaned webview cannot be closed by anything
 
 The first real bug the web panel produced, and it is worth stating in full
@@ -2618,6 +2907,43 @@ connect, and that element could survive neither. An element that is a plain
 The general shape, which has come up here before: **a cleanup that guards on a
 field set by an async step does not run during that step.** The guard reads as
 "nothing to do yet" and means "do nothing, ever".
+
+## On macOS a closed window is not a closed application
+
+`window-all-closed` called `app.quit()` unconditionally, which is the Windows
+and Linux convention. On this platform it means **a stray cmd+W ends amoeba** —
+and the `activate` handler right above it, which exists to build a window
+again, could never run: the app was gone before anything could activate it.
+
+Reported as "where did the app go i think it died". It had not died. It had done
+exactly what it was told, cleanly, and left this:
+
+```
+  [amoeba] renderer: http://127.0.0.1:5273
+  ZMX_TASK_COMPLETED:0        ← seven minutes later, nothing in between
+```
+
+Which is the worst shape a shutdown can have: **indistinguishable from a
+crash**, because an absence of complaint is all that either one leaves behind.
+The exit code was 0 and the only way to tell was to notice that nothing had
+asked it to stop.
+
+So on darwin the app stays alive with no window, and cmd+tab or the dock icon
+brings one back. Quitting is Quit — the menu item, cmd+Q, which `menu.ts`
+already carries.
+
+**And the menu outlives the window it was built for.** `installMenu(window)`
+closes over one, the menu bar is application-wide, and it is still there while
+no window is. So cmd+R after closing the last window called `webContents` on a
+destroyed object and threw in the main process, where nothing renders an error.
+`acting()` answers the focused window first — with several open, the menu means
+the one in front, not the one the template was built for — and nothing at all
+when there is none.
+
+The View menu is also the answer to something this file got wrong out loud:
+there **is** a reload accelerator, cmd+R, and a Fit to Window on cmd+alt+R. An
+earlier session told somebody to restart the app because the window "has no
+reload accelerator", having read `menu.ts` for the paste note and not for this.
 
 ## On macOS a paste is a menu item before it is a key
 
@@ -2804,6 +3130,29 @@ was committed, which is before there is a `document.body` to append to. And
 only while armed — putting a highlight back on a page somebody turned the
 picker off for reads as the site doing it.
 
+**A disabled control dispatches no click, so the picker takes `pointerdown`.**
+Measured over one, in the shipping engine:
+
+```
+  disabled   pointerdown · pointerup
+  enabled    pointerdown · mousedown · pointerup · mouseup · click
+```
+
+The highlight drew — `elementFromPoint` does not care about `disabled` — and
+the click that would have picked it was never dispatched. Reported as "i cant
+select things like the send button or the tool call lines", and both are
+disabled: the send while the box is empty, and a tool row's title when the call
+has no output to disclose. An overlay inviting a gesture the browser then
+swallows is worse than one that is simply absent.
+
+Cancelling `pointerdown` also suppresses the compatibility mouse events, which
+is how picking a link still does not navigate. And **settling installs a
+one-shot click swallower**, because the picker's own listeners come off at that
+moment: without it the click that follows reaches the page and activates
+whatever was just picked. Verified on five targets — two disabled buttons, an
+enabled button, a link and a tool row: all picked, none activated, no
+navigation.
+
 **The overlay is `pointer-events: none`, or nothing is ever hovered but the
 overlay** — `elementFromPoint` would return it, over itself, forever.
 
@@ -2855,6 +3204,476 @@ a page has a URL and a selector. `NoteSend` is therefore its own call, and it is
 **unbatched** where `ReviewSend` is batched — a review is six remarks written
 while reading a diff, and a page note is one whole gesture with no second one on
 the way. A draft that waits for a batch is a draft nobody remembers to deliver.
+
+### The note box opens beside a keyboard aimed at another process
+
+`autoFocus` on the composer was correct and did nothing, and the reason is one
+process boundary over: **the click that picked was in the page.**
+
+```
+  the page      a WebContentsView — its own webContents, and it now has the
+                keyboard because that is where the pointer went
+  the renderer  draws the note box, focuses it, becomes document.activeElement
+                — and receives nothing at all
+```
+
+Nothing about it reads as a focus bug from this side: the caret is in the box,
+the element is `:focus`, and typing goes to the website. Only the main process
+can move focus between two webContents, so `CH.focus` exists for exactly one
+line — `windowOf(event)?.webContents.focus()` — and the renderer asks for it
+when a pick arrives.
+
+The placeholder is `leave a comment` rather than `what is wrong with it`. The
+picker is used to point at things that are fine and ask for a change, and a
+box that presumes a fault is a box that mislabels most of what goes in it.
+
+## The composer was one line of text and a second line of hint
+
+Reported twice — "make composer default line height 1", then "the composer is
+still 2 lines" — and the text was one line both times. The box held a hint row
+under it, permanently:
+
+```
+  before  ┌──────────────────────────────┐    after  ┌───────────────────┬──┐
+          │ say something…               │           │ say something…    │↑ │
+          │ tab to complete…        (↑)  │           └───────────────────┴──┘
+          └──────────────────────────────┘
+```
+
+The send moved onto the text's line — `align-items: flex-end`, so it stays with
+the last line as the box grows rather than floating beside the middle of a
+paragraph — and the hint appears only when it has something to say, which is
+when somebody is about to press the key it describes.
+
+**A constant floor was the wrong way to measure one line.** `LEAST = 23` is one
+line of `text.body` with no padding, and the new-thread brief is `text.lead`
+with 4px either side: it needs 32, so the box clipped the line it was holding
+while reporting `offsetHeight 24` against `scrollHeight 32` — nothing on screen
+says that. `useGrow` now releases the height and measures on _every_ value,
+including the empty one, so one line is a property of the element rather than a
+number written in a different file.
+
+```
+  brief before   offset 24   scrollHeight 32   ← clipped, silently
+  brief after    offset 32   scrollHeight 32
+  chat  after    offset 23   scrollHeight 23
+```
+
+**And the textarea is a flex child now, so `width: 100%` had to go.** A
+full-width child beside a button is a row wider than its box, which is this
+window's most common cause of a horizontal scrollbar — `flex: 1` with
+`minWidth: 0` is the pair.
+
+## A loaded conversation reports no usage at all
+
+Reported as "im looking at a real chat i dont see it", after the floor came
+off. Two separate reasons, and only one of them was the floor.
+
+Measured against a real adapter:
+
+```
+  a turn, live           updates=9  usage=4   last used=28148 size=1000000
+  loaded, nothing said   updates=3  usage=0
+```
+
+**A load sends none.** So the ordinary case — open a chat, read what the agent
+said last night, say nothing — has no reading at all, and the figure was absent
+exactly when somebody was deciding whether to carry on in that conversation or
+start a fresh one. There is no call that asks: `fetchContextUsedTokens` is the
+adapter's own, on its own schedule.
+
+So the daemon remembers. `chat_usage` holds the last reading **per session id**,
+written on every usage update — two integers against a cost measured in seconds
+of model time — and handed back through `ChatOptions.usage`, which
+`conversation` emits as its first update so every subscriber and every replay
+sees it. Tokens do not change while nobody is talking, which is what makes a
+stored reading still true.
+
+**Keyed by the session, not the workspace**, and that is what makes `/new`
+correct with no delete: a fresh conversation has a new id and therefore no
+reading, so it cannot inherit the tokens of the one it replaced. The row for a
+forgotten session stays, because it is still true of that transcript — which a
+fork can load later.
+
+`probe:chat` carries the check, and it is a `usage=0` away from being a test
+that cannot fail: a fixture would agree with itself about an update the adapter
+does not send.
+
+## The context figure has no floor any more
+
+Asked as "can the context usage show in the chat bottom bar", and it was
+already there — behind `full >= 0.5`, on the status bar's rule that a figure
+which is always on screen is furniture. That rule is right for the window's
+footer and wrong here, for two reasons worth keeping:
+
+- **The decision it informs happens early.** Somebody weighing up `/new`
+  wants the number _before_ it is a problem; a figure that appears at half full
+  is one that arrives after the reading it exists to give.
+- **This row is already session facts.** Mode, model, effort, fast — one more
+  is not what teaches the eye to skip it. The footer's argument holds because
+  that bar is otherwise empty.
+
+The warn colour past 85% stays, which is the part that was actually doing the
+work of "worth minding".
+
+**The tokens are kept beside the fraction and go on the hover.** One update
+carries both, so keeping them apart would be two states that can disagree —
+and `18,606 of 200,000` is four times the width of the answer to "how full is
+it", so it belongs on a tooltip rather than in the row:
+
+```
+  62% context     title="124,000 of 200,000 tokens"
+```
+
+## The chat is read, not scanned, so it is not the panel's size
+
+Asked as "the chat font is generally a little too small and thin and maybe the
+line spacing could breathe slightly", then immediately narrowed: "dont actually
+thicken just try making it a little larger to start". Both halves matter — a
+heavier face at the same size reads as louder rather than clearer, on a surface
+somebody has open for minutes.
+
+```
+  before   14px / 1.55      ← `Markdown`'s root, which the PR panel also uses
+  after    16px / 1.7       ← `reading`, on the chat only
+```
+
+A prop rather than a change to `root`: the same component draws a pull request
+body in a 280px column, where 14 is right. The user's own message carries the
+same pair, because two sizes in one transcript read as two documents.
+
+## A tool row is an index, not a transcript
+
+Reported as "tool lines are hard to read i cant parse the important info from
+them". The title is whatever the agent named — a path, a command, a query —
+and drawn whole with `overflow-wrap: anywhere` it wrapped mid-word:
+
+```
+  read  apps/amoeba/src/renderer/highlig
+  hting.tsx
+```
+
+**The information is not evenly spread**, and that is the whole finding. For a
+path it is the **basename**; the directories are where the file happens to
+live. For a command it is the **first line**; a heredoc or an `&&` chain
+continues below. So `toolTitle` splits it and the row spends its width
+accordingly — `lead` muted and allowed to clip, `name` never shrinking:
+
+```
+  read  packages/server/src/probe/thread-…/  create-workspace.test.ts
+        └─ 281 of 470px shown, measured        └─ 202px, all of it
+  ran   jj describe --stdin <<'EOF'   +4 lines
+```
+
+**A path is recognised narrowly: a slash and no whitespace.** `cat src/x.ts` is
+a command that mentions a path, and a naive split at the last slash reports it
+as `ran  x.ts` — the verb thrown away is the one thing that row is about.
+
+**Openable for anything held back, not only for output.** The disclosure used
+to be gated on `output !== ""`, so a twelve-line command drawn as one line had
+eleven lines nothing could reach. The full text is on the tooltip either way,
+which costs no pixels until it is asked for.
+
+### One line each was not enough: a run of them is one block
+
+Reported again as "my tool calls are still hard to look at". Two things were
+still wrong, and neither is about the individual row.
+
+**The subjects did not line up.** `read`, `edited` and `searched` are three
+different widths, so every subject started somewhere else and the eye had no
+edge to run down. The verb is a fixed 4rem column, **right aligned** — that
+puts a clean edge on both sides of it, where left-aligning leaves a ragged gap
+after every short verb.
+
+**And a dozen equal rows are most of the transcript by height and the least of
+it by interest.** `grouped()` merges _consecutive_ `ran` items into one block
+with a rule down its left side, and a long block draws its last four with the
+rest behind a count:
+
+```
+  │ 5 earlier calls
+  │ ✗      ran  bun run typecheck                    12s
+  │ ✓      ran  bun run test
+  │ …      ran  bun install                        1m36s
+  │ ✓      did  an unnamed tool with no kind
+```
+
+Consecutive only: a call after a sentence is a new piece of work, and merging
+across the sentence loses the order things happened in. **A block is keyed by
+its first call**, because a run grows by one on every update and keying it by
+the last would remount every row — throwing away the disclosure state of the
+one somebody just opened. And a block holding a **question** never folds: an
+agent waiting on somebody is not something to hide behind a count.
+
+**`flexShrink: 0` on the subject was wrong for a command.** It is right for a
+path's basename, and a long command is _entirely_ that span — so an
+unshrinkable one ran past the right edge with no ellipsis and no scrollbar to
+say so, measured at 1560px inside an 820px panel. The directories now carry a
+large shrink factor and the name a factor of 1: shrink is shared in proportion
+to base size, so two children that both merely "can shrink" produce a path
+clipped at both ends.
+
+**The style guide draws `Transcript`, not `Row`.** It exported only the row, so
+the page showed a run of calls as a run of paragraphs while the panel drew one
+block — a page that lies about the thing it exists to let somebody criticise.
+
+## Transparent is not a colour, and reading it as one is silent
+
+The style guide's entire job is measuring, and it was confidently wrong in both
+themes for as long as it has existed. Every ink was measured against the _rows
+container_, which has no background of its own:
+
+```
+  getComputedStyle(rows).backgroundColor   "rgba(0, 0, 0, 0)"
+  channels(…)                              [0, 0, 0]      ← black
+```
+
+So the page reported every hue against black. What that looked like:
+
+```
+  before   text 2.63 FAIL   muted 3.43 FAIL   accent 3.44 FAIL   base 1.00 FAIL
+  after    text 7.06 AAA    muted 5.41 AA     accent 5.39 AA     base 6.04 AA
+```
+
+Five `1.00 FAIL` rows and a page of red on a palette that is fine — and the
+numbers were _plausible_, which is what made it survive: an earlier session
+read them as a finding and wrote two of them into this file.
+
+Two halves to the fix, and the first is the one that generalises. **`channels`
+refuses alpha 0** rather than returning three channels for a colour nobody
+painted — a wrong ratio is worse than none, because it sends the reader to
+darken a token that was already right. A _partly_ transparent colour is still
+read by its own channels, which is an approximation and is documented as one;
+alpha 0 is not an approximation of anything.
+
+Second, `groundAbove` walks up from the row to the first thing actually
+painted, and both modes then measure **the word against what is behind it** —
+which is the only pair an eye judges. What differs between ink and ground is
+which half of that pair is the hue, and therefore which hex the row reports.
+
+## Two sets of slash commands, and only one is intercepted
+
+A skill is a slash command, so `/bro` working in the terminal and doing nothing
+in the chat was one dropped update: `available_commands_update`, which this
+daemon threw away under a comment saying it "says nothing a person reads". Both
+updates dismissed that way turned out to matter — the other was the only place
+the context figure exists.
+
+```
+  /new · /mcp   the WINDOW acts. Not expressible as a prompt: sent as text
+                they reach the agent as a sentence about a command
+  /bro · …      delivered as ordinary text, and that is all it takes — the
+                adapter's `promptToClaude` passes `/bro` through to the CLI
+```
+
+So `commandOf` answers **only** the window's two, and `matching` lists both
+sets. Getting that backwards is the failure worth naming: an agent command run
+by the window is a keystroke that clears the box and sends nothing.
+
+Measured against a real adapter — `probe:chat` in a temp directory with no
+`.claude` of its own, so everything came from the machine's:
+
+```
+  commands    54
+    /bro              Restate the last message in plain human language
+    /commit           Create a Conventional Commit message …
+  updates     2 command list(s) — pushed, never asked for
+```
+
+**Pushed, so it is an update and not a call.** The adapter's own comment says
+skills are "discovered dynamically as the agent works in a subdirectory", so a
+client that asked once would be right until the agent learned something. It
+goes through the daemon's transcript like every other update, which is what
+tells a window that opens later without a second call — and the list **replaces**
+rather than merging, so an empty list is an answer.
+
+**`/usage` needed nothing.** Asked as "can we support /usage in chat", and the
+answer is what the two-sets rule buys: the adapter advertises it, so it is in
+the menu, and it is a prompt, so sending it is the whole of supporting it.
+Measured against a real adapter — sent as text, answered as an ordinary agent
+message:
+
+```
+  /usage  →  You are currently using your subscription to power your Claude
+             Code usage
+             Current session: 79% used · resets Sep 9 at 1:40pm
+             Current week (all models): 22% used · resets Sep 11 at 6am
+```
+
+57 commands are advertised on this machine. The one collision worth knowing is
+`/mcp`: the agent has one and so does this window, and the window wins because
+`commandOf` only ever answers its own two. That is the right way round here —
+ours says which server the _daemon_ handed this conversation and where it is
+bound, which is a question about awp rather than about the agent.
+
+**A fresh session now emits an update of its own accord**, and that broke a
+probe check rather than a test: "replayed nothing" counted every update, so a
+working fork reported as having replayed something. `spoken()` counts the
+transcript's own kinds. The general shape is the one worth keeping — _a new
+event on a stream invalidates every assertion that counted the stream._
+
+## Arriving somewhere is not the same as being able to type there
+
+Reported as two sentences and they are two different gaps: "cmd p into thread
+with terminal doesnt get focus", and "even plain chat doesnt get focus when we
+enter thread".
+
+```
+  the pane   focuses itself when it ATTACHES — so arriving at a workspace whose
+             session was already mounted, or switching the face back to the
+             terminal, focused nothing
+  the chat   had no focus call at all. Every arrival needed a click in the box
+             before a key did anything, on the one face that is nothing but
+             typing
+```
+
+So `App` derives a **focus key** — `project/workspace/face/nonce` — and both
+faces focus themselves when it changes. Derived rather than a counter, so there
+is no state to keep in step, and it deliberately does not change when the
+session list refreshes or a job progresses: _focus that moves on its own is
+worse than focus that has to be asked for._
+
+**The nonce is there because closing the switcher is not a move.** Escape
+changes no address, and the keyboard still has to come back to the work. Base
+UI's own restore does not do it — measured at `#/`:
+
+```
+  finalFocus default   after Escape   role null, editable false   ← nothing
+  finalFocus={false}   after Escape   role textbox                ← the pane
+  + the window asks
+```
+
+So the dialog is told never to restore, and the window says where focus goes by
+either route. After a pick the default would have been actively wrong anyway:
+it hands the keyboard back to the thread just left.
+
+**`focus` is read in the effect, not merely watched.** An absent prop is nobody
+having asked, which is what makes the same effect safe on a component a fixture
+also renders — and it is what satisfies react-doctor, which is right to flag an
+effect that ignores its own dependency.
+
+## cmd+P does work from inside the pane, and the tell was elsewhere
+
+Reported as "the claude code traps focus and cant cmd p from in there". Measured
+both in a browser and in the app binary, with focus in the pane's own
+`contenteditable`:
+
+```
+  focus       {"role":"textbox","editable":true}
+  cmd+P       {"dialog":true,"placeholder":"go to a thread"}
+```
+
+The emulator installs its keydown on its own container in the **bubble** phase,
+so a capture listener at `window` is decided first — the same reason cmd+N
+works, recorded above. What was actually wrong was the renderer: the app's own
+log had `Failed to reload /src/renderer/App.tsx` from a casing collision, so the
+window was running a tree with no cmd+P in it. **A shortcut that does nothing is
+a renderer that did not reload, before it is a shortcut that was claimed.**
+
+Two places a chord genuinely cannot arrive, both worth knowing:
+
+- **Inside the web panel.** It is a separate `webContents`, so the keyboard is
+  not this renderer's at all. TODO #127.
+- **A menu item that claims it.** `menu.ts` claims cmd+R, cmd+Q, cmd+W and the
+  Edit items; nothing claims cmd+P or cmd+N, and adding one would take the key
+  before the page ever saw it.
+
+### A debuggable instance restores the remembered place, so `#/` is not enough
+
+The rule above — drive to `#/` before touching anything — is necessary and was
+**not sufficient**, and this cost a real attach: a probe instance came up and
+read `/#/w/thicket/caption-backfill/agent`, which is a session somebody
+else is in.
+
+```
+  main.tsx   restores `amoeba.place` when the hash is "" OR "#/"
+             └─ so setting "#/" from the outside is indistinguishable from
+                the launch state, and the restore is free to run again
+```
+
+A fresh `--user-data-dir` is not the guard either: the profile is empty on the
+first run and the window writes the place into it, so the _second_ run of the
+same harness restores what the first one wandered onto.
+
+What actually holds: clear `amoeba.place` **before the renderer's first load** —
+`Page.addScriptToEvaluateOnNewDocument` and then reload — or point the instance
+at `#/styleguide`, which renders a different screen entirely and cannot attach
+to anything. `#/styleguide` has no window chords on it, so a keyboard test
+needs the first of those two.
+
+## cmd+P, and the first row is where you just were
+
+Asked for exactly: "cmd p, enter flips you back to the last thread". So the
+order is not alphabetical and not newest — it is recency of _visiting_, and the
+default row is the **previous** thread rather than the current one.
+
+```
+  visits   [ current, previous, … ]      what this window has been looking at
+  rows     [ previous, …, everything never opened, current ]
+             └─ cmd+P, Return. The whole gesture being paid for
+```
+
+**The current thread goes last of everything**, and the first attempt had it
+"last among the visited" — which reads as the same rule and is not. With a
+single visit, a freshly opened window, that put the current thread under the
+cursor and made Return a no-op that looks like a broken shortcut. It is still
+in the list, because going where you already are is a thing somebody may choose
+on purpose and a missing row reads as a bug.
+
+**Typing narrows without rescoring.** A query filters the same order rather than
+ranking by match quality, so the row under the cursor does not move while
+somebody is typing towards it. And the match is a substring rather than fuzzy: a
+thread title is a sentence somebody wrote, so the letters they remember are in
+it, in order.
+
+**The history is this window's, in localStorage**, for the reason that file
+states: two windows on one machine should be able to have been looking at
+different work. Read on every thread change rather than only at mount — it is
+the truth, another window may have written it, and a thread change is rare.
+
+The switcher navigates to `/t/<id>` rather than to a workspace, so the
+resolution rule stays in the one place that already has it: `App` swaps a thread
+address for the thread's first checkout, with `replace`.
+
+## One native view per slot, because a duplicate arrives by many routes
+
+Reported as "a slim styleguide web view hanging out over the left pane" and,
+separately, the styleguide "replicating" when devtools opened. Both are the
+orphan shape recorded above — a `WebContentsView` the compositor still draws and
+nothing in the renderer holds a handle to — reached by two routes no guard on
+the renderer's side covers.
+
+The first one's cause is in the app's own log, and it is this repository's
+occupational hazard:
+
+```
+  [renderer] [vite] SyntaxError: The requested module '/src/renderer/Switcher.ts'
+             does not provide an export named 'Switcher'
+  [renderer] [vite] Failed to reload /src/renderer/App.tsx
+```
+
+A `Switcher.tsx` beside a `switcher.ts` **is one module on a case-insensitive
+filesystem**, so the import resolved to the wrong file, the hot reload could not
+be applied, and the tree went stale — which is exactly the state that leaves the
+web panel mounted over everything. (`tsc` says so plainly: _"differs from
+already included file name … only in casing"_. The pure module is `switching.ts`
+now.)
+
+Two repairs, and the second is the one to copy:
+
+- **A window's views are dropped when its renderer navigates.** A reload
+  destroys the element that owned the view without React cleanup ever running,
+  so the renderer comes back with no reference to something still being drawn.
+  Only the main process still has a handle, so it is the process that has to
+  notice — `did-start-navigation` on the main frame, guarded on
+  `isSameDocument` because the window is on a **hash history** and every route
+  change is a same-document navigation.
+- **`create` takes a `key`, and there is one view per (window, key).** A rule
+  about how many there may be covers every route at once; a guard per route
+  covers one. Every duplicate this panel has produced — StrictMode's mount
+  rehearsal, a stale tree, devtools opening — was a view nothing in the
+  renderer could reach, and the slot rule takes it down on the next create
+  without anything having to ask.
 
 ## The inbox is a list of pull requests, not of workspaces
 
@@ -3652,6 +4471,28 @@ next run:
   graph TD; A-->B; B-->C;        block swallowed the next
 ```````
 
+**`File` renders nothing, and `CodeView` renders the same file.** The
+highlighted case was `<File file={…}>`, which is the component the library
+documents for exactly this — one file, no diff. It mounts, builds its shadow
+root, and draws no rows at all:
+
+```
+  pre                939 x 0, and empty
+  diffs-container    <svg data-icon-sprite> and nothing else
+  console            []
+```
+
+So **a fenced code block in a message had been invisible since it was
+written**, and nothing said so — the message around it rendered, so what a
+person saw was an agent that mentioned code and showed none. `CodeView` with a
+single `type: "file"` item is the same renderer with a coordinator in front of
+it, and it is the path the diff panel drives all day: the one known to work in
+this window rather than the one that reads best in the library's README.
+
+It was found by the style guide's **fake transcript**, which is what that
+fixture is for — the state was otherwise reachable only by waiting for a live
+agent to answer with a fenced block, and then it looks like the agent's doing.
+
 **Count tokens inside the shadow root.** `File` and `CodeView` render into one,
 so `el.querySelectorAll("pre span")` is 0 in a window where highlighting is
 working perfectly — the same trap already recorded for Playwright. Walk
@@ -3728,6 +4569,223 @@ synthetic `Range` proves nothing here, and it lied twice: once because a
 focused textarea owns the selection, and once because `selectAllChildren` on a
 row returned an empty string. Both times the control fell back to quoting the
 whole item and looked like it worked.
+
+## The page is a place both sides can move
+
+The web panel's address was the window's alone: typed into a box, kept per
+thread in localStorage, reachable by nothing else. That rules out the ordinary
+request — "open the failing build" — being answered by the half of the
+conversation holding the URL.
+
+```
+  agent ──awp_browse{url}──▶ mcp-main ──PageOpen{from,url}──▶ daemon
+                                                               │ dir → pair → thread
+  window ◀──────────── PageChanges{thread,url,at} ─────────────┘
+```
+
+**The daemon resolves the thread; the caller has a directory.** Same binding as
+every other agent-facing call — `from` and no thread parameter — so a
+conversation cannot move a page beside somebody else's work. A workspace no
+thread claims gets the absent-thread bucket the panel already keeps for one,
+because most checkouts on this machine predate threads.
+
+**A stream, and nothing is replayed.** A navigation is an _event_, so `Pages`
+holds a `PubSub` rather than the `SubscriptionRef` `WorkspaceState` uses:
+replaying the last one to a window that has just connected would move the page
+somebody is reading, for a request answered before they opened the window.
+`pages.test.ts` asserts the silence, and asserts it with a timeout rather than
+an interrupt — a check that cannot fail reads as a pass.
+
+**`at` is on the wire because asking for the page already showing means
+reload.** Two value-equal urls are otherwise one event, and the window cannot
+tell a second ask from no ask at all. `Web.tsx` acts on `at`, and the
+last-acted value is **module scope**: the panel is unmounted on every tab
+switch, so a ref would be reset and the newest request — still sitting in the
+atom, unchanged — would be acted on again, which is the page reloading every
+time somebody opens the tab.
+
+**The subscription is above the panel, and that is the whole of `usePages.ts`.**
+Base UI unmounts a hidden tab, so a subscription owned by the web panel is not
+there precisely when it is needed: the moment an agent has something to show is
+the moment somebody is reading the diff. `App` calls `usePageWatch()`; the
+panel reads the atom. Measured, on `#/` — which mounts no web panel at all:
+
+```
+  PageOpen  →  {"thread":"20260826-ck22","url":"https://example.invalid/build/412", …}
+  before       amoeba.page  null
+  after        amoeba.page  {"20260826-ck22":"https://example.invalid/build/412"}
+```
+
+**The daemon refuses a url; the address bar guesses at one.** `addressFor` turns
+`localhost:5173` into a URL and prose into a search, which is right for a person
+watching the result and wrong for a call nobody is watching — a mistyped path
+becoming a search reports success for a navigation to a search engine. Two
+schemes only, and `file://` is the one worth naming as excluded: the panel is a
+real browser view with a preload in it.
+
+`probe:mcp` drives the _refusal_ rather than a navigation, deliberately: the
+success path moves the panel of the thread this repository is in, which is a
+panel somebody has open. Same shape as `probe:workspace` guarding on `ours()` —
+a guard on the property that matters beats a blanket refusal, and it keeps the
+check runnable.
+
+## The style guide measures rather than asserting
+
+`#/styleguide` — every colour, every type step and every recurring control on
+one page, with nothing else on it. Colour is judged against its neighbours, so a
+palette drawn beside a terminal and somebody's diff is a palette judged against
+those; and half the tokens have no state that reliably produces them (`asked`
+needs a review request, `dirty` needs a rollback to fail), so the hues most in
+need of looking at were the hardest to see.
+
+**Three sections, and no subtext anywhere.** Colors, typography, components —
+plus a chat, which is the fourth because it is the newest rendering in the
+window. The rule that produced this shape is worth keeping: _if a section needs
+a caption to explain it, the title is wrong._ Every caption is gone; what is
+left is a heading, a specimen's own name, and the numbers.
+
+```
+  colors      a row per hue: the block, the name in it, a pangram, the hex,
+              the ratio · grounds are filled rows, ink is drawn on surface
+  typography  the two families, then the scale, in a mono gutter
+  chat        a fixture transcript — every item shape, no agent behind it
+  components  a gallery, one bordered cell per specimen
+```
+
+**The candidates group is how a palette gets decided.** A hue offered for the
+window goes on the page beside the tokens it would displace, measured against
+the ground it would live on — not on a swatch site's white card. `channels`
+reads a hex as well as an `rgb()` for that reason: a candidate and a terminal
+slot are literals, and they still have to be measured.
+
+**The composer is a component because the style guide draws it.** It was 170
+lines inside `Chat.tsx`'s panel; it is `Composer.tsx` now, and what stayed
+behind is everything with a consequence — what a message does, what a command
+does, what an option change tells the daemon. The same argument as `Row`: a
+composer copied onto that page is a copy that drifts, and then the page is a
+picture of the window rather than the window.
+
+**The tool-call group is a set to compare, not a transcript.** `verb` turns a
+`toolKind` into a word and `status` into a mark, and the fixture holds one of
+each: read · edited · searched · a failure with its output open · a completed
+call whose output is collapsed · an in-progress call past ten seconds · a call
+with no kind at all (`did`) · and a permission with no call above it. Two of
+those are states a live agent produces rarely and a fixture produces on demand.
+
+Worth knowing while reading it: **a completed call's output is collapsed and a
+failed one's is open** — `useState(item.status === "failed")`, and the title is
+the disclosure. That is deliberate: a successful `cat` is noise, and a failure
+is the one output somebody wants without asking.
+
+**The chat fixture is not a picture of a chat.** It imports the panel's own
+`Row`, so it cannot drift — and its pair is a workspace that does not exist,
+so pressing `Allow Once` refuses, which is the honest answer. It found a real
+bug on its first render: see the fence note above.
+
+**It is a visual guide, so there is almost no text on it.** The first version
+carried the argument for each decision onto the page, and was reported back as
+"awful — why is there so many paragraphs of text". Measured:
+
+```
+  before   678 words · 9 paragraphs of 15–67 words
+  after    179 words · one paragraph, which is the markdown specimen's own
+```
+
+Somebody opening this is comparing hues and spacing, and prose is the thing they
+read past to do it. What is left is a heading per section, a caption of a few
+words where a section would otherwise be ambiguous, and the specimens; anything
+a person might want in words is a `title`, which costs no pixels until asked
+for. The reasoning lives here and in that file's comments.
+
+**A route with a hand-made branch in `App`, not a panel in the accessory
+strip.** The panels are about the work; a page of swatches is about the
+application, and in the strip it would be a permanent empty room in the column
+somebody switches most. The route tree renders no `Outlet`, so a child route's
+component would never draw — `App` reads the location and picks between
+`StyleGuide` and `Window`, above every one of the window's hooks. `STYLE_GUIDE`
+lives in `address.ts` because `routes.ts` names `App`, and `import/no-cycle` is
+on repo-wide.
+
+**Every ratio is computed off `getComputedStyle` on the swatch that was
+painted.** A token can be right and the rule applying it wrong, and the numbers
+in this file's Latte section went into a comment that nothing keeps true. The
+page cannot go stale: change a token and the verdicts move with it.
+
+**Ink and ground are different measurements, and the first version only had
+one.** Each is a tile that reports the hex it painted and the ratio that
+measured — and a hue is either written in or written on:
+
+```
+  ink      the word in the hue, on the panel's surface     live · muted · warn
+  ground   the row in the hue, the word in `text`          raised · page · border
+```
+
+Drawing every role as ink measured `surface` against `surface` and reported
+`1.00 FAIL` for five rows that are fine. The probe caught it, and the number was
+real — it was the answer to a question nobody asks.
+
+Two findings from the first honest run, both against `surface`:
+
+```
+  macchiato  muted    4.14  FAIL   ← under AA. This file's own table has it at
+                                     2.60 against base, so it is worse there
+  latte      border   4.39  FAIL   ← text on a SELECTED row just misses AA
+```
+
+Neither is a bug in the page. `muted` is a subtitle colour and `border` is the
+fill behind the selected row, so both carry real words.
+
+## Two slash commands, and they are the window's
+
+`/new` and `/mcp` in the chat composer. Claude Code has its own slash commands
+and the adapter advertises them — `available_commands_update`, which `chat.ts`
+drops — and these are not those: neither is expressible as a prompt, and sent as
+text they reach the agent as a sentence _about_ a command, which the agent then
+answers.
+
+**Intercepted on an exact match of the whole draft.** `/new` is a command and
+`/tmp/build.log is missing` is a message about a path; a prefix match eats the
+second. There is no escape syntax because there is nothing to escape. The menu
+appears only while the draft is a bare `/word`, for the same reason.
+
+**`/new` is not a fork and not a reload.** `ChatFork` copies the conversation
+the _terminal_ is having; this forgets the one the chat is having — the stored
+session id goes, the adapter holding it is invalidated, and the next open is a
+`session/new`. Nothing is deleted: the transcript is on disk and still loadable,
+it simply is not this workspace's any more. The three steps are the same shape
+as `openTerminal`'s, and the order matters — invalidate, then forget, then
+acquire eagerly so a refusal lands on the keypress.
+
+**`/mcp` says which half it knows.** The daemon hands every conversation an MCP
+server on every open, so what it knows for certain is _what it handed over_.
+Whether the agent's own client accepted the handshake is not something ACP
+reports and there is no call that asks — so the panel says so in a sentence
+rather than drawing a tick that would be a guess. An agent that never connected
+otherwise looks exactly like one that was never asked to use a tool.
+
+The two fields worth being on screen, and `McpStatus` is composed from the same
+functions `chat.ts` passes rather than from a description of them:
+
+```
+  cwd   the whole of the server's scope — no tool takes a workspace argument,
+        so this path is WHY a conversation cannot reach another checkout
+  url   which daemon the spawned server talks to. A second instance's agents
+        reaching the instance somebody is working in is a real failure with
+        nothing else on screen to show it
+```
+
+Read against a branch daemon, which is the case that field exists for:
+
+```
+  url    ws://127.0.0.1:5284
+  cwd    /Users/…/.awp/workspaces/awp/awp-kit-amoeba
+  tools  awp_thread · awp_review_comments · awp_file_finding · awp_browse ·
+         awp_tasks · awp_task
+```
+
+Descriptions are cut to their first sentence. A tool description is written for
+a model choosing between tools and is a paragraph; a person scanning a list
+reads none of it.
 
 ## Never write a real name down
 
@@ -3923,6 +4981,42 @@ curl -s http://127.0.0.1:5283/src/renderer/daemon.ts | head -1
 That line is the whole check, and it is the same shape as every other silent
 failure in this file: read what the other process received, not what was handed
 to it.
+
+## Running the app under zmx: two sessions, because one of them does not block
+
+`bun run amoeba` is `dev:all`, which is `vite --clearScreen false & bun run
+dev`. The `&` is the problem: the script returns as soon as it has forked Vite,
+so under `zmx run` the **task completes** — and the session's shell reaps what
+the task left behind. Vite dies, Electron survives with nothing to load, and
+the window is black.
+
+```
+  zmx history awp-dev-app
+    VITE v8.2.2  ready in 187 ms
+    ➜  Local:   http://127.0.0.1:5273/
+    Done in 361 ms
+    ZMX_TASK_COMPLETED:0        ← the task is over; the dev server goes with it
+```
+
+It cost a black window twice before the log was read. A zmx task has to be
+something that blocks for as long as the thing is meant to run, so the two
+halves are two sessions:
+
+```
+  awp-dev-daemon   env -u ZMX_SESSION bun run daemon
+  awp-dev-vite     cd apps/amoeba && exec bunx vite --port 5273 --strictPort
+  awp-dev-app      cd apps/amoeba && bun run build:electron &&
+                   AMOEBA_DEV_SERVER=http://127.0.0.1:5273 exec electron .
+```
+
+`--strictPort` for the reason the second-instance note gives: a Vite that
+quietly moved to the next free port leaves the window loading whatever is on
+5273, which may be a Vite nobody is watching. `exec` so the session's process
+_is_ the server rather than a shell holding one — otherwise the same reaping
+happens one level down.
+
+And `env -u ZMX_SESSION` on the daemon only. The daemon spawns `zmx attach`; a
+Vite and an Electron do not.
 
 ## Working here
 

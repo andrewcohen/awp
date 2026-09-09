@@ -5,6 +5,7 @@ import * as stylex from "@stylexjs/stylex";
 import { useEffect, useState } from "react";
 import { XIcon } from "@phosphor-icons/react/X";
 import { forgetProject, importProject, projectCandidates, said } from "./daemon";
+import { typeset } from "./typeset";
 import { colors, text } from "./tokens.stylex";
 
 // Telling awp about a repository.
@@ -109,8 +110,6 @@ const styles = stylex.create({
     color: colors.muted,
     // A path, so monospace — it is the thing that tells two repositories of
     // the same name apart, and it is the thing somebody will type elsewhere.
-    fontFamily: text.mono,
-    fontSize: text.small,
     textAlign: "end",
   },
 
@@ -253,7 +252,7 @@ export function ImportProject({
               <div key={one.root} {...stylex.props(styles.candidate, styles.mine)}>
                 <FolderIcon size={11} />
                 <span>{one.name}</span>
-                <span {...stylex.props(styles.where)}>{one.root}</span>
+                <span {...stylex.props(typeset.address, styles.where)}>{one.root}</span>
                 <button
                   type="button"
                   data-nav-item
@@ -285,7 +284,7 @@ export function ImportProject({
               >
                 <FolderIcon size={11} />
                 <span>{one.name}</span>
-                <span {...stylex.props(styles.where)}>{one.root}</span>
+                <span {...stylex.props(typeset.address, styles.where)}>{one.root}</span>
               </button>
             ))}
           </div>

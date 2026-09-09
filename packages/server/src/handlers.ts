@@ -49,6 +49,8 @@ import { createWorkspaceRef, workspacePath } from "./jobs/create-workspace";
 import { Settings, agentWith } from "./settings";
 import { localBookmarks } from "./jj-parse";
 import { identityLabels, sessionName } from "./naming";
+import { TOOLS, daemonUrl, mcpEntry, serverSpec } from "./mcp";
+import { Pages } from "./pages";
 import { Projects, discover, expand, nearestRepo } from "./projects";
 import { Reviews, commentId } from "./reviews";
 import { WorkspaceState } from "./workspace-state";
@@ -371,6 +373,23 @@ export const factsWith = (
   ];
 };
 
+/**
+ * The first sentence of a tool's description.
+ *
+ * A tool description is written for a model choosing between tools, so it is a
+ * paragraph and says the unguessable things twice. A person asking `/mcp` is
+ * scanning a list, and a paragraph per row is a list nobody reads to the end.
+ *
+ * Cut at the first full stop followed by a space, so an abbreviation or a
+ * `path:12` inside the sentence does not truncate it. A description with no
+ * such break is returned whole rather than cut at a length — a sentence
+ * ending mid-word reads as a bug in the panel.
+ */
+const firstSentence = (said: string): string => {
+  const at = said.indexOf(". ");
+  return at === -1 ? said : said.slice(0, at + 1);
+};
+
 const workspaceOf = (bookmark: string, prefix: string | undefined): string | undefined =>
   prefix !== undefined && bookmark.startsWith(`${prefix}/`)
     ? bookmark.slice(prefix.length + 1)
@@ -390,6 +409,7 @@ export const layer = AwpRpcs.toLayer(
     const jj = yield* Jj;
     const chat = yield* Chat;
     const tasks = yield* Tasks;
+    const pages = yield* Pages;
     // Taken once, here, rather than per request. A handler's return value has
     // to name no requirements — the rpc layer is what settles them — so the
     // watcher's file system is closed over instead of being asked for inside
@@ -827,6 +847,49 @@ export const layer = AwpRpcs.toLayer(
         chat
           .openTerminal(project, workspace)
           .pipe(Effect.mapError((error) => new ChatUnavailable({ reason: error.reason }))),
+
+      ChatFresh: ({ project, workspace }) =>
+        chat
+          .fresh(project, workspace)
+          .pipe(Effect.mapError((error) => new ChatUnavailable({ reason: error.reason }))),
+
+      /**
+       * What the conversation in this workspace is handed, as it is handed.
+       *
+       * Composed from the same two functions `chat.ts` calls when it opens a
+       * session — `serverSpec` over `mcpEntry()` and `daemonUrl()` — rather
+       * than from a description of them. A second spelling of the same spec is
+       * a second thing to keep true, and the field most worth being right is
+       * the url: a second instance's agents reaching the first instance is a
+       * failure with nothing on screen to show it.
+       *
+       * The tool list is `TOOLS`, which is what the server answers
+       * `tools/list` with. Descriptions are cut to their first sentence — the
+       * whole one is written for a model to choose by, and is a paragraph.
+       */
+      McpStatus: ({ project, workspace }) =>
+        Effect.sync(() => {
+          const spec = serverSpec({
+            entry: mcpEntry(),
+            cwd: workspacePath(project, workspace),
+            url: daemonUrl(),
+          });
+          // Named rather than spread. The spec also carries `env`, which is
+          // the list of one that hands the daemon's url to the child — and
+          // that value is already on the wire as `url`, spelled the way a
+          // person would read it rather than as an ACP `McpServer` field.
+          return {
+            name: spec.name,
+            command: spec.command,
+            args: spec.args,
+            cwd: spec.cwd,
+            url: daemonUrl(),
+            tools: TOOLS.map((tool) => ({
+              name: tool.name,
+              description: firstSentence(tool.description),
+            })),
+          };
+        }),
 
       ChatAnswer: ({ project, workspace, request, option }) =>
         chat
@@ -1847,6 +1910,38 @@ export const layer = AwpRpcs.toLayer(
        * gets `parent: undefined`. That is the honest reading: the claim was
        * made, and the thing it pointed at is gone.
        */
+      /**
+       * Point the web panel at a page, from the workspace that asked.
+       *
+       * ── the thread is resolved here, and it has to be ──────────────────
+       *
+       * The panel keys its page by thread; the caller has a directory. Only
+       * this process holds both halves — the workspaces convention that turns
+       * a directory into a pair, and the thread table that says which piece of
+       * work claims it — which is the same argument as `SessionIdentity` being
+       * on the wire rather than re-derived by a client.
+       *
+       * A workspace no thread claims is not a refusal. It gets the same
+       * absent-thread bucket the window keeps for one, because most checkouts
+       * on a real machine predate threads and refusing there would refuse the
+       * ordinary case.
+       */
+      PageOpen: ({ from, url }) =>
+        Effect.gen(function* () {
+          const at = yield* workspaceAt(from);
+          const all = yield* threads.list().pipe(Effect.orDie);
+          const holding = all.find(
+            (thread) =>
+              thread.archivedAt === undefined &&
+              thread.members.some(
+                (member) => member.project === at.project && member.workspace === at.workspace,
+              ),
+          );
+          return yield* pages.open(holding?.id, url);
+        }),
+
+      PageChanges: () => pages.changes(),
+
       ThreadAt: ({ from }) =>
         Effect.gen(function* () {
           const at = yield* workspaceAt(from);

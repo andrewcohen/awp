@@ -124,11 +124,84 @@ describe("settings", () => {
 
 const config = (agent: ReadonlyArray<string>): AwpSettings => ({ ...DEFAULTS, agent });
 
+describe("the system defaults", () => {
+  test("model, effort and mode are read as their own block", async () => {
+    const found = await read(
+      withFile(`{
+        "agent": "claude",
+        "defaults": { "model": "opus", "effort": "medium", "mode": "auto" }
+      }`),
+    );
+
+    expect(found.model).toBe("opus");
+    expect(found.effort).toBe("medium");
+    expect(found.mode).toBe("auto");
+  });
+
+  test("a key emptied rather than deleted means nothing set", async () => {
+    // `--model ""` on a command line is a refusal several steps later, and an
+    // empty string handed to the adapter's config option is the same shape.
+    const found = await read(withFile('{"defaults":{"model":"  ","effort":"","mode":"auto"}}'));
+
+    expect(found.model).toBeUndefined();
+    expect(found.effort).toBeUndefined();
+    expect(found.mode).toBe("auto");
+  });
+
+  test("no block at all leaves each face where it was", async () => {
+    // Absent is a real answer: the terminal keeps whatever its `agent` line
+    // says, and the chat stays in Manual. Defaulting `mode` to `auto` here
+    // would opt somebody out of being asked without them writing it down.
+    const found = await read(withFile('{"agent":"claude"}'));
+
+    expect(found.model).toBeUndefined();
+    expect(found.effort).toBeUndefined();
+    expect(found.mode).toBeUndefined();
+  });
+});
+
 describe("agentWith", () => {
   test("chooses nothing, and the config is untouched", () => {
     const argv = ["claude", "--permission-mode", "auto", "--model", "opus"];
     expect(agentWith(config(argv), {})).toEqual(argv);
     expect(agentWith(config(argv), { model: undefined, effort: undefined })).toEqual(argv);
+  });
+
+  test("the defaults block reaches the argv, and the modal still wins", () => {
+    // Three layers: the `agent` line, then `defaults` over it, then the
+    // modal's choice over both. "From settings" is choosing nothing, which is
+    // why an undefined choice has to leave the middle layer standing.
+    const withDefaults: AwpSettings = {
+      ...DEFAULTS,
+      agent: ["claude"],
+      model: "opus",
+      effort: "medium",
+      mode: "auto",
+    };
+
+    expect(agentWith(withDefaults, {})).toEqual([
+      "claude",
+      "--permission-mode",
+      "auto",
+      "--model",
+      "opus",
+      "--effort",
+      "medium",
+    ]);
+    expect(agentWith(withDefaults, { model: "sonnet" })).toContain("sonnet");
+    expect(agentWith(withDefaults, { model: "sonnet" })).not.toContain("opus");
+  });
+
+  test("the defaults block wins over a model spelled on the agent line", () => {
+    // A file that names a model in two places contradicts itself, and the
+    // block is the newer and clearer half. Last-wins on the CLI is a rule
+    // nothing here should depend on.
+    const both: AwpSettings = {
+      ...DEFAULTS,
+      agent: ["claude", "--model", "haiku"],
+      model: "opus",
+    };
+    expect(agentWith(both, {})).toEqual(["claude", "--model", "opus"]);
   });
 
   test("replaces a model the config already chose, rather than following it", () => {

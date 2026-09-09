@@ -2,6 +2,7 @@ import * as stylex from "@stylexjs/stylex";
 import { Fence } from "./Fence";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { typeset } from "./typeset";
 import { colors, text } from "./tokens.stylex";
 
 // Markdown, for text this window did not write.
@@ -36,6 +37,19 @@ import { colors, text } from "./tokens.stylex";
 const styles = stylex.create({
   // The block itself sets the reading measure and nothing else.
   root: { fontSize: text.small, lineHeight: 1.55, overflowWrap: "break-word" },
+  /**
+   * The chat transcript's size, which is not the PR panel's.
+   *
+   * Reported as "the chat font is generally a little too small … maybe the
+   * line spacing could breathe slightly", with the follow-up that it should
+   * not get heavier. So: one step up the scale and a looser line, and nothing
+   * about weight — a heavier face at the same size reads as louder rather than
+   * as clearer, and this surface is read for minutes at a time.
+   *
+   * A prop rather than a change to `root`, because the same component draws a
+   * pull request body in a 280px column, where 14px is right.
+   */
+  reading: { fontSize: text.lead, lineHeight: 1.7 },
   p: { marginBlock: "0.5rem" },
   // Headings step down by weight rather than by size: the type floor is 14px
   // and a PR body's `####` would otherwise land under it. See AGENTS.md.
@@ -49,8 +63,6 @@ const styles = stylex.create({
     padding: "0.05rem 0.2rem",
     backgroundColor: colors.raised,
     borderRadius: "0.15rem",
-    fontFamily: text.mono,
-    fontSize: text.small,
   },
   // Inside a `pre`, the code element must not paint its own chip.
   bare: { padding: 0, backgroundColor: "transparent" },
@@ -140,7 +152,9 @@ const components: Components = {
     // `className` is how react-markdown marks a fenced block's language,
     // and its absence is what distinguishes inline code from a block —
     // the block's own `pre` already carries the padding and the ground.
-    <code {...stylex.props(styles.code, props.className !== undefined && styles.bare)}>
+    <code
+      {...stylex.props(typeset.address, styles.code, props.className !== undefined && styles.bare)}
+    >
       {props.children}
     </code>
   ),
@@ -160,9 +174,16 @@ const components: Components = {
   ),
 };
 
-export function Markdown({ children }: { readonly children: string }) {
+export function Markdown({
+  children,
+  reading,
+}: {
+  readonly children: string;
+  /** Set on a surface somebody reads rather than scans. See `styles.reading`. */
+  readonly reading?: boolean;
+}) {
   return (
-    <div {...stylex.props(styles.root)}>
+    <div {...stylex.props(styles.root, reading === true && styles.reading)}>
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
         {children}
       </ReactMarkdown>

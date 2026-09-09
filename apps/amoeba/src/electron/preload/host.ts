@@ -25,10 +25,16 @@ import { CH, type Rect, type WebviewMethod } from "../channels";
 // that keeps answering.
 
 export interface HostBridge {
-  readonly createWebview: (options: { readonly url?: string | undefined }) => Promise<number>;
+  readonly createWebview: (options: {
+    readonly url?: string | undefined;
+    /** Which slot in this window it is. One view per (window, key). */
+    readonly key?: string | undefined;
+  }) => Promise<number>;
   readonly destroyWebview: (id: number) => void;
   readonly setWebviewBounds: (id: number, rect: Rect) => void;
   readonly callWebview: (id: number, method: WebviewMethod, argument?: unknown) => void;
+  /** Put the keyboard back in this window's web contents. See CH.focus. */
+  readonly focusWindow: () => void;
   /** Every event from every view. Answers with the way to stop listening. */
   readonly onWebviewEvent: (
     listener: (message: {
@@ -44,6 +50,7 @@ const bridge: HostBridge = {
   destroyWebview: (id) => ipcRenderer.send(CH.destroy, id),
   setWebviewBounds: (id, rect) => ipcRenderer.send(CH.bounds, id, rect),
   callWebview: (id, method, argument) => ipcRenderer.send(CH.call, id, method, argument),
+  focusWindow: () => ipcRenderer.send(CH.focus),
   onWebviewEvent: (listener) => {
     const on = (
       _event: unknown,

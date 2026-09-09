@@ -164,7 +164,7 @@ export interface Reply {
 }
 
 /**
- * What the server needs from the daemon, as three questions and one act.
+ * What the server needs from the daemon, as questions and two acts.
  *
  * An interface rather than the rpc client, so the dispatch can be tested
  * against answers written by hand — including the refusals, which are the half
@@ -190,6 +190,10 @@ export interface Daemon {
   readonly threadAt: (from: string) => Effect.Effect<ThreadHere, Refusal>;
   readonly commentsAt: (from: string) => Effect.Effect<ReadonlyArray<ReviewComment>, Refusal>;
   readonly file: (finding: Finding) => Effect.Effect<{ readonly where: string }, Refusal>;
+  readonly browse: (
+    from: string,
+    url: string,
+  ) => Effect.Effect<{ readonly thread: string | undefined; readonly url: string }, Refusal>;
   readonly board: (filter: {
     readonly tags?: ReadonlyArray<string>;
     readonly statuses?: ReadonlyArray<string>;
@@ -275,6 +279,28 @@ export const TOOLS = [
         },
       },
       required: ["path", "line", "body"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "awp_browse",
+    description:
+      "Point the web panel beside this workspace at a page, so a person can see what you " +
+      "are talking about instead of copying a link out of a message. Use it for the thing " +
+      "under discussion — the failing build, the pull request, the docs page whose wording " +
+      "is the argument — not for pages you are reading yourself; a fetch is cheaper and " +
+      "nobody has to look at it. " +
+      "The url must be absolute, http or https. Scoped to the workspace this server runs " +
+      "in, and the panel is shared by every checkout of the same piece of work.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        url: {
+          type: "string",
+          description: "Absolute, with a scheme: https://example.com/build/412",
+        },
+      },
+      required: ["url"],
       additionalProperties: false,
     },
   },
@@ -555,6 +581,26 @@ export const answer = (
                 ? said(`no task called ${wanted} — awp_tasks lists them`, true)
                 : said(taskSaid(one)),
             );
+          }
+
+          case "awp_browse": {
+            const url = text(args, "url");
+            if (url === undefined) {
+              return reply(said("awp_browse needs a url", true));
+            }
+            const went = yield* Effect.result(daemon.browse(cwd, url));
+            if (!Result.isSuccess(went)) {
+              return reply(said(went.failure.reason, true));
+            }
+            // What the panel now shows, and *whose* panel it is. The second
+            // half is the part a model cannot work out: the page belongs to
+            // the thread rather than to this checkout, so an agent that has
+            // just moved it has moved what a sibling checkout shows too.
+            const where =
+              went.success.thread === undefined
+                ? "this workspace's web panel"
+                : "the web panel for this thread";
+            return reply(said(`${where} is now showing ${went.success.url}`));
           }
 
           case "awp_file_finding": {

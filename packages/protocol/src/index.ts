@@ -975,6 +975,111 @@ export const PageNote = Schema.Struct({
 
 export type PageNote = (typeof PageNote)["Type"];
 
+// ── the page beside the agent, as something either side can move ───────────
+//
+// The web panel's address was the window's alone: typed into a box, remembered
+// per thread in localStorage, and reachable by nothing else. What that ruled
+// out is the ordinary request — "open the failing build" — being answered by
+// the agent that is looking at it, which is the direction `mcp.ts` exists to
+// open.
+//
+// So a page is on the contract. Two calls, and the split is the one this file
+// already draws twice:
+//
+//   PageOpen      an act. Somebody — a person or an agent — says where to go
+//   PageChanges   a stream, because the OTHER side has to hear about it. An
+//                 agent navigating is exactly the change a window that only
+//                 asked would miss
+//
+// Keyed by **thread** and not by workspace, because that is what the panel is
+// keyed by: a thread is a piece of work and the page beside it is part of that
+// work — the ticket, the preview, the failing build — so two checkouts of one
+// thread share a page and two threads do not.
+
+/** A page the panel should be showing, and which thread it belongs to. */
+export const Page = Schema.Struct({
+  /**
+   * The thread the page belongs to, or nothing when no thread claims the
+   * workspace it was set from.
+   *
+   * Absent rather than a placeholder id, and the window's own bucket for
+   * unclaimed workspaces is the same absence — see `Web.tsx`. Most checkouts
+   * on a real machine predate threads, so refusing to carry a page for them
+   * would refuse the ordinary case.
+   */
+  thread: Schema.optional(Schema.String),
+  /** Where to go. Absolute, http or https — see {@link PageRefused}. */
+  url: Schema.String,
+  /**
+   * When it was set, as epoch milliseconds.
+   *
+   * On the wire because the window needs to tell one navigation from the next:
+   * an agent that asks for the page it is already on has said something, and a
+   * value-equal event would be indistinguishable from no event at all.
+   */
+  at: Schema.Number,
+});
+
+export type Page = (typeof Page)["Type"];
+
+/**
+ * The url was not one this panel can be sent to.
+ *
+ * A refusal rather than a guess. The window's own address bar guesses — a bare
+ * host gets a scheme, prose becomes a search — because a person is watching
+ * what happens and can retype it. An agent is not watching, and a call that
+ * quietly turned a mistyped path into a search would report success for a
+ * navigation to a search engine.
+ */
+export class PageRefused extends Schema.TaggedError<PageRefused>()("PageRefused", {
+  reason: Schema.String,
+}) {}
+
+// ── what a conversation was handed ─────────────────────────────────────────
+//
+// `/mcp` in the chat asks what tools the agent on the other end has, and the
+// honest answer is narrower than the question. The daemon hands every
+// conversation an MCP server on `session/new`, `session/load` and
+// `session/fork` — see `chat.ts` — so what it knows for certain is *what it
+// handed over*. Whether the agent's own MCP client accepted the handshake and
+// listed the tools is not something ACP reports back, and this does not
+// pretend otherwise: the window says which half it is showing.
+
+export const McpTool = Schema.Struct({
+  name: Schema.String,
+  /** The first sentence of it. A model reads the whole one; a person does not. */
+  description: Schema.String,
+});
+
+export type McpTool = (typeof McpTool)["Type"];
+
+/**
+ * The server this workspace's conversation is given, as it was given.
+ *
+ * Every field is what was actually passed — `process.execPath` rather than
+ * "bun", the workspace directory rather than the repository, and the daemon url
+ * the spawned process is told to talk to. That last one is the field worth
+ * having on screen: a second instance's agents must reach the second instance,
+ * and the way that goes wrong is silently.
+ */
+export const McpStatus = Schema.Struct({
+  name: Schema.String,
+  command: Schema.String,
+  args: Schema.Array(Schema.String),
+  /**
+   * The directory the server is bound to, which is the whole of its scope.
+   *
+   * No tool takes a workspace argument, so this path is the reason a
+   * conversation cannot reach another checkout. Shown for that reason: it is
+   * the sentence "what can this agent touch", as a value.
+   */
+  cwd: Schema.String,
+  url: Schema.String,
+  tools: Schema.Array(McpTool),
+});
+
+export type McpStatus = (typeof McpStatus)["Type"];
+
 /** No session to tell. A workspace whose agent has ended, or never started. */
 export class NoAgent extends Schema.TaggedError<NoAgent>()("NoAgent", {
   project: Schema.String,
@@ -1619,6 +1724,28 @@ export const ChatRole = Schema.Literals(["user", "agent", "thought"]);
 
 export type ChatRole = (typeof ChatRole)["Type"];
 
+/**
+ * One of the agent's own slash commands, as it advertises them.
+ *
+ * A skill is one of these. Claude Code discovers commands from the project,
+ * from `~/.claude` and dynamically as it works, and `available_commands_update`
+ * is how it says so — a list this daemon used to drop.
+ *
+ * **Not the window's commands.** `/new` and `/mcp` are things amoeba does and
+ * are intercepted before anything is sent; one of these is delivered as
+ * ordinary prompt text, because that is exactly what it is — the adapter's
+ * `promptToClaude` passes `/bro` through to the CLI, which resolves it.
+ */
+export const ChatCommand = Schema.Struct({
+  /** With the slash, because that is what somebody types. */
+  name: Schema.String,
+  description: Schema.String,
+  /** What its arguments are, when it takes any: `[file]`, `<message>`. */
+  hint: Schema.optional(Schema.String),
+});
+
+export type ChatCommand = (typeof ChatCommand)["Type"];
+
 /** One of the buttons on a permission request. */
 export const ChatPermissionOption = Schema.Struct({
   id: Schema.String,
@@ -1643,7 +1770,7 @@ export type ChatPermissionOption = (typeof ChatPermissionOption)["Type"];
  * optional, and the window merges by id rather than appending.
  */
 export const ChatUpdate = Schema.Struct({
-  kind: Schema.Literals(["message", "tool", "permission", "turn", "usage"]),
+  kind: Schema.Literals(["message", "tool", "permission", "turn", "usage", "commands"]),
 
   /** message: who, and what they said. Chunks, so they are appended. */
   role: Schema.optional(ChatRole),
@@ -1733,6 +1860,19 @@ export const ChatUpdate = Schema.Struct({
   size: Schema.optional(Schema.Number),
   /** What the session has cost so far, in whatever currency the agent reports. */
   cost: Schema.optional(Schema.Number),
+
+  // ── commands ────────────────────────────────────────────────────────────
+  //
+  // The agent's own slash commands, skills included. An update rather than a
+  // call, and for a reason particular to this list: the adapter *pushes* it
+  // when the set changes — its own comment says "skills discovered dynamically
+  // as the agent works in a subdirectory" — so a client that asked once would
+  // be right until the agent learned something. It goes through the daemon's
+  // transcript like every other update, so a window that opens later is told
+  // by the replay rather than by a second call.
+
+  /** Every command the agent advertises. Replaces the set, never merges. */
+  commands: Schema.optional(Schema.Array(ChatCommand)),
 });
 
 export type ChatUpdate = (typeof ChatUpdate)["Type"];
@@ -1977,6 +2117,41 @@ export class AwpRpcs extends RpcGroup.make(
     payload: { project: Schema.String, workspace: Schema.String },
     success: Schema.String,
     error: ChatUnavailable,
+  }),
+
+  /**
+   * Start this workspace's chat again from nothing, answering the new session.
+   *
+   * ── it is not a fork, and it is not a reload ────────────────────────────
+   *
+   * `ChatFork` copies the conversation the *terminal* is having. This forgets
+   * the one the chat is having: the stored session id goes, the adapter holding
+   * it is thrown away, and the next open is a `session/new`. What survives is
+   * the transcript on disk — nothing is deleted — so the old conversation is
+   * still there to be found, it is simply no longer this workspace's.
+   *
+   * The reply is the new session id, for the same reason the fork's is: the
+   * panel re-subscribes on it, and a refusal lands on the keypress rather than
+   * silently on the next subscribe.
+   */
+  Rpc.make("ChatFresh", {
+    payload: { project: Schema.String, workspace: Schema.String },
+    success: Schema.String,
+    error: ChatUnavailable,
+  }),
+
+  /**
+   * The MCP server this workspace's conversation is handed.
+   *
+   * No error channel, and that is deliberate: it is a description of what the
+   * daemon passes on every open, composed from the same functions that pass it,
+   * so there is nothing to fail. A workspace with no conversation open still
+   * has an answer — which is the right one, because the question a person asks
+   * with `/mcp` is "what will this agent be able to do".
+   */
+  Rpc.make("McpStatus", {
+    payload: { project: Schema.String, workspace: Schema.String },
+    success: McpStatus,
   }),
 
   /**
@@ -2439,6 +2614,42 @@ export class AwpRpcs extends RpcGroup.make(
     payload: { from: Schema.String },
     success: ThreadHere,
     error: NotAWorkspace,
+  }),
+
+  /**
+   * Point the web panel somewhere, from the workspace this was asked in.
+   *
+   * `from` is a directory and there is no thread parameter, which is the same
+   * binding every other agent-facing call has: the thread is resolved from the
+   * checkout, so a conversation cannot move a page beside somebody else's
+   * work. The reply is the page as recorded, so the caller is told which
+   * thread it landed on rather than having to guess.
+   *
+   * Idempotent in the sense that matters — sending the url already showing is
+   * a fresh `at`, and the window reloads. That is what "open it again" means.
+   */
+  Rpc.make("PageOpen", {
+    payload: {
+      /** A directory inside the workspace asking. A session's `startDir` will do. */
+      from: Schema.String,
+      url: Schema.String,
+    },
+    success: Page,
+    error: Schema.Union([NotAWorkspace, PageRefused]),
+  }),
+
+  /**
+   * Every page anybody sets, from now.
+   *
+   * A stream for the reason `WorkspaceFactsChanges` is one and `ThreadList` is
+   * not: this changes without the window doing anything, so a client that only
+   * asked would miss the one event it cares about. Nothing is replayed — a
+   * navigation is an event and not a state, and the window already remembers
+   * the page it last had.
+   */
+  Rpc.make("PageChanges", {
+    success: Page,
+    stream: true,
   }),
 
   Rpc.make("ThreadBases", {

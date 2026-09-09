@@ -1,5 +1,5 @@
 import * as stylex from "@stylexjs/stylex";
-import { useNavigate, useParams } from "@tanstack/react-router";
+import { useNavigate, useParams, useRouterState } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { Accessory } from "./Accessory";
 import { Boundary } from "./Boundary";
@@ -11,23 +11,26 @@ import { NewThread, type NewThreadRequest } from "./NewThread";
 import { Chat } from "./Chat";
 import { NoSession } from "./NoSession";
 import { Pane } from "./Pane";
-import { addressFrom, addressOf, pathOf, placeAt, sessionAt } from "./address";
+import { STYLE_GUIDE, addressFrom, addressOf, pathOf, placeAt, sessionAt } from "./address";
 import { useWorkspaceDir } from "./useWorkspaceDir";
 import { type Collapsed, type Columns, FOLD_MS, fitColumns } from "./columns";
 import {
   rememberCollapsed,
   rememberPlace,
+  rememberVisits,
   rememberWidths,
   type Face,
   rememberFace,
   rememberedFace,
   rememberedCollapsed,
+  rememberedVisits,
   rememberedWidths,
 } from "./remembered";
 import { rendererFixture } from "./fixture";
-import { finishedKey } from "./refresh";
+import { progressKey } from "./refresh";
 import { themeFor, useAppearance, useColorScheme } from "./theme";
-import { colors, space, text } from "./tokens.stylex";
+import { typeset } from "./typeset";
+import { colors, space } from "./tokens.stylex";
 import { useColumnKeys } from "./navigation";
 import { useJobs } from "./useJobs";
 import { useConnection } from "./useConnection";
@@ -35,9 +38,13 @@ import { useSessions } from "./useSessions";
 import { factsKey, useFacts } from "./useFacts";
 import { useProjects } from "./useProjects";
 import { threadHolding } from "./workspaces";
+import { StyleGuide } from "./StyleGuide";
+import { usePageWatch } from "./usePages";
 import { useThreads } from "./useThreads";
 import { useWindowWidth } from "./useWindowWidth";
-import { PRIMARY, prOf } from "./workspaces";
+import { Switcher } from "./Switcher";
+import { visitedWith } from "./switching";
+import { PRIMARY, prOf, threadOf } from "./workspaces";
 
 // The window: two bars with three columns between them.
 //
@@ -67,8 +74,6 @@ const styles = stylex.create({
     // for otherwise — which is most of it. What still asks is the pane, and
     // the fields that hold an address: a slug, a bookmark, a revision, a path.
     // See the note on `text.mono`.
-    fontFamily: text.ui,
-    fontSize: text.body,
   },
   // The one row that flexes. `minHeight: 0` so it can be shorter than its
   // content instead of pushing the bottom bar off the window — which is the
@@ -186,7 +191,28 @@ const styles = stylex.create({
   }),
 });
 
+/**
+ * The root, which is one branch and then a screen.
+ *
+ * ── why a branch and not a nested route ───────────────────────────────────
+ *
+ * The route tree is deliberately flat and renders no `Outlet` — the window's
+ * layout does not change with the address, so a nested route drawing a
+ * different tree would model a screen change that does not happen (see
+ * routes.ts). The style guide *is* that screen change, and it is the only one.
+ * A child route's own component would never render under a root that has no
+ * outlet, so the choice is made here, by hand, on the one path that means it.
+ *
+ * Above `Window` rather than inside it, so that every hook the window has is
+ * on the branch that draws it. An early return past twenty hooks is the other
+ * shape and is the one that breaks the day somebody adds the twenty-first.
+ */
 export function App() {
+  const path = useRouterState({ select: (state) => state.location.pathname });
+  return path === STYLE_GUIDE ? <StyleGuide /> : <Window />;
+}
+
+function Window() {
   const appearance = useAppearance();
   const scheme = useColorScheme();
   const width = useWindowWidth();
@@ -261,6 +287,15 @@ export function App() {
   // ctrl+h/l between the columns, ctrl+j/k within one. See navigation.ts.
   useColumnKeys(collapsed);
 
+  // ── the web panel's page, watched here and not in the panel ─────────────
+  //
+  // An agent asking for a page (`awp_browse`) arrives whether or not anybody
+  // is looking at the web panel — and Base UI unmounts a hidden tab, so the
+  // panel is usually not mounted at the moment an agent has something to show.
+  // Subscribed for the window's life; the panel reads what this wrote. See
+  // usePages.ts.
+  usePageWatch();
+
   const { sessions, failure, reload: reloadSessions } = useSessions();
   const connected = useConnection();
   const { jobs } = useJobs();
@@ -304,6 +339,34 @@ export function App() {
   const open = sessionAt(address, sessions);
   const here = placeAt(address, sessions, threads);
 
+  // ── where this window has been, for cmd+P ───────────────────────────────
+  //
+  // The switcher's first row is the *previous* thread, so the order somebody
+  // visited things in is the data — see switcher.ts. Read from localStorage on
+  // every change rather than only at mount: it is the truth, another window
+  // may have written it, and a thread change is rare enough that the read
+  // costs nothing.
+  const holding = threadOf(here, threads)?.id;
+  const [visits, setVisits] = useState<ReadonlyArray<string>>(rememberedVisits);
+  useEffect(() => {
+    if (holding === undefined) {
+      return;
+    }
+    const stored = rememberedVisits();
+    if (stored[0] === holding) {
+      // Already where the history says we are. Writing again would be the same
+      // value with a storage round trip in the middle.
+      setVisits(stored);
+      return;
+    }
+    const next = visitedWith(stored, holding);
+    rememberVisits(next);
+    setVisits(next);
+  }, [holding]);
+
+  /** cmd+P. A modal, so it is state rather than an address. */
+  const [switching, setSwitching] = useState(false);
+
   // Which pull request the open workspace is about, if its thread names one.
   //
   // Derived here from the threads this window already holds rather than asked
@@ -334,6 +397,66 @@ export function App() {
     );
   }, [openProject, openWorkspace]);
 
+  // ── moving to a piece of work puts the caret in it ──────────────────────
+  //
+  // Reported as "cmd p into thread with terminal doesnt get focus" and "even
+  // plain chat doesnt get focus when we enter thread". Both were true and they
+  // are not the same gap: the pane focuses itself when it *attaches*, so
+  // arriving at a workspace whose session was already mounted focused nothing,
+  // and the chat had no focus call at all — every arrival there needed a click
+  // in the box before a key did anything.
+  //
+  // A key rather than a counter, so it is derived and there is no state to
+  // keep in step: it changes exactly when the window moves to a different
+  // checkout or a different face, which are the only two moments a person has
+  // asked to be somewhere. It deliberately does not change when the session
+  // list refreshes or a job progresses — focus that moves on its own is worse
+  // than focus that has to be asked for.
+  //
+  // A nonce is part of it, because two things ask for the caret and only one of
+  // them is a move: closing the switcher — by picking *or* by Escape — should
+  // put the keyboard back in the work, and Escape changes no address. Measured
+  // at `#/`: Base UI's own restore left focus on nothing at all, so the window
+  // says where it goes rather than relying on a restore.
+  const [asked, setAsked] = useState(0);
+  const focusKey = `${openProject ?? ""}/${openWorkspace ?? ""}/${face}/${String(asked)}`;
+
+  // ── a thread address is resolved, not drawn ─────────────────────────────
+  //
+  // `/t/<id>` is what "copy link" produces, and a thread is not a place: it
+  // holds several checkouts, and the agent column needs one session. So the
+  // address is swapped for the thread's first checkout as soon as the threads
+  // are in hand.
+  //
+  // `replace`, so the history holds the place rather than the redirect —
+  // pressing back from it leaves for wherever you were rather than for a link
+  // that would resolve again. And keyed on the id, so a thread that is not
+  // there yet (a window that has just connected) resolves when the list
+  // arrives rather than being written off.
+  const wanted = address.at === "thread" ? address.id : undefined;
+  useEffect(() => {
+    if (wanted === undefined) {
+      return;
+    }
+    const held = threads.find((one) => one.id === wanted);
+    const member = held?.members[0];
+    if (member === undefined) {
+      return;
+    }
+    void navigate({
+      to: pathOf({
+        at: "workspace",
+        project: member.project,
+        workspace: member.workspace,
+        kind: PRIMARY,
+      }),
+      replace: true,
+    });
+    // `navigate` is stable and `threads` is watched through the id it holds:
+    // re-running on every list would re-navigate an address already resolved.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wanted, threads]);
+
   // The modal, as a request rather than a boolean. It carries what the window
   // knew at the moment it was opened — which project was on screen, and which
   // workspace — so the form can read them once at mount instead of tracking a
@@ -351,25 +474,25 @@ export function App() {
   // thread whose creation *failed* looks like, while the workspace, bookmark
   // and session were all on disk.
   //
-  // Keyed on which jobs have stopped rather than how many, which is exactly
-  // when there might be a new session to see. The threads are re-read at the
-  // same moment because the claim that puts a workspace under its thread is
-  // the job's second-to-last step.
+  // Keyed on where every job has got to — which ones, what state, how far —
+  // and not on which have stopped. A create job makes the session at its third
+  // step and the thread claim at its fourth, and on a chat-face create it then
+  // sits in `brief` for the whole of the agent's first turn: keyed on
+  // completion, the sidebar drew "nothing yet" over a thread whose workspace
+  // was on disk with a briefed agent running in it. See refresh.ts.
   //
   // And the jobs this reads have to be current for any of it to fire, which is
   // why `useJobs` now re-lists on reconnect — the feed carries changes from
   // the moment of subscribe, so a job that finished during an outage arrives
   // nowhere. See the note there.
-  // A signature of which jobs have stopped, not how many — `refresh.ts` says
-  // why a count could not do it.
-  const finished = finishedKey(jobs);
+  const progress = progressKey(jobs);
   useEffect(() => {
     reloadSessions();
     reloadThreads();
     // `reloadSessions` and `reloadThreads` are stable — see the note in
     // useSessions on why `load` lives outside the component.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [finished]);
+  }, [progress]);
 
   // cmd+N from anywhere in the window, and cmd+shift+N to start from the
   // workspace on screen rather than from the project's main line.
@@ -417,6 +540,27 @@ export function App() {
     return () => window.removeEventListener("keydown", onKey, { capture: true });
   }, [open]);
 
+  // cmd+P: go to a thread, previous one first.
+  //
+  // Capture at `window` and `event.code`, for the two reasons the note above
+  // gives at length — the emulator stops propagation for every key it
+  // consumes, and a shortcut is the physical key. `preventDefault` because
+  // Chromium would otherwise open the print dialog, which is the one thing in
+  // this window nobody wants.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.code !== "KeyP" || !(event.metaKey || event.ctrlKey) || event.altKey) {
+        return;
+      }
+      event.preventDefault();
+      // Already open: leave it alone, the same rule cmd+N follows. Pressing it
+      // again is somebody making sure, not asking for an empty query.
+      setSwitching(true);
+    };
+    window.addEventListener("keydown", onKey, { capture: true });
+    return () => window.removeEventListener("keydown", onKey, { capture: true });
+  }, []);
+
   // The appearance theme rides the outermost element rather than <html>. The
   // variables it sets are inherited, so everything below sees them, and putting
   // them here keeps the override inside React's tree — where it can be reasoned
@@ -427,7 +571,7 @@ export function App() {
   // two rules deciding the same widths and the rendered result disagreeing with
   // the state that is supposed to describe it.
   return (
-    <div {...stylex.props(themeFor(appearance), styles.window)}>
+    <div {...stylex.props(themeFor(appearance), typeset.prose, styles.window)}>
       {/* A corner, not a row. It is absolutely positioned over the sidebar's
           width, so the agent and the panels begin at the top of the window —
           see `styles.top` in Bars.tsx. */}
@@ -571,6 +715,7 @@ export function App() {
                 key={`${here.project}/${here.workspace}`}
                 project={here.project}
                 workspace={here.workspace}
+                focus={focusKey}
               />
             </Boundary>
           ) : here !== undefined && open === undefined ? (
@@ -588,7 +733,12 @@ export function App() {
             </Boundary>
           ) : (
             <Boundary where="the terminal">
-              <Pane session={open?.name} fixture={rendererFixture} scheme={scheme} />
+              <Pane
+                session={open?.name}
+                fixture={rendererFixture}
+                scheme={scheme}
+                focus={focusKey}
+              />
             </Boundary>
           )}
         </main>
@@ -650,6 +800,28 @@ export function App() {
         onClose={() => setNewThread(undefined)}
         onStarted={reloadThreads}
       />
+
+      {/* cmd+P. Mounted only while open, unlike NewThread — it holds a query
+          and a highlighted row, and both should be gone the next time it is
+          asked for rather than resumed from last time. */}
+      {switching && (
+        <Switcher
+          threads={threads.filter((thread) => thread.archivedAt === undefined)}
+          visits={visits}
+          onPick={(row) => {
+            // The thread's own address, so the resolution rule stays in one
+            // place: `App` swaps `/t/<id>` for the thread's first checkout,
+            // with `replace`, so the history holds the place and not the
+            // redirect. See the note on that effect above.
+            void navigate({ to: pathOf({ at: "thread", id: row.id }) });
+          }}
+          onClose={() => {
+            setSwitching(false);
+            // Whichever way it closed. See `focusKey`.
+            setAsked((was) => was + 1);
+          }}
+        />
+      )}
     </div>
   );
 }

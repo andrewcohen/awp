@@ -1,4 +1,4 @@
-import type { ChatUpdate } from "@awp-kit/protocol";
+import type { ChatCommand, ChatUpdate } from "@awp-kit/protocol";
 
 // What a conversation looks like once the updates have been folded together.
 //
@@ -156,6 +156,26 @@ export interface Conversation {
    * `used` would report a session as five times fuller than it is.
    */
   readonly full: number | undefined;
+  /**
+   * The same reading in tokens, kept beside the fraction.
+   *
+   * The fraction is what the bar draws and these are what its tooltip says —
+   * `18,606 of 200,000` is the answer to "how much is that", and a percentage
+   * cannot be turned back into it. Both come from one update, so keeping them
+   * apart would be two states that can disagree.
+   */
+  readonly used: number | undefined;
+  readonly size: number | undefined;
+  /**
+   * The agent's own slash commands, skills included.
+   *
+   * On the conversation rather than fetched by the composer, because the
+   * adapter *pushes* the set when it changes — a skill discovered as the agent
+   * works in a subdirectory — and the daemon replays the last one to a window
+   * that opens later. So the reducer that already reads the stream is the one
+   * thing that has to know.
+   */
+  readonly commands: ReadonlyArray<ChatCommand>;
 }
 
 export const nothing: Conversation = {
@@ -163,6 +183,9 @@ export const nothing: Conversation = {
   running: 0,
   stopped: undefined,
   full: undefined,
+  used: undefined,
+  size: undefined,
+  commands: [],
 };
 
 /** Where the trailing run of queued messages starts, or the end of the list. */
@@ -186,6 +209,13 @@ const tail = (items: ReadonlyArray<Item>): number => {
  * turn rather than off the schema.
  */
 export const fold = (state: Conversation, update: ChatUpdate): Conversation => {
+  // Replaced, never merged — the adapter's own instruction, and it is why an
+  // empty list is an answer rather than a no-op: a command that has gone
+  // should stop being offered.
+  if (update.kind === "commands") {
+    return { ...state, commands: update.commands ?? [] };
+  }
+
   // A turn is a state, not an entry. The daemon says so on either side of the
   // prompt it made, because nothing the adapter sends marks either edge — see
   // `send` in chat.ts. Replayed history carries these too, so a window opening
@@ -222,7 +252,7 @@ export const fold = (state: Conversation, update: ChatUpdate): Conversation => {
     const { used, size } = update;
     return used === undefined || size === undefined || size <= 0
       ? state
-      : { ...state, full: used / size };
+      : { ...state, full: used / size, used, size };
   }
 
   if (update.kind === "message") {
@@ -402,6 +432,92 @@ export const verb = (item: Ran): string =>
             : item.toolKind === ""
               ? "did"
               : item.toolKind;
+
+/**
+ * The transcript as blocks, with a run of tool calls counted as one.
+ *
+ * ── why the grouping is not cosmetic ──────────────────────────────────────
+ *
+ * Reported twice: the tool lines are "hard to look at", and "they should
+ * collapse probably after some length". A turn is regularly a dozen calls
+ * between two sentences, and drawn as a dozen equal rows they are most of the
+ * transcript by height while being the least of it by interest — the answer is
+ * what somebody came to read.
+ *
+ * So consecutive `ran` items become one block the eye can take in or skip, and
+ * a long block draws its tail with a count for the rest. Only *consecutive*
+ * ones: a call after a sentence is a new piece of work, and merging across the
+ * sentence would put the two in one box and lose the order they happened in.
+ *
+ * Everything else passes through untouched, which is what keeps this a
+ * grouping rather than a second transcript model.
+ */
+export type Block =
+  | { readonly kind: "one"; readonly key: string; readonly item: Item }
+  | { readonly kind: "calls"; readonly key: string; readonly items: ReadonlyArray<Ran> };
+
+export const grouped = (items: ReadonlyArray<Item>): ReadonlyArray<Block> => {
+  const out: Array<Block> = [];
+  for (const item of items) {
+    const last = out.at(-1);
+    if (item.kind === "ran" && last?.kind === "calls") {
+      out[out.length - 1] = { ...last, items: [...last.items, item] };
+      continue;
+    }
+    if (item.kind === "ran") {
+      out.push({ kind: "calls", key: item.key, items: [item] });
+      continue;
+    }
+    out.push({ kind: "one", key: item.key, item });
+  }
+  return out;
+};
+
+/**
+ * A tool call's subject, in the three pieces a person reads it in.
+ *
+ * ── what was wrong with drawing the title whole ────────────────────────────
+ *
+ * Reported as "tool lines are hard to read i cant parse the important info
+ * from them". The title is whatever the agent named — a path, a command, a
+ * query — and drawn as one run of monospace with `overflow-wrap: anywhere` it
+ * wrapped mid-word across three lines with nothing in it emphasised:
+ *
+ *     read  apps/amoeba/src/renderer/highlig
+ *     hting.tsx
+ *
+ * The information is not evenly spread. For a path it is the **basename** —
+ * `highlighting.tsx` is what somebody is looking for, and the directories are
+ * where it happens to live. For a command it is the **first line**; a heredoc
+ * or a `&&` chain continues below and is the part opening the row is for.
+ *
+ * So `lead` is muted and allowed to clip, `name` is not, and `more` counts the
+ * lines that were left off. A path is recognised by holding a slash and no
+ * whitespace — deliberately narrow, because a *command* with a path in it
+ * ("cat src/x.ts") must keep its verb, and the verb is what a naive split at
+ * the last slash would throw away.
+ */
+export interface ToolTitle {
+  /** The part that can be clipped: a path's directories, or nothing. */
+  readonly lead: string;
+  /** The part that may not be: a basename, or the first line. */
+  readonly name: string;
+  /** How many further lines there are, which the row says rather than draws. */
+  readonly more: number;
+}
+
+export const toolTitle = (title: string): ToolTitle => {
+  const lines = title.split("\n");
+  const first = lines[0] ?? "";
+  const more = Math.max(0, lines.length - 1);
+  const cut = first.lastIndexOf("/");
+  // A path, and not a command that mentions one. `\s` rather than " ": a tab
+  // in a title is the same evidence, and a trailing newline is already gone.
+  if (cut > 0 && cut < first.length - 1 && !/\s/.test(first)) {
+    return { lead: first.slice(0, cut + 1), name: first.slice(cut + 1), more };
+  }
+  return { lead: "", name: first, more };
+};
 
 /** How long something has been going, in the shortest form that is honest. */
 export const took = (seconds: number): string =>

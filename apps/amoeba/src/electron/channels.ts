@@ -18,6 +18,16 @@ export const CH = {
   event: "awp:webview:event",
   /** the guest page → main, on its way to the window that owns it. */
   fromGuest: "awp:webview:from-guest",
+  /**
+   * window → main: put the keyboard back in the window's own web contents.
+   *
+   * A native view is a separate `webContents`, and clicking in one gives it
+   * the keyboard. So a control the renderer draws *because* of that click —
+   * the annotator's note box — can call `focus()` on itself, become
+   * `document.activeElement`, and still receive nothing: the keys are going
+   * to the page. Only the main process can move focus between the two.
+   */
+  focus: "awp:window:focus",
 } as const;
 
 /** A rectangle in the window's content area, in CSS pixels. */

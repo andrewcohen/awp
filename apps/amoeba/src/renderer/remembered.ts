@@ -51,6 +51,7 @@ const SIDE_BY_SIDE = "amoeba.diff.split";
 const PAGE = "amoeba.page";
 const PANELS = "amoeba.panels";
 const LEFT = "amoeba.left";
+const VISITS = "amoeba.visits";
 
 /**
  * Stored as two letters rather than JSON.
@@ -424,4 +425,24 @@ export const rememberFace = (project: string, workspace: string, face: Face): vo
     FACE,
     JSON.stringify({ ...asMap(readStored(FACE)), [`${project}/${workspace}`]: face }),
   );
+};
+
+// ── which threads this window has been in, newest first ────────────────────
+//
+// cmd+P's whole feature is "flip back", so the order somebody visited things
+// in *is* the data — and it is a property of the window rather than of the
+// work, which is the rule this file exists to keep: two windows on one machine
+// should be able to have been looking at different threads.
+//
+// Newlines rather than JSON, like `rememberedViewed`: a thread id has no
+// newline in it, so the split needs no validation of whatever a previous
+// version of this app left behind.
+
+export const rememberedVisits = (): ReadonlyArray<string> => {
+  const stored = readStored(VISITS);
+  return stored === undefined || stored === "" ? [] : stored.split("\n");
+};
+
+export const rememberVisits = (visits: ReadonlyArray<string>): void => {
+  writeStored(VISITS, visits.length === 0 ? undefined : visits.join("\n"));
 };

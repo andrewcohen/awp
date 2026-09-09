@@ -58,6 +58,25 @@ const File = Schema.Struct({
       project_roots: Schema.optional(Schema.Array(Schema.String)),
     }),
   ),
+  // ── the system defaults, in one block both faces read ──────────────────
+  //
+  // These lived in two places and neither could be read: the model and the
+  // permission mode were words inside the `agent` string —
+  // `claude --permission-mode auto --model opus` — which is the terminal's
+  // command line and says nothing to the chat, and the effort was nowhere at
+  // all. So the chat ran on whatever the adapter defaulted to while the
+  // terminal ran on opus, and no file said what the machine's answer was.
+  //
+  // `defaults`, not `chat` or `agent`: it is one answer for both faces, and a
+  // block named after either would be a second one waiting to disagree.
+  defaults: Schema.optional(
+    Schema.Struct({
+      model: Schema.optional(Schema.String),
+      effort: Schema.optional(Schema.String),
+      /** Claude Code's permission mode — `auto`, `default`, and so on. */
+      mode: Schema.optional(Schema.String),
+    }),
+  ),
 });
 
 export interface AwpSettings {
@@ -100,6 +119,27 @@ export interface AwpSettings {
    * the walk is a convenience over it.
    */
   readonly projectRoots: ReadonlyArray<string>;
+  /**
+   * The model every face should use unless something says otherwise.
+   *
+   * Applied to the terminal's argv through {@link agentWith} and to the chat
+   * through the adapter's own config option, so one line in one file answers
+   * for both. A choice in the new-thread modal still wins — see `withFlag`,
+   * where the whole point of "from settings" is that choosing nothing has to
+   * differ from choosing a default.
+   */
+  readonly model: string | undefined;
+  /** The reasoning effort, same rule. Nowhere at all before this. */
+  readonly effort: string | undefined;
+  /**
+   * Claude Code's permission mode.
+   *
+   * Undefined leaves each face where it was: the terminal keeps whatever the
+   * `agent` line says, and the chat stays in Manual — see `MODE` in chat.ts
+   * and the argument for it. Setting `auto` here is how somebody opts out of
+   * being asked, which is a decision worth having to write down.
+   */
+  readonly mode: string | undefined;
   /** What went wrong reading the file, if anything. See above. */
   readonly problem: string | undefined;
 }
@@ -110,6 +150,9 @@ export const DEFAULTS: AwpSettings = {
   bootstrap: [],
   projectRoots: [],
   bookmarkPrefix: undefined,
+  model: undefined,
+  effort: undefined,
+  mode: undefined,
   problem: undefined,
 };
 
@@ -119,6 +162,12 @@ export class Settings extends Context.Service<
   Settings,
   { readonly read: (repo?: string) => Effect.Effect<AwpSettings> }
 >()("awp/Settings") {}
+
+/** A configured string, or nothing when it is absent or empty. */
+const blank = (value: string | undefined): string | undefined => {
+  const said = (value ?? "").trim();
+  return said === "" ? undefined : said;
+};
 
 const parse = (text: string): AwpSettings => {
   const decoded = Schema.decodeUnknownSync(File)(JSON.parse(text) as unknown);
@@ -136,6 +185,12 @@ const parse = (text: string): AwpSettings => {
     projectRoots: (decoded.deck?.project_roots ?? [])
       .map((one) => one.trim())
       .filter((one) => one !== ""),
+    // Blank is absent, for the same reason it is everywhere else in this file:
+    // a key somebody emptied rather than deleted means "nothing set", and
+    // `--model ""` on a command line is a refusal several steps later.
+    model: blank(decoded.defaults?.model),
+    effort: blank(decoded.defaults?.effort),
+    mode: blank(decoded.defaults?.mode),
     problem: undefined,
   };
 };
@@ -189,6 +244,11 @@ export const merge = (global: AwpSettings, project: AwpSettings): AwpSettings =>
   // rule as everything else rather than by an exception, because an exception
   // here would be a second rule for a reader to know about.
   projectRoots: project.projectRoots.length === 0 ? global.projectRoots : project.projectRoots,
+  // Per field, replace-if-empty, like everything above: a project that names a
+  // model gets its own and inherits the other two.
+  model: project.model ?? global.model,
+  effort: project.effort ?? global.effort,
+  mode: project.mode ?? global.mode,
   // Whichever file was unreadable, said once. Two problems is a rarer case than
   // the message being lost, and the project's is the one a person can fix.
   problem: project.problem ?? global.problem,
@@ -270,9 +330,35 @@ export const withFlag = (
   return [...argv, flag, value];
 };
 
-/** The configured agent command with the modal's choices applied. */
+/**
+ * The configured agent command with the defaults and then the modal's choices
+ * applied.
+ *
+ * Three layers, and the order is the whole of it:
+ *
+ *   the `agent` line          claude --permission-mode auto --model opus
+ *   `defaults`                model · effort · mode, for whatever the line
+ *                             does not already say — and it overwrites what it
+ *                             does, because a block naming the model while the
+ *                             command line names another is a file that
+ *                             contradicts itself and `defaults` is the newer,
+ *                             clearer half
+ *   the modal's choice        wins over both. "From settings" means choosing
+ *                             nothing, which is why these are `undefined`
+ *                             rather than a value
+ */
 export const agentWith = (
   settings: AwpSettings,
   chosen: { readonly model?: string | undefined; readonly effort?: string | undefined },
-): ReadonlyArray<string> =>
-  withFlag(withFlag(settings.agent, "--model", chosen.model), "--effort", chosen.effort);
+): ReadonlyArray<string> => {
+  const withDefaults = withFlag(
+    withFlag(
+      withFlag(settings.agent, "--permission-mode", settings.mode),
+      "--model",
+      settings.model,
+    ),
+    "--effort",
+    settings.effort,
+  );
+  return withFlag(withFlag(withDefaults, "--model", chosen.model), "--effort", chosen.effort);
+};

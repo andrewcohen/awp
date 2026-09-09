@@ -1,5 +1,5 @@
-import { Menu } from "electron";
-import type { BrowserWindow, MenuItemConstructorOptions } from "electron";
+import { BrowserWindow, Menu } from "electron";
+import type { MenuItemConstructorOptions } from "electron";
 
 // The Edit menu, which is not a menu.
 //
@@ -60,6 +60,28 @@ const fit = (window: BrowserWindow): void => {
   setTimeout(() => window.setSize(width, height), 0);
 };
 
+/**
+ * The window a menu item should act on, or nothing.
+ *
+ * ── the menu outlives the window it was built for ────────────────────────
+ *
+ * On macOS the app now stays running with no window — closing one is not
+ * quitting, see `window-all-closed` in main.ts — and the menu bar is still
+ * there while it does. So `window` closed over here can be destroyed by the
+ * time somebody presses cmd+R, and `webContents` on a destroyed window throws
+ * in the main process, where nothing renders the error.
+ *
+ * The focused window first, because with several open the menu means the one
+ * in front rather than the one this template was built for.
+ */
+const acting = (window: BrowserWindow): BrowserWindow | undefined => {
+  const focused = BrowserWindow.getFocusedWindow();
+  if (focused !== null && !focused.isDestroyed()) {
+    return focused;
+  }
+  return window.isDestroyed() ? undefined : window;
+};
+
 export const installMenu = (window: BrowserWindow): void => {
   const template: Array<MenuItemConstructorOptions> = [
     {
@@ -96,14 +118,23 @@ export const installMenu = (window: BrowserWindow): void => {
         {
           label: "Reload",
           accelerator: "CommandOrControl+R",
-          click: () => window.webContents.reload(),
+          click: () => acting(window)?.webContents.reload(),
         },
-        { label: "Fit to Window", accelerator: "CommandOrControl+Alt+R", click: () => fit(window) },
+        {
+          label: "Fit to Window",
+          accelerator: "CommandOrControl+Alt+R",
+          click: () => {
+            const on = acting(window);
+            if (on !== undefined) {
+              fit(on);
+            }
+          },
+        },
         { type: "separator" },
         {
           label: "Toggle Developer Tools",
           accelerator: "CommandOrControl+Alt+I",
-          click: () => window.webContents.toggleDevTools(),
+          click: () => acting(window)?.webContents.toggleDevTools(),
         },
       ],
     },

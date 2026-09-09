@@ -3,9 +3,11 @@ import type { ChatUpdate } from "@awp-kit/protocol";
 import {
   type Conversation,
   fold,
+  grouped,
   mine,
   nothing,
   stalled,
+  toolTitle,
   took,
   verb,
   waiting,
@@ -382,5 +384,93 @@ describe("context", () => {
   it("says nothing when the reading is not a reading", () => {
     expect(fold(nothing, { kind: "usage", used: 10 }).full).toBeUndefined();
     expect(fold(nothing, { kind: "usage", used: 10, size: 0 }).full).toBeUndefined();
+  });
+});
+
+describe("toolTitle", () => {
+  it("keeps a path's basename and lets its directories clip", () => {
+    const path = toolTitle("apps/amoeba/src/renderer/highlighting.tsx");
+    expect(path.lead).toBe("apps/amoeba/src/renderer/");
+    expect(path.name).toBe("highlighting.tsx");
+    expect(path.more).toBe(0);
+  });
+
+  it("leaves a command whole, path in it or not", () => {
+    // The narrow rule earning its keep: split at the last slash, this would
+    // read `x.ts` and throw the verb away — the row would say `ran  x.ts`.
+    expect(toolTitle("cat src/x.ts")).toStrictEqual({ lead: "", name: "cat src/x.ts", more: 0 });
+    expect(toolTitle("bun run typecheck")).toStrictEqual({
+      lead: "",
+      name: "bun run typecheck",
+      more: 0,
+    });
+  });
+
+  it("draws the first line and counts the rest", () => {
+    const heredoc = toolTitle("jj describe --stdin <<'EOF'\nwip: a thing\nand more\nEOF");
+    expect(heredoc.name).toBe("jj describe --stdin <<'EOF'");
+    expect(heredoc.more).toBe(3);
+  });
+
+  it("is not fooled by a trailing slash or a leading one", () => {
+    expect(toolTitle("packages/server/src/").name).toBe("packages/server/src/");
+    expect(toolTitle("/etc/hosts")).toStrictEqual({ lead: "/etc/", name: "hosts", more: 0 });
+  });
+
+  it("says nothing about an empty title", () => {
+    expect(toolTitle("")).toStrictEqual({ lead: "", name: "", more: 0 });
+  });
+});
+
+const spoke = (key: string) =>
+  ({ kind: "said", key, role: "agent", text: "…", queued: false }) as never;
+const called = (key: string) =>
+  ({ kind: "ran", key, title: key, toolKind: "read", status: "completed", output: "" }) as never;
+
+describe("grouped", () => {
+  it("makes one block of a run of calls", () => {
+    const blocks = grouped([spoke("a"), called("b"), called("c"), called("d"), spoke("e")]);
+    expect(blocks.map((block) => block.kind)).toEqual(["one", "calls", "one"]);
+    expect(blocks[1]?.kind === "calls" && blocks[1].items.length).toBe(3);
+  });
+
+  it("does not merge across a sentence", () => {
+    // A call after an answer is a new piece of work, and one box holding both
+    // runs would lose the order they happened in.
+    const blocks = grouped([called("a"), spoke("b"), called("c")]);
+    expect(blocks.map((block) => block.kind)).toEqual(["calls", "one", "calls"]);
+  });
+
+  it("keys a block by its first call, so a growing run keeps its identity", () => {
+    // React remounts a block whose key changes, and a run grows by one on
+    // every update — keyed by the last call, every arrival would throw away
+    // the disclosure state of every row in it.
+    const one = grouped([called("a"), called("b")]);
+    const two = grouped([called("a"), called("b"), called("c")]);
+    expect(one[0]?.key).toBe(two[0]?.key);
+  });
+
+  it("leaves everything else alone", () => {
+    expect(grouped([]).length).toBe(0);
+    expect(grouped([spoke("a")]).map((block) => block.kind)).toEqual(["one"]);
+  });
+});
+
+describe("the context reading", () => {
+  it("keeps the tokens beside the fraction", () => {
+    const after = fold(nothing, { kind: "usage", used: 18_606, size: 200_000 } as never);
+    expect(after.full).toBeCloseTo(0.093, 3);
+    expect([after.used, after.size]).toEqual([18_606, 200_000]);
+  });
+
+  it("takes the newest pair whole, tokens included", () => {
+    // `size` changes mid-turn — measured 200000 then 1000000 — so an earlier
+    // count beside a later size would report a session five times fuller than
+    // it is, in the tooltip as well as in the percentage.
+    const after = [
+      { kind: "usage", used: 18_606, size: 200_000 },
+      { kind: "usage", used: 18_619, size: 1_000_000 },
+    ].reduce((state, update) => fold(state, update as never), nothing);
+    expect([after.used, after.size]).toEqual([18_619, 1_000_000]);
   });
 });

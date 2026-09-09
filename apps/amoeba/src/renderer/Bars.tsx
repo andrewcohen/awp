@@ -4,6 +4,7 @@ import { SidebarSimpleIcon } from "@phosphor-icons/react/SidebarSimple";
 import * as stylex from "@stylexjs/stylex";
 import type { Collapsed } from "./columns";
 import type { Face } from "./remembered";
+import { typeset } from "./typeset";
 import { colors, space, text } from "./tokens.stylex";
 import { tally } from "./useJobs";
 
@@ -89,8 +90,6 @@ const styles = stylex.create({
     overflow: "hidden",
   },
   faceButton: {
-    fontFamily: text.ui,
-    fontSize: text.small,
     padding: "0.1rem 0.5rem",
     borderStyle: "none",
     // Shorthands are dropped in silence by StyleX; the long forms are not.
@@ -528,7 +527,7 @@ export function AgentBar({
               aria-pressed={face === one}
               title={one === "chat" ? "the conversation" : "the terminal it is running in"}
               onClick={() => onFace(one)}
-              {...stylex.props(styles.faceButton, face === one && styles.faceOn)}
+              {...stylex.props(typeset.label, styles.faceButton, face === one && styles.faceOn)}
             >
               {one}
             </button>

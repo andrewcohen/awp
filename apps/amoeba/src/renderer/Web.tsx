@@ -9,9 +9,9 @@ import { useEffect, useRef, useState } from "react";
 import { type Picked, messageFrom, pickerSource, stopSource } from "./annotate";
 import { addressFor } from "./browse";
 import { sendNote } from "./daemon";
-import { type HostWebview, createWebview, hostWebviewAvailable } from "./host";
+import { type HostWebview, createWebview, focusHostWindow, hostWebviewAvailable } from "./host";
 import { useOverlaysOpen } from "./overlays";
-import { rememberPage, rememberedPages } from "./remembered";
+import { pageKey, usePages } from "./usePages";
 import { colors, text } from "./tokens.stylex";
 
 // A browser in the accessory column.
@@ -55,6 +55,18 @@ import { colors, text } from "./tokens.stylex";
 // Whether a native webview can be made at all. False in a plain browser — see
 // host.ts, which owns both halves of that answer.
 const available = hostWebviewAvailable;
+
+/**
+ * The last navigation this window acted on, as its timestamp.
+ *
+ * Module scope, for the reason every other module-scope guard here is: it has
+ * to outlive the component. The panel is unmounted on every tab switch, so a
+ * ref would be reset each time and the newest request — which is still sitting
+ * in the atom, unchanged, because nothing has asked for a page since — would be
+ * acted on again. What that looks like is the page reloading every time
+ * somebody opens the tab.
+ */
+let acted = 0;
 
 const styles = stylex.create({
   panel: { display: "flex", flexDirection: "column", height: "100%", minHeight: 0 },
@@ -200,11 +212,31 @@ export function Web({
   project,
   workspace,
   thread,
+  shown,
 }: {
   readonly project: string | undefined;
   readonly workspace: string | undefined;
   /** The thread this panel's page belongs to, or nothing claims the session. */
   readonly thread: string | undefined;
+  /**
+   * Whether this is the panel on screen.
+   *
+   * ── the panel is `keepMounted`, and this is why it needs telling ────────
+   *
+   * Every other panel in the strip is unmounted when it is not selected. This
+   * one is not, because the thing it draws is a `WebContentsView` the main
+   * process paints over the window: hiding it by unmounting made a native
+   * overlay depend on React choosing to unmount, and anything that stopped
+   * that — a hot reload that failed to apply, measured — left a page over the
+   * column with nothing able to reach it.
+   *
+   * So the view now lives as long as the column and is hidden by this fact.
+   * A `ResizeObserver` reading 0x0 would nearly do it, and "nearly" is the
+   * problem: it is a measurement of a consequence where this is the cause.
+   * The box is still watched, for the folded-column case that has no other
+   * tell.
+   */
+  readonly shown: boolean;
 }) {
   const stage = useRef<HTMLDivElement>(null);
   const view = useRef<HostWebview | undefined>(undefined);
@@ -224,13 +256,25 @@ export function Web({
   // neither, and the two only agree after enter or a navigation — and is
   // deliberately not persisted: a URL somebody started typing and left is not
   // a page they chose.
-  const [pages, setPages] = useState<Record<string, string>>(rememberedPages);
+  // ── the pages are the window's, not this component's ────────────────────
+  //
+  // They used to be `useState` here, and the panel was the only thing that
+  // could move them. Both halves of that are now wrong: an agent can ask for a
+  // page (`awp_browse`, over `PageChanges`), and this component is unmounted
+  // whenever somebody is looking at another tab — which is exactly when an
+  // agent has something to show. See usePages.ts, which owns the subscription
+  // for the window's life.
+  //
+  // `drafts` stays local and deliberately so. A half-typed address is not a
+  // page anybody chose, it is not persisted, and nothing outside this box has
+  // any business in it.
+  const { pages, asked, remember } = usePages();
   const [drafts, setDrafts] = useState<Record<string, string>>({});
-  const key = thread ?? "";
+  const key = pageKey(thread);
   const here: string | undefined = pages[key];
   const typed = drafts[key] ?? here ?? "";
   const setHere = (url: string) => {
-    setPages((was) => ({ ...was, [key]: url }));
+    remember(thread, url);
   };
   const setTyped = (draft: string) => {
     setDrafts((was) => ({ ...was, [key]: draft }));
@@ -268,9 +312,15 @@ export function Web({
     return () => watch.disconnect();
   }, []);
 
-  // Either reason to stop drawing it. They are different questions with the
-  // same answer, and the webview has only the one switch.
-  const away = covered || flat;
+  // Three reasons to stop drawing it, and they are different questions with
+  // one answer — the view has a single switch:
+  //
+  //   not shown   another panel is selected. The authoritative fact, and the
+  //               only one that is a cause rather than a consequence
+  //   covered     a modal is open, and a native view is in front of every one
+  //   flat        the box has no size — a folded column, which nothing else
+  //               announces
+  const away = !shown || covered || flat;
 
   // ── the annotator ────────────────────────────────────────────────────────
   //
@@ -322,6 +372,36 @@ export function Web({
     view.current?.executeJavascript(stopSource());
   };
 
+  // ── somebody asked for a page ────────────────────────────────────────────
+  //
+  // `asked` is the last navigation anybody requested, and "anybody" is the
+  // point: an agent calling `awp_browse` is the case this whole path exists
+  // for. Acted on by its `at` rather than its url, because asking for the page
+  // already loaded is a real request — it means reload — and two value-equal
+  // urls are otherwise one event.
+  //
+  // Only when it names this panel's thread. A request for another thread's page
+  // is already recorded in `pages` by the watcher, and it shows when somebody
+  // moves to that thread; navigating here would put another piece of work's
+  // page in front of them.
+  useEffect(() => {
+    if (asked === undefined || asked.at <= acted || pageKey(asked.thread) !== key) {
+      return;
+    }
+    // Consumed even when there is no view yet to receive it, which is the case
+    // for a panel nobody has opened. Nothing is lost: the watcher has already
+    // recorded the page in `pages`, and the view is created with `here` — so
+    // the first open lands on it. Leaving it unconsumed would instead reload
+    // the page the moment somebody opened the tab.
+    acted = asked.at;
+    setTyped(asked.url);
+    setTrouble(undefined);
+    view.current?.loadURL(asked.url);
+    // `setTyped` and `setTrouble` are this component's setters and are stable
+    // in the ways that matter; keying on them would run this on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [asked, key]);
+
   useEffect(() => {
     const element = view.current;
     if (element === undefined) {
@@ -337,15 +417,34 @@ export function Web({
     }
   }, [away]);
 
+  // ── nothing is made until somebody opens the tab ────────────────────────
+  //
+  // `keepMounted` puts this component in the tree from the moment the column
+  // renders, and a native view is a process. So the view is built the first
+  // time the panel is actually looked at, and from then on it stays: the flag
+  // only ever goes false → true, so the effect below still runs exactly once
+  // and keeps the history the back button walks.
+  const [made, setMade] = useState(shown);
+  useEffect(() => {
+    if (shown) {
+      setMade(true);
+    }
+  }, [shown]);
+
   useEffect(() => {
     const parent = stage.current;
-    if (parent === null || !available()) {
+    if (parent === null || !available() || !made) {
       return;
     }
 
     // Built here rather than declared in JSX: a native view is driven by
     // methods and has no props, and its rectangle is this box's.
-    const element = createWebview(parent, { url: here });
+    // `key`: one native view per window for this panel, enforced by the main
+    // process. Reported as "a slim styleguide web view hanging out over the
+    // left pane" and as the page "replicating" when devtools opened — both are
+    // a view nothing in this renderer still holds, so nothing here could have
+    // taken either down. See `createWebview`.
+    const element = createWebview(parent, { url: here, key: "web-panel" });
     view.current = element;
 
     // The address bar follows the page, not the other way round. A link
@@ -357,7 +456,6 @@ export function Web({
       if (typeof url === "string" && url !== "") {
         setHere(url);
         setTyped(url);
-        rememberPage(thread, url);
         // A page arrived, so whatever the last one could not do is over.
         setTrouble(undefined);
       }
@@ -391,6 +489,10 @@ export function Web({
       setPicked(message.picked);
       setRemark("");
       setSaid(undefined);
+      // The click that picked was in the *page*, so the keyboard is in that
+      // process. The box below focuses itself on mount and would still be
+      // deaf without this — see `focusHostWindow`.
+      focusHostWindow();
     };
     element.on("host-message", heard);
 
@@ -422,12 +524,12 @@ export function Web({
       element.destroy();
       view.current = undefined;
     };
-    // Deliberately once. `here` is read at creation to restore the last page,
-    // and afterwards navigation goes through `loadURL` — rebuilding the view on
-    // every address change would throw away the history the back button exists
-    // to walk.
+    // Once, when the panel is first looked at. `here` is read at creation to
+    // restore the last page, and afterwards navigation goes through `loadURL`
+    // — rebuilding the view on every address change would throw away the
+    // history the back button exists to walk. `made` only goes false → true.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [made]);
 
   const deliver = () => {
     if (picked === undefined || project === undefined || workspace === undefined) {
@@ -461,7 +563,6 @@ export function Web({
     }
     setHere(url);
     setTyped(url);
-    rememberPage(thread, url);
     // Cleared on the way out rather than on the way in: a stale complaint
     // sitting over a page that is loading reads as the new address failing too.
     setTrouble(undefined);
@@ -583,9 +684,13 @@ export function Web({
           </div>
           <textarea
             aria-label="what to say about this element"
-            placeholder="what is wrong with it"
+            placeholder="leave a comment"
             value={remark}
-            autoFocus
+            // Focused on mount, which is the moment a pick arrived: somebody
+            // who has just aimed at an element is about to type about it. A
+            // callback ref rather than `autoFocus`, which react-doctor flags
+            // because the attribute fires on any render the element mounts in.
+            ref={(node) => node?.focus()}
             {...stylex.props(styles.body)}
             onChange={(event) => setRemark(event.target.value)}
             onKeyDown={(event) => {

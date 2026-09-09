@@ -2,6 +2,7 @@ import { Select } from "@base-ui/react/select";
 import { CaretDownIcon } from "@phosphor-icons/react/CaretDown";
 import * as stylex from "@stylexjs/stylex";
 import type React from "react";
+import { typeset } from "./typeset";
 import { colors, text } from "./tokens.stylex";
 
 // A small select that reads as a chip rather than as a form field.
@@ -79,7 +80,7 @@ export function Chip<T extends string>({
       {/* Portalled, so nothing it opens inside can clip it. */}
       <Select.Portal>
         <Select.Positioner sideOffset={4} align="start" {...stylex.props(styles.positioner)}>
-          <Select.Popup {...stylex.props(styles.menu)}>
+          <Select.Popup {...stylex.props(typeset.address, styles.menu)}>
             {options.map((option) => (
               <Select.Item key={option.value} value={option.value} {...stylex.props(styles.item)}>
                 <Select.ItemIndicator {...stylex.props(styles.tick)}>✓</Select.ItemIndicator>
@@ -125,8 +126,6 @@ const styles = stylex.create({
     // a person will type at jj afterwards. The model and effort menus share the
     // component and get it too, which is the cost of one component for four
     // chips and is a smaller cost than four components.
-    fontFamily: text.mono,
-    fontSize: text.small,
     boxShadow: "0 0.5rem 1.5rem rgba(0, 0, 0, 0.3)",
   },
   item: {

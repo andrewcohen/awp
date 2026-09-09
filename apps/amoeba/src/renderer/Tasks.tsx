@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { listBoard, listTasks, sendTask } from "./daemon";
 import { Markdown } from "./Markdown";
 import { type Listed, merge } from "./tasklist";
+import { typeset } from "./typeset";
 import { colors, space, text } from "./tokens.stylex";
 
 // What the agent in this workspace has written down for itself.
@@ -149,8 +150,6 @@ const styles = stylex.create({
     borderStyle: "none",
     color: colors.text,
     font: "inherit",
-    fontSize: text.small,
-    fontWeight: text.medium,
     textAlign: "start",
     cursor: "pointer",
   },
@@ -194,8 +193,6 @@ const styles = stylex.create({
     borderStyle: "none",
     backgroundColor: "transparent",
     color: colors.muted,
-    fontFamily: text.mono,
-    fontSize: text.small,
     cursor: "pointer",
     padding: "0.1rem 0.25rem",
     borderRadius: "0.2rem",
@@ -245,7 +242,7 @@ function Row({ task, onSend, state }: RowProps) {
           aria-expanded={open}
           title={open ? "hide what the task says" : "show what the task says"}
           onClick={() => setOpen((was) => !was)}
-          {...stylex.props(styles.subject)}
+          {...stylex.props(typeset.control, styles.subject)}
         >
           <span {...stylex.props(styles.id)}>{task.label}</span>
           {task.subject}
@@ -411,7 +408,7 @@ export function Tasks({ dir, project, workspace }: TasksProps) {
                 : "show every project's tasks, not just this one"
             }
             onClick={() => setEverywhere((was) => !was)}
-            {...stylex.props(styles.scope)}
+            {...stylex.props(typeset.address, styles.scope)}
           >
             {everywhere ? "everywhere" : project}
           </button>

@@ -72,6 +72,10 @@ const daemonOf = (
         asked.push({ board: filter });
         return Effect.succeed([]);
       },
+      browse: (from, url) => {
+        asked.push({ browse: from, url });
+        return Effect.succeed({ thread: "th-1", url });
+      },
       ...over,
     },
   };
@@ -252,6 +256,59 @@ describe("awp_review_comments", () => {
 
   it("says so when there are none", () => {
     expect(commentsSaid([])).toContain("No review comments");
+  });
+});
+
+describe("awp_browse", () => {
+  it("the sentence says the page and whose panel it is", () => {
+    const { text, failed, asked } = call("awp_browse", {
+      url: "https://example.invalid/build/412",
+    });
+    expect(failed).toBe(false);
+    // The thread rather than the checkout, because that is what the panel is
+    // keyed by: an agent that has just moved this page has moved what every
+    // sibling checkout of the same work shows.
+    expect(text).toContain("web panel for this thread");
+    expect(text).toContain("https://example.invalid/build/412");
+    // The directory is the binding and is not an argument — the same rule
+    // every other tool here has.
+    expect(asked).toEqual([{ browse: HERE, url: "https://example.invalid/build/412" }]);
+  });
+
+  it("a workspace no thread claims is still a panel to point at", () => {
+    const { text, failed } = call(
+      "awp_browse",
+      { url: "https://example.invalid/" },
+      { browse: (_from, url) => Effect.succeed({ thread: undefined, url }) },
+    );
+    expect(failed).toBe(false);
+    expect(text).toContain("this workspace's web panel");
+  });
+
+  it("no url is refused here rather than forwarded", () => {
+    // Forwarded, the daemon's refusal would be about a url of "", which reads
+    // as a bug in this server rather than as a call to fix.
+    const { text, failed, asked } = call("awp_browse");
+    expect(failed).toBe(true);
+    expect(text).toContain("needs a url");
+    expect(asked).toEqual([]);
+  });
+
+  it("the daemon's own refusal is the sentence, and it is a result", () => {
+    const { text, failed } = call(
+      "awp_browse",
+      { url: "effect schema v4" },
+      { browse: () => Effect.fail({ reason: "effect schema v4 is not a url" }) },
+    );
+    // `isError` on a result, never a JSON-RPC error: a model has to read why.
+    expect(failed).toBe(true);
+    expect(text).toContain("is not a url");
+  });
+
+  it("it is on the tool list, and takes only a url", () => {
+    const tool = TOOLS.find((one) => one.name === "awp_browse");
+    expect(tool).toBeDefined();
+    expect(Object.keys(tool?.inputSchema.properties ?? {})).toEqual(["url"]);
   });
 });
 

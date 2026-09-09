@@ -62,6 +62,7 @@ import {
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { realpathSync } from "node:fs";
 import type {
+  ChatCommand,
   ChatConfigOption,
   ChatDelivery,
   ChatUpdate,
@@ -70,6 +71,7 @@ import type {
 import { INSTALL, adapterPath, claudePath, parseMessage } from "./acp";
 import { workspacePath } from "./jobs/create-workspace";
 import { daemonUrl, mcpEntry, serverSpec } from "./mcp";
+import { Settings } from "./settings";
 import { childEnv } from "./zmx-session";
 
 /**
@@ -148,6 +150,24 @@ export interface ChatOptions {
   readonly cwd: string;
   readonly model?: string;
   /**
+   * The reasoning effort, when the config names one.
+   *
+   * Set through the adapter's own config option rather than in the open
+   * request's `_meta`, and that is not a preference: `configOptions` is what
+   * the reply carries and what the panel draws, so setting it any other way
+   * would leave the chips reporting the opposite of the truth — which already
+   * happened once with the mode. See the note below.
+   */
+  readonly effort?: string;
+  /**
+   * The permission mode, when the config names one.
+   *
+   * Absent means Manual — see {@link MODE}. This is the field that lets
+   * somebody opt out of being asked, which is a decision worth writing down in
+   * a file rather than inheriting from an adapter's default.
+   */
+  readonly mode?: string;
+  /**
    * The session to continue, when the daemon has a record of one.
    *
    * **Nothing is loaded that is not named here**, and that is the whole of the
@@ -163,6 +183,24 @@ export interface ChatOptions {
    * with a sentence about a session id, one step after the mistake.
    */
   readonly session?: string;
+  /**
+   * The last context reading this conversation is known to have had.
+   *
+   * ── a loaded conversation reports no usage until it is spoken to ─────────
+   *
+   * Measured against a real adapter: a live turn sends four `usage_update`s,
+   * and `session/load` followed by silence sends **none**. So the ordinary
+   * case — open a chat, read what the agent said last night, say nothing —
+   * has no reading at all, and the composer's context figure was absent
+   * exactly when somebody was deciding whether to carry on in it.
+   *
+   * There is no call that asks, so the daemon remembers instead: the reading
+   * is stored per session id and handed back here, and `conversation` emits it
+   * as its first update so every subscriber and every replay sees it. Tokens
+   * do not change while nobody is talking, which is what makes a stored
+   * reading still true.
+   */
+  readonly usage?: { readonly used: number; readonly size: number };
   /**
    * Start by forking whatever else is going on in this directory.
    *
@@ -294,11 +332,33 @@ const delegatedTo = (update: Record<string, unknown>): Record<string, unknown> =
 };
 
 /**
+ * What the adapter advertises, as the three fields a menu needs.
+ *
+ * The name is taken with its slash put back on: ACP carries `bro` and what a
+ * person types is `/bro`, and the menu matches on what they typed. `input.hint`
+ * is the adapter's own shape for "what arguments this takes".
+ */
+export const commandsOf = (raw: ReadonlyArray<unknown>): ReadonlyArray<ChatCommand> =>
+  raw
+    .map((one) => one as Record<string, unknown>)
+    .map((one) => {
+      const name = String(one["name"] ?? "");
+      const input = one["input"] as Record<string, unknown> | null | undefined;
+      const hint = input?.["hint"];
+      return {
+        name: name.startsWith("/") ? name : `/${name}`,
+        description: typeof one["description"] === "string" ? one["description"] : "",
+        ...(typeof hint === "string" && hint !== "" ? { hint } : {}),
+      };
+    })
+    .filter((one) => one.name !== "/");
+
+/**
  * One `session/update` as something the window can draw, or nothing.
  *
- * Deliberately lossy. `usage_update` and `available_commands_update` arrive on
- * every turn and say nothing a person reads; dropping them here rather than in
- * the renderer keeps the wire the size of what is shown.
+ * Deliberately lossy: an update kind with nothing in it a person reads is
+ * dropped here rather than in the renderer, which keeps the wire the size of
+ * what is shown.
  */
 export const updateOf = (params: Record<string, unknown>): ChatUpdate | undefined => {
   const update = params["update"] as Record<string, unknown> | undefined;
@@ -317,6 +377,21 @@ export const updateOf = (params: Record<string, unknown>): ChatUpdate | undefine
   if (kind === "agent_thought_chunk") {
     const text = textOf(update["content"]);
     return text === undefined ? undefined : { kind: "message", role: "thought", text };
+  }
+
+  // ── the agent's own commands, skills included ──────────────────────────
+  //
+  // This was dropped, on the grounds that it "says nothing a person reads".
+  // That was wrong about what it carries: a *skill* is one of these, so
+  // dropping it meant `/bro` could not be found or run from the chat at all
+  // while working perfectly in the terminal beside it.
+  //
+  // The list replaces rather than merges, which is the adapter's own
+  // instruction — "the client should REPLACE its cached command list with this
+  // payload" — and is why an empty list is still an answer.
+  if (kind === "available_commands_update") {
+    const raw = update["availableCommands"];
+    return { kind: "commands", commands: commandsOf(Array.isArray(raw) ? raw : []) };
   }
 
   // A tool call arrives as several updates sharing one id: pending with a
@@ -757,15 +832,40 @@ export const conversation = (
     // Ignored if the adapter will not have it: an older one that cannot set a
     // mode is still a usable conversation, and refusing to open at all would
     // be a worse answer than a session running in the mode it chose.
-    yield* Effect.ignore(
-      Effect.flatMap(
-        request("session/set_config_option", { sessionId, configId: "mode", value: MODE }),
-        (reply) => {
-          const fresh = optionsOf(reply["configOptions"]);
-          return fresh.length === 0 ? Effect.void : Ref.set(settings, fresh);
-        },
-      ),
-    );
+    /**
+     * Set one of the session's options and keep whatever the reply says.
+     *
+     * The reply carries the whole set, so the call that changes a setting is
+     * also the one that corrects the record. Ignored on failure: an adapter
+     * that will not take an option is still a usable conversation, and
+     * refusing to open at all would be a worse answer than a session running
+     * as it chose.
+     */
+    const configure = (configId: string, value: string) =>
+      Effect.ignore(
+        Effect.flatMap(
+          request("session/set_config_option", { sessionId, configId, value }),
+          (reply) => {
+            const fresh = optionsOf(reply["configOptions"]);
+            return fresh.length === 0 ? Effect.void : Ref.set(settings, fresh);
+          },
+        ),
+      );
+
+    yield* configure("mode", options.mode ?? MODE);
+    // Only when something asked for one. An effort the adapter chose is a
+    // reasonable answer, and overwriting it with a guess from here would be
+    // this process having an opinion nobody wrote down.
+    if (options.effort !== undefined) {
+      yield* configure("effort", options.effort);
+    }
+
+    // The stored reading, first, so a window that opens and says nothing still
+    // has a figure. Before anything else can be emitted, because it describes
+    // the state the conversation is *in* rather than something that happened.
+    if (options.usage !== undefined) {
+      yield* emit({ kind: "usage", used: options.usage.used, size: options.usage.size });
+    }
 
     const promptOf = (text: string) => ({
       sessionId,
@@ -935,6 +1035,25 @@ export const migrations: ReadonlyArray<Migration> = [
        ) strict`,
     ],
   },
+  {
+    /**
+     * The last context reading, per session.
+     *
+     * Keyed by the session and not by the workspace, which is what makes
+     * `/new` correct without a delete: a fresh conversation has a new id and
+     * therefore no reading, so it cannot inherit the old one's tokens. The
+     * row for a forgotten session stays — it is still true of that transcript,
+     * which a fork can load later.
+     */
+    name: "chat.002-usage",
+    up: [
+      `create table chat_usage (
+         session_id text primary key,
+         used       integer not null,
+         size       integer not null
+       ) strict`,
+    ],
+  },
 ];
 
 /**
@@ -1008,6 +1127,17 @@ export class Chat extends Context.Service<
      */
     readonly openTerminal: (project: string, workspace: string) => Effect.Effect<string, ChatError>;
 
+    /**
+     * Forget which session this workspace's chat is on and open a new one.
+     *
+     * The transcript is not touched. What is forgotten is the *pointer* — the
+     * row in `chat_sessions` — so the old conversation is still on disk and
+     * still loadable by id; it is simply no longer the one this workspace
+     * continues. That is the only shape available anyway: deleting a
+     * transcript is the adapter's business and there is no call for it.
+     */
+    readonly fresh: (project: string, workspace: string) => Effect.Effect<string, ChatError>;
+
     /** Answer one of its permission requests. */
     readonly answer: (
       project: string,
@@ -1048,6 +1178,14 @@ const partsOf = (key: string): readonly [string, string] => {
 export const make = Effect.gen(function* () {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const db = yield* Db;
+  // ── the system defaults, read per conversation ─────────────────────────
+  //
+  // Taken at lookup rather than here, because `settings.ts` is deliberately
+  // read per call: a person editing the file should not have to restart a
+  // daemon holding a dozen ptys. The next conversation opened gets the new
+  // answer; the ones already running keep theirs, which is the same rule the
+  // agent's own command line follows.
+  const config = yield* Settings;
 
   const readSession = db.prepare(
     "select session_id from chat_sessions where project = ? and workspace = ?",
@@ -1055,6 +1193,16 @@ export const make = Effect.gen(function* () {
   const writeSession = db.prepare(
     `insert into chat_sessions (project, workspace, session_id) values (?, ?, ?)
        on conflict (project, workspace) do update set session_id = excluded.session_id`,
+  );
+  const dropSession = db.prepare("delete from chat_sessions where project = ? and workspace = ?");
+
+  // The context reading, per session. See `ChatOptions.usage`: the adapter
+  // sends none on a load, so a conversation nobody has spoken to today would
+  // otherwise have no figure at all.
+  const readUsage = db.prepare("select used, size from chat_usage where session_id = ?");
+  const writeUsage = db.prepare(
+    `insert into chat_usage (session_id, used, size) values (?, ?, ?)
+       on conflict (session_id) do update set used = excluded.used, size = excluded.size`,
   );
 
   /**
@@ -1136,10 +1284,35 @@ export const make = Effect.gen(function* () {
           return rest;
         });
 
+        // The workspace's own repository is not asked for here: this is the
+        // *workspace* directory, and `.awp/config.json` is untracked, so a
+        // fresh `jj workspace add` has no copy of it. The global file is the
+        // one that answers for a checkout — the same reason the create job
+        // reads the config from `input.repo` rather than from the workspace it
+        // just made.
+        const defaults = yield* config.read();
+        // What that session last reported, when there is a session to ask
+        // about. A new conversation has nothing, which is the honest answer:
+        // it has spent nothing yet.
+        const before =
+          typeof known === "string"
+            ? yield* Effect.orElseSucceed(
+                attempt("read the context reading", () => readUsage.all(known)),
+                () => [],
+              )
+            : [];
+        const used = before[0]?.["used"];
+        const size = before[0]?.["size"];
         const held = yield* conversation(spawner, {
           cwd: workspacePath(project, workspace),
+          ...(defaults.model === undefined ? {} : { model: defaults.model }),
+          ...(defaults.effort === undefined ? {} : { effort: defaults.effort }),
+          ...(defaults.mode === undefined ? {} : { mode: defaults.mode }),
           ...(typeof known === "string" ? { session: known } : {}),
           ...(asked.has(key) ? { fork: true } : {}),
+          ...(typeof used === "number" && typeof size === "number" && size > 0
+            ? { usage: { used, size } }
+            : {}),
         });
 
         // Written after the session exists rather than before, and every time
@@ -1186,6 +1359,21 @@ export const make = Effect.gen(function* () {
                 if (update.kind === "turn") {
                   yield* Ref.update(inFlight, (was) =>
                     update.status === "started" ? was + 1 : Math.max(0, was - 1),
+                  );
+                }
+                // Every reading, because the newest is the only true one and
+                // there are four of them a turn — a write of two integers
+                // against a cost measured in seconds of model time.
+                if (
+                  update.kind === "usage" &&
+                  update.used !== undefined &&
+                  update.size !== undefined &&
+                  update.size > 0
+                ) {
+                  yield* Effect.ignore(
+                    attempt("remember the context reading", () =>
+                      writeUsage.run(held.sessionId, update.used as number, update.size as number),
+                    ),
                   );
                 }
                 if (update.kind === "permission" && update.id !== undefined) {
@@ -1289,6 +1477,46 @@ export const make = Effect.gen(function* () {
         ),
       ),
 
+    /**
+     * Start again: forget the session, throw the adapter away, open a new one.
+     *
+     * The order is the whole of it, and each step is there for something the
+     * others do not cover.
+     *
+     *   invalidate   the adapter being held is on the old session and lives
+     *                for two minutes after the last reader goes. Without this
+     *                the window re-subscribes to exactly what it asked to
+     *                leave
+     *   forget       the row is what the lookup reads to decide between
+     *                `session/load` and `session/new`. Left in place, the new
+     *                adapter loads the conversation again and nothing has
+     *                changed
+     *   acquire      eagerly, so the new session id can be answered and a
+     *                refusal lands on the keypress rather than silently on
+     *                the next subscribe
+     *
+     * Invalidate *before* forgetting, not after: the finalizer of the old
+     * adapter writes nothing, but the lookup of a *new* one would race a
+     * delete that had not landed yet, and the failure would be a `/new` that
+     * silently continued the old conversation.
+     */
+    fresh: (project: string, workspace: string) =>
+      Effect.gen(function* () {
+        const key = keyOf(project, workspace);
+        yield* RcMap.invalidate(conversations, key);
+        // Ignored, like every other write to this table. A row that could not
+        // be deleted means the next open continues the old conversation, which
+        // is the previous behaviour rather than a broken one — and refusing to
+        // start a conversation because a pointer could not be cleared would be
+        // the worse answer.
+        yield* Effect.ignore(
+          attempt("forget the chat session", () => dropSession.run(project, workspace)),
+        );
+        return yield* Effect.scoped(
+          Effect.map(RcMap.get(conversations, key), (one) => one.sessionId),
+        );
+      }),
+
     answer: (project: string, workspace: string, request: string, option: string) =>
       Effect.tap(
         held(project, workspace, (one) => one.answer(request, option)),
@@ -1308,5 +1536,8 @@ export const make = Effect.gen(function* () {
   };
 });
 
-export const layer: Layer.Layer<Chat, never, ChildProcessSpawner.ChildProcessSpawner | Db> =
-  Layer.effect(Chat)(make);
+export const layer: Layer.Layer<
+  Chat,
+  never,
+  ChildProcessSpawner.ChildProcessSpawner | Db | Settings
+> = Layer.effect(Chat)(make);

@@ -65,10 +65,14 @@ interface Rect {
 }
 
 interface HostBridge {
-  readonly createWebview: (options: { readonly url?: string | undefined }) => Promise<number>;
+  readonly createWebview: (options: {
+    readonly url?: string | undefined;
+    readonly key?: string | undefined;
+  }) => Promise<number>;
   readonly destroyWebview: (id: number) => void;
   readonly setWebviewBounds: (id: number, rect: Rect) => void;
   readonly callWebview: (id: number, method: string, argument?: unknown) => void;
+  readonly focusWindow?: (() => void) | undefined;
   readonly onWebviewEvent: (
     listener: (message: {
       readonly id: number;
@@ -96,6 +100,19 @@ const bridge = (): HostBridge | undefined =>
  */
 export const hostWebviewAvailable = (): boolean => bridge() !== undefined;
 
+/**
+ * Put the keyboard back in this window.
+ *
+ * Clicking inside the web panel focuses *that* `webContents`, so a control
+ * this renderer draws in response — the annotator's note box — is focusable
+ * and deaf until the main process moves focus back. Nothing at all in a plain
+ * browser, where there is no second process to have taken it, and optional on
+ * the bridge so an older preload is a no-op rather than a crash.
+ */
+export const focusHostWindow = (): void => {
+  bridge()?.focusWindow?.();
+};
+
 const same = (a: Rect | undefined, b: Rect): boolean =>
   a !== undefined && a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
 
@@ -105,7 +122,22 @@ const same = (a: Rect | undefined, b: Rect): boolean =>
  */
 export const createWebview = (
   box: HTMLElement,
-  options: { readonly url?: string | undefined },
+  options: {
+    readonly url?: string | undefined;
+    /**
+     * Which slot in the window this is.
+     *
+     * The main process keeps **one view per (window, key)** and destroys
+     * whatever was in the slot before making a new one. That is a rule about
+     * how many there may be rather than a guard on one route, and it is there
+     * because every duplicate this panel has produced arrived by a different
+     * route: a hot edit that left the tree stale, StrictMode's mount
+     * rehearsal, devtools opening. A view nothing in the renderer holds cannot
+     * be reached by anything here — see the orphan note — so the guarantee has
+     * to live where the handle does.
+     */
+    readonly key?: string | undefined;
+  },
 ): HostWebview => {
   const host = bridge();
   if (host === undefined) {

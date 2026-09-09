@@ -46,11 +46,21 @@ export function Pane({
   session,
   fixture,
   scheme,
+  focus,
 }: {
   /** The session to attach to, or undefined to render `fixture` instead. */
   readonly session: string | undefined;
   readonly fixture: string;
   readonly scheme: ColorScheme;
+  /**
+   * Changes when the window has moved somewhere on purpose.
+   *
+   * The attach effect below focuses the terminal, which covers arriving at a
+   * session that had to be mounted — and misses every other arrival: the same
+   * session reached again, or the face switched back to the terminal. Both
+   * leave a person typing at a window that is not listening.
+   */
+  readonly focus?: string | undefined;
 }) {
   const container = useRef<HTMLDivElement | null>(null);
   const [failure, setFailure] = useState<string>("");
@@ -133,6 +143,27 @@ export function Pane({
       attachment?.detach();
     };
   }, [session, fixture]);
+
+  // Focus on arrival. Behind `paneReady()` for the same reason the recolour
+  // below is: there is no terminal to focus until the wasm has compiled, and
+  // the appearance can change while it is still going.
+  useEffect(() => {
+    // Read, not merely watched — see the same guard in Chat: an absent prop is
+    // nobody having asked, and focus that moves without being asked for is
+    // worse than focus that has to be.
+    if (focus === undefined) {
+      return;
+    }
+    let cancelled = false;
+    void paneReady().then(() => {
+      if (!cancelled) {
+        focusPane();
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [focus]);
 
   // Recolour without remounting. Still behind paneReady() — the appearance can
   // change while the wasm is still compiling, and there is no renderer to talk

@@ -37,12 +37,38 @@ describe("updateOf", () => {
     ).toBe("thought");
   });
 
-  it("drops the command list, which nothing draws yet", () => {
-    // Two arrive on every turn and both were dropped as "nobody reads these".
-    // One of them turned out to be the only place the context figure exists —
-    // see below — and this is the other. It is the slash-command list, and it
-    // stays dropped only until something shows it.
-    expect(updateOf({ update: { sessionUpdate: "available_commands_update" } })).toBeUndefined();
+  it("keeps the command list, because a skill is one of them", () => {
+    // Both of the updates dropped as "nobody reads these" turned out to
+    // matter. One was the only place the context figure exists; this is the
+    // other, and dropping it meant a skill the terminal runs happily could
+    // not be found or invoked from the chat at all.
+    const said = updateOf({
+      update: {
+        sessionUpdate: "available_commands_update",
+        availableCommands: [
+          { name: "bro", description: "a skill.\nAnd its second line.", input: { hint: "[file]" } },
+          { name: "compact", description: "", input: null },
+        ],
+      },
+    });
+    expect(said?.kind).toBe("commands");
+    // The slash is put back on: ACP carries `bro` and what a person types is
+    // `/bro`, which is what the menu matches against.
+    expect(said?.commands).toStrictEqual([
+      { name: "/bro", description: "a skill.\nAnd its second line.", hint: "[file]" },
+      { name: "/compact", description: "" },
+    ]);
+  });
+
+  it("answers an empty list rather than nothing", () => {
+    // The adapter's own instruction is that the client REPLACES its cached
+    // list with the payload, so a set that has become empty is an answer: a
+    // command that has gone must stop being offered.
+    const said = updateOf({
+      update: { sessionUpdate: "available_commands_update", availableCommands: [] },
+    });
+    expect(said?.kind).toBe("commands");
+    expect(said?.commands).toStrictEqual([]);
   });
 
   it("reads the context figure, which arrives as a whole reading", () => {
@@ -287,7 +313,19 @@ describe("the record of which session is ours", () => {
     expect(sql).toContain("create table chat_sessions");
     expect(sql).toContain("primary key (project, workspace)");
     // Named, not numbered, and fixed the moment it has run anywhere.
-    expect(migrations.map((migration) => migration.name)).toEqual(["chat.001-sessions"]);
+    expect(migrations.map((migration) => migration.name)).toEqual([
+      "chat.001-sessions",
+      "chat.002-usage",
+    ]);
+  });
+
+  it("keys a context reading by the session, not by the workspace", () => {
+    // Which is what makes `/new` correct with no delete: a fresh conversation
+    // has a new id and therefore no reading, so it cannot inherit the tokens
+    // of the one it replaced. Keyed by workspace it would.
+    const sql = migrations.flatMap((migration) => migration.up).join("\n");
+    expect(sql).toContain("create table chat_usage");
+    expect(sql).toContain("session_id text primary key");
   });
 });
 

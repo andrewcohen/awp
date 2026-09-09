@@ -28,9 +28,76 @@ export type Address =
       readonly workspace: string;
       readonly kind: string;
     }
-  | { readonly at: "session"; readonly name: string };
+  | { readonly at: "session"; readonly name: string }
+  /**
+   * A thread, which is not a place the window can draw.
+   *
+   * ── it exists to be a link, and it resolves to a workspace ─────────────
+   *
+   * A thread holds several checkouts, so there is nothing for the three
+   * columns to show for one — the agent column needs a session and the panels
+   * need a directory. What a thread address is *for* is being pasted: "copy
+   * link" in the sidebar's menu produces one, and opening it lands on the
+   * thread's first checkout.
+   *
+   * So this is the one address that is resolved rather than rendered. `App`
+   * swaps it for the workspace it names, with `replace`, so the history holds
+   * the place and not the redirect — pressing back from it leaves for wherever
+   * you were, not for a link that would resolve again.
+   *
+   * Why an address at all, rather than the workspace's own: a thread survives
+   * its checkouts being renamed, added and removed, and a link that named one
+   * of them would go stale the first time somebody reorganised the work. The
+   * id is the thing that does not move.
+   */
+  | { readonly at: "thread"; readonly id: string };
 
 export const nowhere: Address = { at: "nothing" };
+
+/**
+ * A thread's address as something pasteable.
+ *
+ * The origin and path come from the window rather than being composed: the
+ * renderer is served by a dev server in development and over `app://` in a
+ * build, and only the window knows which. The hash is the whole of the
+ * address — see routes.ts on why the history is a hash history.
+ *
+ * Not a `awp://` scheme link. Nothing registers one, so it would be a link
+ * that only looks clickable — and what this is for is pasting into a message,
+ * a note or another window of this app.
+ *
+ * @param at  where the window is. A parameter with a default rather than a
+ *            read, because this module is deliberately free of the router and
+ *            has to be free of the document for the same reason: it is the
+ *            pure half, imported by tests and by anything that must not reach
+ *            for a browser. With no location — under vitest, on Node — the
+ *            hash alone is answered, which is still a usable address inside
+ *            the app rather than a throw.
+ */
+export const threadLink = (
+  id: string,
+  at: { readonly origin: string; readonly pathname: string } | undefined = globalThis.location,
+): string => {
+  const hash = `#${pathOf({ at: "thread", id })}`;
+  return at === undefined ? hash : `${at.origin}${at.pathname}${hash}`;
+};
+
+/**
+ * The style guide's path.
+ *
+ * Here rather than in routes.ts, and for the reason stated at the top of this
+ * file: `App` has to read it, routes.ts names `App` as the root's component,
+ * and `import/no-cycle` is on repo-wide. Nothing in this file imports the
+ * router, so nothing in it can be part of a cycle — which is the whole reason
+ * the two are separate modules.
+ *
+ * Not an `Address`. The union above is what the window can be *looking at* —
+ * a session, a workspace, or nothing — and every reader of it is asking a
+ * question about work. The style guide is a different screen rather than a
+ * different selection, so making it a fourth case would put a value through
+ * `sessionAt` and `placeAt` that neither has an answer for.
+ */
+export const STYLE_GUIDE = "/styleguide";
 
 /** The address a session lives at. */
 export const addressOf = (session: SessionInfo): Address => {
@@ -57,6 +124,8 @@ export const pathOf = (address: Address): string => {
       return "/";
     case "session":
       return `/s/${part(address.name)}`;
+    case "thread":
+      return `/t/${part(address.id)}`;
     case "workspace":
       return `/w/${part(address.project)}/${part(address.workspace)}/${part(address.kind)}`;
   }
@@ -71,7 +140,10 @@ export const pathOf = (address: Address): string => {
  * paths above guarantee.
  */
 export const addressFrom = (params: Record<string, string | undefined>): Address => {
-  const { project, workspace, kind, name } = params;
+  const { project, workspace, kind, name, thread } = params;
+  if (thread !== undefined) {
+    return { at: "thread", id: thread };
+  }
   if (name !== undefined) {
     return { at: "session", name };
   }
@@ -108,7 +180,10 @@ export const sessionAt = (
   address: Address,
   sessions: ReadonlyArray<SessionInfo>,
 ): SessionInfo | undefined => {
-  if (address.at === "nothing") {
+  // A thread is resolved to a workspace before anything asks this — see the
+  // note on the variant — so it answers nothing rather than being a fourth
+  // case to reason about here.
+  if (address.at === "nothing" || address.at === "thread") {
     return undefined;
   }
   const found = sessions.find((session) =>
