@@ -19,15 +19,18 @@ import { CHROME, SPIN, SYNTAX } from "./theme";
 import type { Place } from "./Threads";
 import { useConversation, useSpinner } from "./useConversation";
 
-/** A tool row is a receipt: what ran, and whether it worked. */
+/**
+ * A tool row is a receipt: what ran, and whether it worked.
+ *
+ * Wrapped rather than clipped, but bounded — a title here is whatever command
+ * was run, and some of them are a forty-line script. Wrapping one of those
+ * unbounded gives a single tool call the whole transcript.
+ */
+const clip = (text: string, most: number) =>
+  text.length > most ? `${text.slice(0, most - 1)}…` : text;
+
 const mark = (status: string) =>
   status === "completed" ? "✓" : status === "failed" ? "✗" : status === "asking" ? "?" : "…";
-
-/** One line of it, because the whole of a 4000-line grep is not a receipt. */
-const receipt = (output: string): string | undefined => {
-  const first = output.split("\n").find((line) => line.trim() !== "");
-  return first === undefined ? undefined : first.slice(0, 100);
-};
 
 export const Chat = ({
   place,
@@ -169,18 +172,27 @@ export const Chat = ({
               )}
             </box>
           ) : (
+            // ── a tool call is one line ──────────────────────────────────
+            //
+            // Truncated rather than wrapped, which is the opposite of the rule
+            // everywhere else here and is the point: a transcript is read for
+            // what was said, and a tool call is a receipt beside it. One
+            // `bun -e` script wrapped over nine rows buries the sentence it
+            // was run for. The output line went with it, for the same reason.
+            //
+            // A question is the exception: it is the one tool row that wants
+            // something from a person, so it keeps a line of its own.
             <box key={at} flexDirection="column" paddingBottom={1}>
               <text
                 fg={CHROME.muted}
-                content={`  ${mark(item.status)} ${item.title}${
-                  item.subagent === undefined ? "" : ` · ${item.subagent}`
-                }`}
+                content={`  ${mark(item.status)} ${clip(
+                  `${item.title}${item.subagent === undefined ? "" : ` · ${item.subagent}`}`,
+                  Math.max(12, width - 6),
+                )}`}
               />
-              {receipt(item.output) === undefined ? undefined : (
-                <text fg={CHROME.muted} content={`      ${receipt(item.output)}`} />
-              )}
               {item.ask === undefined ? undefined : (
                 <text
+                  wrapMode="word"
                   fg={CHROME.ask}
                   content={`    asks: ${item.ask.options.map((one) => one.label).join("   ")}`}
                 />
@@ -232,17 +244,23 @@ export const Chat = ({
         />
       </box>
 
+      {/* ── the footer has to fit ────────────────────────────────────────
+          Every chord it could name does not: at 70 columns the old line ran
+          past the edge and took `ctrl-q quit` with it, which is the one thing
+          somebody stuck needs to be able to read. So it says the four that
+          are always true, and swaps in the answer keys only while something
+          is being asked. */}
       <text
         height={1}
         bg={CHROME.bar}
-        fg={CHROME.muted}
+        fg={notice === "" ? CHROME.muted : CHROME.text}
         content={
           notice === ""
-            ? ` enter send · alt-enter newline · esc cancel · ctrl-y allow · ctrl-\\ back · ctrl-q quit${
-                pending === undefined
-                  ? ""
-                  : `  ·  asked: ${pending.options.map((one) => one.label).join(" / ")}`
-              }`
+            ? pending === undefined
+              ? " ⏎ send · esc cancel · ctrl-\\ back · ctrl-q quit"
+              : ` ctrl-y ${pending.options[0]?.label ?? "allow"} · ctrl-n ${
+                  pending.options.at(-1)?.label ?? "deny"
+                } · ctrl-\\ back`
             : ` ${notice}`
         }
       />
