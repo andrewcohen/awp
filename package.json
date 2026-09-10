@@ -54,7 +54,10 @@
     "mcp": "bun packages/server/src/mcp-main.ts",
     "probe:mcp": "bun packages/server/src/probe/mcp.ts",
     "probe:tasks": "bun packages/server/src/probe/tasks.ts",
-    "probe:shell": "bun run --filter amoeba probe:shell"
+    "probe:shell": "bun run --filter amoeba probe:shell",
+    "probe:menu": "bun apps/tui/src/probe/menu.tsx",
+    "probe:paste": "bun run --filter tui probe:paste",
+    "probe:tui-reconnect": "bun run --filter tui probe:reconnect"
   },
   "devDependencies": {
     "@types/bun": "1.4.0",

@@ -107,12 +107,15 @@ export const Term = ({
 
   return (
     <box flexGrow={1} flexDirection="column" backgroundColor={CHROME.base}>
-      <text
-        height={1}
-        bg={CHROME.accent}
-        fg={CHROME.base}
-        content={` ${place.project}/${place.workspace} · ${dir ?? "…"} `}
-      />
+      {/* A bar is a box, not a text: `bg` on a text paints under its own
+          characters and stops there, whatever width it is given. */}
+      <box height={1} backgroundColor={CHROME.accent}>
+        <text
+          fg={CHROME.base}
+          wrapMode="none"
+          content={` ${place.project}/${place.workspace} · ${dir ?? "…"} `}
+        />
+      </box>
       {failure === "" ? undefined : <text fg={CHROME.warn} content={` ${failure}`} />}
       <terminal
         ref={terminal}
@@ -124,7 +127,9 @@ export const Term = ({
           child.current?.terminal?.resize(cols, rows)
         }
       />
-      <text height={1} bg={CHROME.bar} fg={CHROME.muted} content=" ctrl-\ back · ctrl-q quit" />
+      <box height={1} backgroundColor={CHROME.bar}>
+        <text fg={CHROME.muted} wrapMode="none" content=" ctrl-\ back · ctrl-q quit" />
+      </box>
     </box>
   );
 };

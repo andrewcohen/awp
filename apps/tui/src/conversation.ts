@@ -18,7 +18,8 @@
 //                              overlap and the first `ended` arrives while the
 //                              second is still working
 
-import type { ChatDiff, ChatUpdate } from "@awp-kit/protocol";
+import type { ChatCommand, ChatDiff, ChatUpdate } from "@awp-kit/protocol";
+import { toolLabel, toolTitleOf } from "@awp-kit/protocol/tools";
 
 export type Item =
   | {
@@ -53,7 +54,30 @@ export type Item =
        */
       diffs?: ReadonlyArray<ChatDiff>;
       toolKind?: string;
+      /**
+       * The tool's own name — `Bash`, `Read`, `mcp__awp__awp_thread`.
+       *
+       * What a row is labelled with — when it is labelled at all. The kind
+       * is ten values for fifty tools: see `ChatUpdate.toolName`, and
+       * `toolLabel` for what is suppressed and why.
+       */
+      toolName?: string;
+      /**
+       * What the call is for — Bash's own `description`, forwarded by the
+       * adapter. Drawn in place of the command; see `toolTitleOf`.
+       */
+      purpose?: string;
       subagent?: string;
+      /**
+       * Which turn made the call.
+       *
+       * Here so that a run of receipts can be left open while the turn that
+       * is producing it is still going, and rolled up when it ends — see
+       * {@link grouped}. Nothing on the wire carries it: a tool update has an
+       * id and no turn, so it is taken from the fold's own count at the
+       * moment the row first appears.
+       */
+      turn?: number;
       ask?: {
         request: string;
         options: ReadonlyArray<{ id: string; label: string }>;
@@ -73,14 +97,31 @@ export type Conversation = {
   readonly used?: number;
   /** The context window those tokens are out of. */
   readonly size?: number;
+  /**
+   * The agent's own slash commands, skills included.
+   *
+   * On the conversation rather than asked for, because the adapter *pushes*
+   * the set when it changes — a skill discovered as the agent works in a
+   * subdirectory — and the daemon replays the last one to a client that opens
+   * later. So the thing already reading the stream is the one that has to
+   * know.
+   */
+  readonly commands: ReadonlyArray<ChatCommand>;
 };
 
-export const empty: Conversation = { items: [], running: 0, turn: 0, asks: 0 };
+export const empty: Conversation = { items: [], running: 0, turn: 0, asks: 0, commands: [] };
 
 const roleOf = (update: ChatUpdate): "user" | "agent" | "thought" =>
   update.role === "user" ? "user" : update.role === "thought" ? "thought" : "agent";
 
 export const fold = (state: Conversation, update: ChatUpdate): Conversation => {
+  // Replaced, never merged — the adapter's own instruction, and it is why an
+  // empty list is an answer rather than a no-op: a command that has gone
+  // should stop being offered.
+  if (update.kind === "commands") {
+    return { ...state, commands: update.commands ?? [] };
+  }
+
   if (update.kind === "turn") {
     const started = update.status === "started";
     return {
@@ -130,6 +171,8 @@ export const fold = (state: Conversation, update: ChatUpdate): Conversation => {
     // `a ?? (b === undefined)`, which is how the tool kind got dropped the
     // first time this was written.
     const toolKind = update.toolKind ?? before?.toolKind;
+    const toolName = update.toolName ?? before?.toolName;
+    const purpose = update.purpose ?? before?.purpose;
     const subagent = update.subagent ?? before?.subagent;
     // Replaced, never merged: the adapter sends its guess at the change when
     // the call is made and the real one when it has run, about the same file,
@@ -143,7 +186,13 @@ export const fold = (state: Conversation, update: ChatUpdate): Conversation => {
       output: update.output ?? before?.output ?? "",
       ...(diffs === undefined ? {} : { diffs }),
       ...(toolKind === undefined ? {} : { toolKind }),
+      ...(toolName === undefined ? {} : { toolName }),
+      ...(purpose === undefined ? {} : { purpose }),
       ...(subagent === undefined ? {} : { subagent }),
+      // The turn it first appeared in, kept across every later patch: a call
+      // that finishes after the turn ended still belongs to the turn that
+      // made it.
+      turn: before?.turn ?? state.turn,
       ...(before?.ask === undefined ? {} : { ask: before.ask }),
     };
     return at < 0
@@ -247,6 +296,21 @@ export const mine = (state: Conversation, text: string, key: string): Conversati
 });
 
 /**
+ * What a row is called.
+ *
+ * The rule is `toolVerb`, shared with the window — a `Bash` call labelled
+ * `bash` here and `ran` there is two vocabularies for one conversation. This
+ * is the shape adapter, and nothing more.
+ */
+export const verbOf = (item: Item): string => (item.kind === "tool" ? toolLabel(item) : "");
+
+/**
+ * The title worth drawing, which for a Bash call whose command has not
+ * arrived yet is none. Shared with the window — see `toolTitleOf`.
+ */
+export const titleOf = (item: Item): string => (item.kind === "tool" ? toolTitleOf(item) : "");
+
+/**
  * A call that has something to show, as opposed to one that leaves a receipt.
  *
  * The line is the patch. A `read`, a `grep`, a `bun run test` says what it did
@@ -264,21 +328,42 @@ const standsAlone = (item: Item): boolean =>
 /** The transcript as blocks, with a run of receipts counted as one. */
 export type Block =
   | { readonly kind: "one"; readonly item: Item }
-  | { readonly kind: "calls"; readonly items: ReadonlyArray<Item> };
+  | {
+      readonly kind: "calls";
+      readonly items: ReadonlyArray<Item>;
+      /** Whether the turn that is making these is still going. */
+      readonly live: boolean;
+    };
 
 /**
- * Roll up the calls that produced nothing to look at.
+ * Roll up the calls that produced nothing to look at — once they are over.
  *
- * The window's own `grouped` rolls up *every* consecutive tool call, and this
- * one deliberately does not: a column 80 cells wide has room for one thing at
- * a time, so an edit hidden behind `+7 earlier calls` is the change itself
- * folded away. What is folded here is the run of receipts around it.
+ * ── a run is folded when its turn ends, not while it is happening ────────
  *
- * Consecutive only, the same as the window's: a call after a sentence is a new
- * piece of work, and merging across the sentence loses the order things
+ * The first version folded every run to its last three rows, which is the
+ * window's rule. In a column that is the whole screen it reads wrong for the
+ * one case somebody is actually watching: while the agent works, the calls
+ * scrolling past *are* the progress, and hiding all but three of them hides
+ * the thing being waited for. Once the turn has ended they are a receipt, and
+ * a dozen receipts are most of the transcript by height and the least of it
+ * by interest.
+ *
+ * So a block knows whether it is live, and the drawing decides — `live` is
+ * the turn currently in flight, and a run belonging to it is drawn whole.
+ *
+ * What is never folded, live or not: a call that changed a file, and a
+ * question. The change is the thing worth reading, and the question is the
+ * one row that wants something from a person.
+ *
+ * Consecutive only, the same as the window's: a call after a sentence is a
+ * new piece of work, and merging across the sentence loses the order things
  * happened in.
  */
-export const grouped = (items: ReadonlyArray<Item>): ReadonlyArray<Block> => {
+export const grouped = (
+  items: ReadonlyArray<Item>,
+  /** The turn in flight, when one is. Its calls are drawn whole. */
+  live?: number,
+): ReadonlyArray<Block> => {
   const out: Block[] = [];
   for (const item of items) {
     if (item.kind !== "tool" || standsAlone(item)) {
@@ -287,8 +372,16 @@ export const grouped = (items: ReadonlyArray<Item>): ReadonlyArray<Block> => {
     }
     const last = out.at(-1);
     if (last?.kind === "calls")
-      out[out.length - 1] = { kind: "calls", items: [...last.items, item] };
-    else out.push({ kind: "calls", items: [item] });
+      out[out.length - 1] = { kind: "calls", items: [...last.items, item], live: last.live };
+    else
+      out.push({
+        kind: "calls",
+        items: [item],
+        // A tool row with no turn on it predates the field; treating it as
+        // finished is the safe way round, since the alternative is a
+        // transcript that never folds anything again.
+        live: item.turn !== undefined && item.turn === live,
+      });
   }
   return out;
 };

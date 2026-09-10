@@ -5,7 +5,9 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./client": "./src/client.ts"
+    "./client": "./src/client.ts",
+    "./commands": "./src/commands.ts",
+    "./tools": "./src/tools.ts"
   },
   "dependencies": {
     "@awp-kit/jobs": "workspace:*",

@@ -1814,6 +1814,42 @@ export const ChatUpdate = Schema.Struct({
   title: Schema.optional(Schema.String),
   /** `execute`, `read`, `edit` — what sort of thing the tool is. */
   toolKind: Schema.optional(Schema.String),
+  /**
+   * The tool's own name: `Bash`, `Read`, `Edit`, `mcp__awp__awp_thread`.
+   *
+   * ── the kind is too coarse to label a row with ──────────────────────────
+   *
+   * `toolKind` is ACP's enum, and the adapter maps every Claude Code tool
+   * onto ten values: `Bash` is `execute`, and so is nothing else — while
+   * `Skill`, `AskUserQuestion` and every MCP tool are all `other`, and
+   * `TodoWrite`, `Task` and the task tools are all `think`. A column of rows
+   * reading `execute` and `other` says less than the titles beside it.
+   *
+   * The name is on every `tool_call` notification as
+   * `_meta.claudeCode.toolName` and was simply not taken. It is a name from
+   * somebody else's vocabulary and is passed through unchanged: a client
+   * shortens or renames it to taste, and a tool this daemon has never heard
+   * of still arrives with a label rather than as `other`.
+   */
+  toolName: Schema.optional(Schema.String),
+  /**
+   * What the call is *for*, in the agent's own words.
+   *
+   * Bash's schema requires a description — "Clear, concise description of
+   * what this command does in active voice" — and the adapter forwards it as
+   * `_meta.claudeCode.title`. It is the difference between a row reading
+   *
+   *   bash  python3 - <<'PY' … forty lines of heredoc …
+   *   bash  Show where the adapter reads a tool's description field
+   *
+   * and it is the only field on a tool call that says intent rather than
+   * mechanism. A `Task` carries the same thing as its title, which is why
+   * this is not read from there: that one is already the title.
+   *
+   * Absent for every other tool — nothing else in the set has a purpose
+   * field — so the command, the path or the pattern stands as the row.
+   */
+  purpose: Schema.optional(Schema.String),
   status: Schema.optional(Schema.String),
   output: Schema.optional(Schema.String),
 

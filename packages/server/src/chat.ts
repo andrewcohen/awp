@@ -145,6 +145,29 @@ export class ChatError extends Data.TaggedError("ChatError")<{
  * See the note at the top: the default is a model approving tool calls on this
  * client's behalf, which is not a thing to inherit by saying nothing.
  */
+/**
+ * The tool calls in a transcript that nothing has finished.
+ *
+ * A patch keyed by id, folded to the last status each id was given. An id
+ * that was mentioned and never given one at all counts as hanging: the
+ * adapter opens a call with `status: "pending"` and can simply stop.
+ *
+ * Pure, and exported, because the Effect around it has a `Ref` and a queue
+ * in it and this is the part that can be wrong.
+ */
+export const hanging = (updates: ReadonlyArray<ChatUpdate>): ReadonlyArray<string> => {
+  const last = new Map<string, string>();
+  for (const update of updates) {
+    if (update.kind !== "tool" || update.id === undefined) continue;
+    if (update.status !== undefined) last.set(update.id, update.status);
+    else if (!last.has(update.id)) last.set(update.id, "");
+  }
+  return [...last].filter(([, status]) => !ENDED.has(status)).map(([id]) => id);
+};
+
+/** The statuses that mean a call is over, whatever it did. */
+const ENDED = new Set(["completed", "failed", "cancelled"]);
+
 export const MODE = "default";
 
 /** What a turn is asked to run as. */
@@ -501,11 +524,26 @@ export const updateOf = (params: Record<string, unknown>): ChatUpdate | undefine
     // compete for the row: `first` is only text when the tool answered with
     // text. A call that changed no file has an empty list and says nothing.
     const diffs = diffsOf(content);
+    const meta = (update["_meta"] as Record<string, unknown> | undefined)?.["claudeCode"] as
+      | Record<string, unknown>
+      | undefined;
+    const toolName = meta?.["toolName"];
+    // What the call is for, which the adapter puts here from the tool's own
+    // `description`. Named `title` on its side and `purpose` on ours: the
+    // row already has a title, and this is the other thing a row can say.
+    const purpose = meta?.["title"];
     return {
       kind: "tool",
       id,
       ...(typeof update["title"] === "string" ? { title: update["title"] } : {}),
       ...(typeof update["kind"] === "string" ? { toolKind: update["kind"] } : {}),
+      // The tool's own name, which the kind is too coarse to stand in for:
+      // `Bash` and `Read` and `Edit` all reach a client as `execute`,
+      // `read`, `edit` — and `Skill`, `AskUserQuestion` and every MCP tool
+      // reach it as `other`. It rides on `_meta`, so it is read from there
+      // rather than from a field ACP defines.
+      ...(typeof toolName === "string" ? { toolName } : {}),
+      ...(typeof purpose === "string" ? { purpose } : {}),
       ...(typeof update["status"] === "string" ? { status: update["status"] } : {}),
       ...(output === undefined ? {} : { output }),
       ...(diffs.length === 0 ? {} : { diffs }),
@@ -643,6 +681,35 @@ export const conversation = (
           yield* Queue.offer(queue, seq);
         }
       });
+
+    /**
+     * Every tool call this conversation has left hanging, resolved.
+     *
+     * ── a turn ends; the calls inside it may not say so ──────────────────
+     *
+     * ACP has no "the turn took this call with it" update, and the adapter
+     * does not send a terminal status for a call that was in flight when a
+     * turn was cancelled, refused, or died. So the row stays `pending` for
+     * the life of the conversation — reported as bash calls "that just spin
+     * forever and dont resolve", and it is worse than a stuck spinner:
+     * every client reads that row as work still happening.
+     *
+     * Here rather than in each face, for the reason every rule in this
+     * repo is: a client deriving it is a second implementation, and the
+     * two would disagree about what a hanging call means. What a face gets
+     * is an ordinary `tool` update with a terminal status, which every
+     * fold already merges by id.
+     *
+     * `cancelled` and not `failed`: the call did not fail — nothing is
+     * known about what it did, only that whatever was watching it stopped.
+     * A cross would be a claim about the tool.
+     */
+    const settleHangingCalls = Effect.gen(function* () {
+      const all = yield* Ref.get(transcript);
+      for (const id of hanging(all.map((one) => one.update))) {
+        yield* emit({ kind: "tool", id, status: "cancelled" });
+      }
+    });
 
     // Requests this client made, waiting for their replies, and requests the
     // agent made, waiting for a person. Two directions, two tables.
@@ -1069,6 +1136,11 @@ export const conversation = (
               // session, which is the worst of the three states to be wrong
               // about.
               Effect.orElseSucceed(() => "failed"),
+              // Any call still in flight is settled *before* the turn's own
+              // end, so a client folding both in one batch sees the rows
+              // resolve and then the turn stop — rather than a turn that
+              // ended with work apparently still going on inside it.
+              Effect.tap(() => settleHangingCalls),
               Effect.flatMap((stopReason) => emit({ kind: "turn", status: "ended", stopReason })),
             ),
             mine,

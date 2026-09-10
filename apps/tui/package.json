@@ -11,7 +11,10 @@
     "probe:terminal": "bun src/probe/drive.ts",
     "probe:ceiling": "bun src/probe/ceiling.ts",
     "probe:join": "bun src/probe/join.ts",
-    "probe:transcript": "bun src/probe/transcript.tsx"
+    "probe:transcript": "bun src/probe/transcript.tsx",
+    "probe:menu": "bun src/probe/menu.tsx",
+    "probe:paste": "bun src/probe/paste.tsx",
+    "probe:reconnect": "AWP_DAEMON_URL=ws://127.0.0.1:5284 bun src/probe/reconnect.ts"
   },
   "dependencies": {
     "@awp-kit/protocol": "workspace:*",

@@ -1,6 +1,6 @@
 import { Effect, Exit, Ref } from "effect";
 import { describe, expect, it } from "vitest";
-import { MODE, migrations, optionsOf, permissionOf, settledWhen, updateOf } from "./chat";
+import { MODE, hanging, migrations, optionsOf, permissionOf, settledWhen, updateOf } from "./chat";
 
 // The shapes here are not invented: they are the updates a real turn produced,
 // copied off a spike against the adapter on 2026-08-28. A fixture written from
@@ -117,6 +117,36 @@ describe("updateOf", () => {
       toolKind: "execute",
       status: "pending",
     });
+  });
+
+  it("takes the tool's own name off `_meta`", () => {
+    // ACP's `kind` is ten words for the fifty tools an agent has: `Bash` is
+    // the whole of `execute`, and `Skill`, `AskUserQuestion` and every MCP
+    // tool are `other`. The name is what a client labels a row with, and it
+    // rides on `_meta.claudeCode` rather than on a field ACP defines — so it
+    // was simply not being read, and every terminal row said `execute`.
+    expect(
+      updateOf({
+        update: {
+          sessionUpdate: "tool_call",
+          toolCallId: "toolu_01",
+          status: "pending",
+          title: "Terminal",
+          kind: "execute",
+          _meta: { claudeCode: { toolName: "Bash" } },
+        },
+      }),
+    ).toMatchObject({ toolKind: "execute", toolName: "Bash" });
+  });
+
+  it("leaves the name out when the adapter sent none", () => {
+    // An older adapter, and every row replayed from a transcript written by
+    // one. A client falls back to the kind rather than drawing nothing.
+    expect(
+      updateOf({
+        update: { sessionUpdate: "tool_call", toolCallId: "toolu_01", kind: "execute" },
+      }),
+    ).not.toHaveProperty("toolName");
   });
 
   it("names the command when the second update brings it", () => {
@@ -583,5 +613,49 @@ describe("waiting for a turn to settle", () => {
     expect(Exit.isSuccess(exit)).toBe(true);
     expect(took).toBeGreaterThanOrEqual(2500);
     expect(took).toBeLessThan(6000);
+  });
+});
+
+const tool = (id: string, status?: string) =>
+  ({ kind: "tool", id, ...(status === undefined ? {} : { status }) }) as never;
+
+describe("a call the turn ended underneath", () => {
+  it("is the one nothing finished", () => {
+    // ACP has no "the turn took this call with it" update, and the adapter
+    // sends no terminal status for a call in flight when a turn is
+    // cancelled or dies. Left alone the row reads as work still happening,
+    // for the life of the conversation — reported as bash calls that "just
+    // spin forever and dont resolve".
+    expect(
+      hanging([tool("a", "pending"), tool("b", "completed"), tool("c", "in_progress")]),
+    ).toEqual(["a", "c"]);
+  });
+
+  it("folds a call's updates to its last status, not its first", () => {
+    // A tool call is a patch keyed by id — five updates for one `cat` — so
+    // asking whether any update said `completed` is the wrong question.
+    expect(hanging([tool("a", "pending"), tool("a", "completed")])).toEqual([]);
+    expect(hanging([tool("a", "completed"), tool("a", "pending")])).toEqual(["a"]);
+  });
+
+  it("counts a call that was never given a status at all", () => {
+    // The adapter opens a call and can simply stop. Nothing said it was
+    // running, and nothing will say it is not.
+    expect(hanging([tool("a")])).toEqual(["a"]);
+    // A later patch that carries only output leaves the status alone.
+    expect(
+      hanging([tool("a", "completed"), { kind: "tool", id: "a", output: "x" } as never]),
+    ).toEqual([]);
+  });
+
+  it("leaves one it has already settled", () => {
+    // The emit goes through the transcript, so a second turn ending must
+    // not settle the same call again — every subscriber would draw it
+    // twice and a replay would carry both.
+    expect(hanging([tool("a", "cancelled")])).toEqual([]);
+  });
+
+  it("ignores everything that is not a tool call", () => {
+    expect(hanging([{ kind: "message", role: "agent", text: "hello" } as never])).toEqual([]);
   });
 });

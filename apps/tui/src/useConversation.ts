@@ -43,10 +43,21 @@ export const useConversation = (project: string, workspace: string): Chat => {
       pending.current = [];
       if (batch.length > 0) setState((was) => batch.reduce((all, one) => fold(all, one), was));
     };
-    const stop = watchChat(project, workspace, (update) => {
-      pending.current.push(update);
-      timer.current ??= setTimeout(flush, 50);
-    });
+    const stop = watchChat(
+      project,
+      workspace,
+      (update) => {
+        pending.current.push(update);
+        timer.current ??= setTimeout(flush, 50);
+      },
+      // A resubscription replays from the start, so what is held has to go
+      // first — and so does anything batched but not yet applied, which
+      // belongs to the conversation being replaced.
+      () => {
+        pending.current = [];
+        setState(empty);
+      },
+    );
     return () => {
       stop();
       if (timer.current !== undefined) clearTimeout(timer.current);

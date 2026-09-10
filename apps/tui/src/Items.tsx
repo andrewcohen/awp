@@ -5,9 +5,11 @@
 // out. It is also what the style guide's fixture would draw, the day this
 // column has one.
 
-import type { Item } from "./conversation";
+import { useState } from "react";
+import { heldBack } from "@awp-kit/protocol/tools";
+import { type Item, titleOf, verbOf } from "./conversation";
 import { segments } from "./lines";
-import { CHROME, SYNTAX } from "./theme";
+import { CHROME, SPIN, SYNTAX } from "./theme";
 
 /**
  * A tool row is a receipt: what ran, and whether it worked.
@@ -34,17 +36,35 @@ const oneLine = (text: string, most: number): string => {
   return clip(rest.length > 0 ? `${trimmed} …` : trimmed, most);
 };
 
-const mark = (status: string) =>
-  status === "completed" ? "✓" : status === "failed" ? "✗" : status === "asking" ? "?" : "…";
-
 /**
- * How many of a rolled-up run of calls are still drawn.
+ * The mark on a tool row, and the running one turns.
  *
- * The window keeps four. Three here, because this column is the whole screen
- * rather than one of three, and what a run of receipts is competing with is
- * the sentence somebody actually came to read.
+ * ── a still row and a working row read the same, and one of them is wrong ──
+ *
+ * `…` is what a call in flight had, and three dots are also what a truncated
+ * anything looks like — so the one row somebody is waiting on was the
+ * quietest thing in the column. The frame comes from the same `SPIN` the
+ * header and the thinking line turn, on the same tick, so the three move
+ * together rather than as three independent clocks.
+ *
+ * `tick` is undefined wherever nothing is turning — a finished run, the
+ * render probe — and the mark falls back to the dots it had.
  */
-const SHOWN = 3;
+const mark = (status: string, tick?: number) =>
+  status === "completed"
+    ? "✓"
+    : status === "failed"
+      ? "✗"
+      : // The turn ended with this call still in flight — see
+        // `settleHangingCalls`. Not a cross: nothing failed, and nothing is
+        // known about what the call did.
+        status === "cancelled"
+        ? "⊘"
+        : status === "asking"
+          ? "?"
+          : tick === undefined
+            ? "…"
+            : (SPIN[tick % SPIN.length] ?? "…");
 
 /**
  * A patch, trimmed to whole hunks, and what it is a patch of.
@@ -116,7 +136,16 @@ const filetypeOf = (path: string): string => {
  * The speaker is named in a four-cell gutter and the words are indented under
  * it, so a long answer reads as one block rather than as a column of marks.
  */
-export const Message = ({ item, inner }: { item: Item; inner: number }) => {
+export const Message = ({
+  item,
+  inner,
+  streaming = false,
+}: {
+  item: Item;
+  inner: number;
+  /** Whether the turn that is writing this is still going. */
+  streaming?: boolean;
+}) => {
   if (item.kind !== "said") return undefined;
   return (
     <box width={inner} flexDirection="row" paddingBottom={1}>
@@ -129,6 +158,13 @@ export const Message = ({ item, inner }: { item: Item; inner: number }) => {
         <box width={inner - 4} flexDirection="column">
           {segments(item.text.trimEnd()).map((part, index) =>
             part.kind === "code" ? (
+              /* ── a fence stays a fence ────────────────────────────────
+                 `<markdown>` draws one itself and *wraps* it, and the line
+                 breaks in a fence are the content: a wrapped line of code is
+                 a different line of code. So prose is handed to markdown and
+                 a fence is handed to the same tree-sitter directly, with no
+                 wrapping. That split is the whole reason `segments` survives
+                 the move. */
               <code
                 key={index}
                 width={inner - 4}
@@ -137,12 +173,24 @@ export const Message = ({ item, inner }: { item: Item; inner: number }) => {
                 syntaxStyle={SYNTAX}
               />
             ) : (
-              <text
+              /* ── prose is markdown, and it was text for a stale reason ──
+                 `lines.ts` records that `MarkdownRenderable` clips instead
+                 of wrapping. Re-measured against the installed 0.5.11 in
+                 exactly this shape and it wraps — and draws the headings,
+                 lists, tables, bold and inline code that being text threw
+                 away. An agent writes all five in every other answer.
+
+                 `streaming` while the turn is in flight, which is the
+                 renderable's own instruction: the trailing block stays
+                 unstable so a half-written table or a fence still being
+                 typed is re-parsed rather than frozen wrong. */
+              <markdown
                 key={index}
                 width={inner - 4}
-                wrapMode="word"
-                fg={CHROME.text}
                 content={part.text}
+                syntaxStyle={SYNTAX}
+                streaming={streaming}
+                fg={CHROME.text}
               />
             ),
           )}
@@ -159,17 +207,29 @@ export const Message = ({ item, inner }: { item: Item; inner: number }) => {
   );
 };
 
-/** One tool row: the mark, the kind, and as much of the title as fits. */
-const Line = ({ item, inner }: { item: Item; inner: number }) => {
+/**
+ * One tool row: the mark, what it was where that is not obvious, and as much
+ * of the title as fits.
+ *
+ * ── no column, because there is nothing to line up ──────────────────────
+ *
+ * The label used to be padded to nine cells so the titles shared an edge,
+ * which is the window's rule and is right there — its panel is one of three
+ * and the rows are short. Here the label is empty on most rows (see
+ * `toolLabel`), so the column was nine spaces of nothing in front of every
+ * command, and the edge it aligned was an edge nothing sat on.
+ */
+const Line = ({ item, inner, tick }: { item: Item; inner: number; tick?: number | undefined }) => {
   if (item.kind !== "tool") return undefined;
+  const label = verbOf(item);
   return (
     <text
       width={inner}
       wrapMode="none"
       fg={CHROME.muted}
-      content={`  ${mark(item.status)} ${(item.subagent ?? item.toolKind ?? "tool").padEnd(7)} ${oneLine(
-        item.title,
-        Math.max(12, inner - 13),
+      content={`  ${mark(item.status, tick)} ${label === "" ? "" : `${label} `}${oneLine(
+        titleOf(item),
+        Math.max(12, inner - label.length - 5),
       )}`}
     />
   );
@@ -183,12 +243,37 @@ const Line = ({ item, inner }: { item: Item; inner: number }) => {
  * than each diffing two texts. What is decided here is only how it is
  * coloured; see `patchRows` for why that is not the highlighter's job.
  */
-export const Call = ({ item, inner }: { item: Item; inner: number }) => {
+export const Call = ({
+  item,
+  inner,
+  tick,
+}: {
+  item: Item;
+  inner: number;
+  /** The turning frame, while a turn is in flight. See `mark`. */
+  tick?: number | undefined;
+}) => {
   if (item.kind !== "tool") return undefined;
   const asking = item.ask !== undefined && item.ask.answered === undefined;
   return (
     <box width={inner} flexDirection="column" paddingBottom={1}>
-      <Line item={item} inner={inner} />
+      <Line item={item} inner={inner} tick={tick} />
+      {/* ── the command, under what it was for ──────────────────────────
+          A row drawn as its purpose has the command behind it, and this
+          column has no tooltip to hide it in. So a call that stands alone —
+          one that changed a file, or is asking something — shows both: the
+          intent on the row and the mechanism dim beneath it.
+
+          A rolled-up receipt gets one line and no more; there is nothing
+          worth two lines in a `Read` that worked. */}
+      {heldBack(item) ? (
+        <text
+          width={inner}
+          wrapMode="none"
+          fg={CHROME.muted}
+          content={`      ${oneLine(item.title, Math.max(12, inner - 8))}`}
+        />
+      ) : undefined}
       {(item.diffs ?? []).map((diff, at) => {
         const shown = trim(diff.patch);
         return (
@@ -244,26 +329,78 @@ export const Call = ({ item, inner }: { item: Item; inner: number }) => {
 /**
  * A run of calls that changed nothing, as one block.
  *
- * The tail is drawn and the rest is counted, which is the window's rule and
- * the same arithmetic: a turn is regularly a dozen calls between two
- * sentences, and a dozen equal rows are most of the transcript by height and
- * the least of it by interest.
+ * ── whole while the turn is running, one line once it is over ────────────
+ *
+ * The window keeps the last four of every run whatever is happening. Here
+ * the column is the whole screen and the two states are worth telling apart:
+ * while the agent is working these rows *are* the progress, and hiding all
+ * but three hides the thing being waited for. When the turn ends the same
+ * rows are a receipt — `ran 7 tools`, one line, and the mark says whether
+ * any of them failed, which is the only part of a receipt anybody re-reads.
  */
-export const Calls = ({ items, inner }: { items: ReadonlyArray<Item>; inner: number }) => {
-  const hidden = Math.max(0, items.length - SHOWN);
+export const Calls = ({
+  items,
+  inner,
+  live,
+  tick,
+}: {
+  items: ReadonlyArray<Item>;
+  inner: number;
+  /** Whether the turn that made these is still going. */
+  live: boolean;
+  /** The turning frame, while a turn is in flight. See `mark`. */
+  tick?: number | undefined;
+}) => {
+  // ── and it opens again ────────────────────────────────────────────────
+  //
+  // A summary is only ever an offer to look, so the row is a control: click
+  // it and the run comes back. There is no chord for it, because there is
+  // no focus model in a transcript — every row would have to be reachable
+  // before one row could be — and the mouse is already opentui's, which is
+  // what makes a click something this can hear at all.
+  const [open, setOpen] = useState(false);
+  const failed = items.filter((item) => item.kind === "tool" && item.status === "failed").length;
+  const count = items.length;
+
+  // A live run is drawn whole and has no summary to click: the rows *are*
+  // the progress, and a control that folded them would be offering to hide
+  // the thing being waited for.
+  if (live) {
+    return (
+      <box width={inner} flexDirection="column" paddingBottom={1}>
+        {items.map((item, at) => (
+          <Line key={at} item={item} inner={inner} tick={tick} />
+        ))}
+      </box>
+    );
+  }
+
   return (
     <box width={inner} flexDirection="column" paddingBottom={1}>
-      {hidden > 0 ? (
+      {/* The whole row is the hit area, not the words: a two-cell target in
+          a terminal is a control nobody hits. `onMouseDown` rather than a
+          click, because a press is what a terminal reports first and the
+          release may land somewhere else. */}
+      <box
+        width={inner}
+        height={1}
+        onMouseDown={() => {
+          setOpen((was) => !was);
+        }}
+      >
         <text
           width={inner}
           wrapMode="none"
           fg={CHROME.muted}
-          content={`  · ${String(hidden)} earlier call${hidden === 1 ? "" : "s"}`}
+          // A run is a failure if any of it was: a rolled-up `✓` over a call
+          // that did not work is the one reading somebody would act on and
+          // be wrong.
+          content={`  ${failed > 0 ? "✗" : "✓"} ${open ? "▾" : "▸"} ran ${String(count)} tool${
+            count === 1 ? "" : "s"
+          }${failed > 0 ? ` · ${String(failed)} failed` : ""}`}
         />
-      ) : undefined}
-      {items.slice(-SHOWN).map((item, at) => (
-        <Line key={at} item={item} inner={inner} />
-      ))}
+      </box>
+      {open ? items.map((item, at) => <Line key={at} item={item} inner={inner} />) : undefined}
     </box>
   );
 };

@@ -25,8 +25,14 @@ export const CHROME = {
   removedBg: "#3b2733",
 } as const;
 
-/** Braille, because it turns in one cell and reads as motion without colour. */
-export const SPIN = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
+/**
+ * Braille, because it turns in one cell and reads as motion without colour.
+ *
+ * Defined in the contract package and re-exported here, so the window turns
+ * the same frames — a spinning notch there and a braille dot here would be
+ * two vocabularies for one state. See `TURNING`.
+ */
+export { TURNING as SPIN } from "@awp-kit/protocol/tools";
 
 /**
  * How code and markdown are coloured.

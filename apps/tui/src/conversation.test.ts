@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { empty, fold, grouped, mine } from "./conversation";
+import { type Item, empty, fold, grouped, mine, verbOf } from "./conversation";
 
 // The fold is the whole of what a column draws, and it is the same shape the
 // window's has — kept separate rather than imported, because that one returns
@@ -91,6 +91,11 @@ const call = (id: string, extra: Record<string, unknown> = {}) =>
 
 const patch = (path: string) => ({ path, patch: `--- ${path}\n+one\n` });
 
+const turn = (status: "started" | "ended") => ({ kind: "turn", status }) as never;
+
+const tool = (extra: Record<string, unknown>): Item =>
+  ({ kind: "tool", id: "t", title: "", status: "", output: "", ...extra }) as Item;
+
 describe("an edit", () => {
   it("keeps the patch the daemon composed", () => {
     const after = fold(empty, call("t1", { toolKind: "edit", diffs: [patch("a.ts")] }));
@@ -142,12 +147,52 @@ describe("grouped", () => {
     expect(grouped(asked.items).map((block) => block.kind)).toEqual(["one"]);
   });
 
+  it("draws a run whole while its turn is still going", () => {
+    // The reason this differs from the window's: while the agent is working,
+    // the calls scrolling past ARE the progress, and a fold hides the thing
+    // being waited for. The turn is what says which, so a block of the live
+    // turn reports itself live.
+    const state = [turn("started"), call("a"), call("b")].reduce(
+      (all, one) => fold(all, one),
+      empty,
+    );
+    const blocks = grouped(state.items, state.turn);
+    expect(blocks).toEqual([expect.objectContaining({ kind: "calls", live: true })]);
+  });
+
+  it("rolls the same run up once the turn has ended", () => {
+    const state = [turn("started"), call("a"), call("b"), turn("ended")].reduce(
+      (all, one) => fold(all, one),
+      empty,
+    );
+    // Nothing is in flight, so nothing is live — and the calls keep the turn
+    // they were made in rather than taking the one that is current now.
+    expect(grouped(state.items, undefined)).toEqual([
+      expect.objectContaining({ kind: "calls", live: false }),
+    ]);
+  });
+
   it("does not merge across a sentence", () => {
     const items = [call("a"), said("done"), call("b")].reduce(
       (state, one) => fold(state, one),
       empty,
     ).items;
     expect(grouped(items).map((block) => block.kind)).toEqual(["calls", "one", "calls"]);
+  });
+});
+
+describe("what a row is called", () => {
+  it("hands the call to the shared rule", () => {
+    // The rule itself is `toolLabel`, tested beside itself in the protocol
+    // package — a row must read the same here as in the window. What this
+    // checks is that the item shape reaches it: nothing in front of a
+    // command, the name in front of anything else.
+    expect(verbOf(tool({ toolName: "Bash", toolKind: "execute" }))).toBe("");
+    expect(verbOf(tool({ toolName: "Read", title: "src/lines.ts" }))).toBe("read");
+  });
+
+  it("is nothing for a row that is not a call", () => {
+    expect(verbOf({ kind: "said", role: "agent", text: "hello", turn: 1 })).toBe("");
   });
 });
 
@@ -162,5 +207,26 @@ describe("the context figure", () => {
       { kind: "usage", used: 28_148, size: 1_000_000 } as never,
     ].reduce((state, one) => fold(state, one), empty);
     expect(after).toMatchObject({ used: 28_148, size: 1_000_000 });
+  });
+});
+
+describe("the agent's own commands", () => {
+  it("are replaced by each update, never merged", () => {
+    // The adapter's own instruction, and it is why an empty list is an answer
+    // rather than a no-op: a skill that has gone should stop being offered.
+    const after = [
+      { kind: "commands", commands: [{ name: "/bro", description: "plain language" }] } as never,
+      { kind: "commands", commands: [{ name: "/pr", description: "open one" }] } as never,
+    ].reduce((state, one) => fold(state, one), empty);
+    expect(after.commands.map((one) => one.name)).toEqual(["/pr"]);
+  });
+
+  it("read an absent list as none", () => {
+    // `commands` is optional on the wire, and an update carrying nothing is
+    // the adapter saying there are none — not the adapter saying nothing.
+    const after = fold({ ...empty, commands: [{ name: "/bro", description: "plain language" }] }, {
+      kind: "commands",
+    } as never);
+    expect(after.commands).toEqual([]);
   });
 });

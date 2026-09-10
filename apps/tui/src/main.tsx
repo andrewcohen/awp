@@ -14,6 +14,7 @@
 import { createCliRenderer } from "@opentui/core";
 import { createRoot } from "@opentui/react";
 import { App } from "./App";
+import { copyOnSelect } from "./clipboard";
 
 const renderer = await createCliRenderer({
   // ctrl+c belongs to whatever is running in the pty, and to the composer
@@ -21,6 +22,10 @@ const renderer = await createCliRenderer({
   exitOnCtrlC: false,
   targetFps: 30,
 });
+
+// Selecting copies. The renderer owns the mouse, so a drag is opentui's
+// gesture and the terminal never sees one — see `clipboard.ts`.
+copyOnSelect(renderer);
 
 const root = createRoot(renderer);
 

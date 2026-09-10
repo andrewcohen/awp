@@ -12,8 +12,24 @@ import { useEffect, useRef, useState } from "react";
 import { useTerminalDimensions } from "@opentui/react";
 import type { TextareaRenderable } from "@opentui/core";
 import { useKeyboard } from "@opentui/react";
-import type { ChatConfigOption } from "@awp-kit/protocol";
-import { chatAnswer, chatCancel, chatConfig, chatSend, said } from "./daemon";
+import type { ChatConfigOption, McpStatus } from "@awp-kit/protocol";
+import {
+  type Command,
+  agentCommands,
+  commandOf,
+  completed,
+  matching,
+} from "@awp-kit/protocol/commands";
+import {
+  chatAnswer,
+  chatCancel,
+  chatConfig,
+  chatFresh,
+  chatSend,
+  mcpStatus,
+  onReconnect,
+  said,
+} from "./daemon";
 import { grouped } from "./conversation";
 import { Call, Calls, Message } from "./Items";
 import { wrap } from "./lines";
@@ -62,14 +78,153 @@ const facts = (
   return parts.join(" · ");
 };
 
-export const Chat = ({
+/**
+ * The screen, and the one thing above it that survives `/new`.
+ *
+ * Starting again is a remount: everything the panel holds is about a
+ * conversation that is no longer this workspace's, and a key is the whole of
+ * saying so — the same shape the window uses, and the reason `useConversation`
+ * deliberately has no reset in it.
+ *
+ * A refusal has to outlive the remount, though, which is why it is held here
+ * and handed down: the component that would have drawn it is the component
+ * being replaced.
+ */
+export const Chat = (props: { place: Place; onBack: () => void; onQuit: () => void }) => {
+  const [again, setAgain] = useState(0);
+  const [refusal, setRefusal] = useState("");
+  return (
+    <Panel
+      key={again}
+      {...props}
+      refusal={refusal}
+      onFresh={() => {
+        chatFresh(props.place.project, props.place.workspace).then(
+          () => {
+            setRefusal("");
+            setAgain((was) => was + 1);
+          },
+          (error: unknown) => setRefusal(said(error)),
+        );
+      }}
+    />
+  );
+};
+
+/** How many command rows the menu draws before it stops and says how many are left. */
+const CAP = 6;
+
+/** As much of a sentence as there is room for, and an ellipsis where it stopped. */
+const cut = (text: string, room: number): string =>
+  room <= 1 ? "" : text.length <= room ? text : `${text.slice(0, room - 1)}…`;
+
+/**
+ * The command menu, above the box.
+ *
+ * Above rather than below because it is a list of things the *box* can
+ * become, and the eye is already at the box.
+ *
+ * Its own component so the render probe can draw it: the interesting states
+ * — 57 skills, a highlight walked past the sixth row — are ones a live agent
+ * happens not to be in, and a probe that rebuilt the rows itself would be
+ * testing its own reconstruction.
+ */
+export const Menu = ({
+  commands,
+  at,
+  width,
+}: {
+  commands: ReadonlyArray<Command>;
+  /** Which row is highlighted, as an index into the whole list. */
+  at: number;
+  /** The screen's, so a description can be cut rather than overrun. */
+  width: number;
+}) => {
+  if (commands.length === 0) return undefined;
+  // Six rows, then a count. Unfiltered this is every skill the agent has
+  // discovered — 57 on this machine — and a menu that tall is the transcript
+  // gone, to say what one more letter would narrow to three rows. The window
+  // scrolls its own at the same six; here the highlight is what scrolls, so
+  // walking down past the sixth brings the seventh into view.
+  const from = Math.max(0, Math.min(at - CAP + 1, commands.length - CAP));
+  const shown = commands.slice(from, from + CAP);
+  const rest = commands.length - from - shown.length;
+  // One column for the names, so the descriptions line up and the eye has an
+  // edge to run down. Measured off what is *shown* rather than off the whole
+  // list: a menu narrowed to `/new` should not keep a gutter the width of the
+  // longest skill on the machine.
+  const naming = shown.reduce(
+    (most, one) =>
+      Math.max(most, one.name.length + (one.hint === undefined ? 0 : one.hint.length + 1)),
+    0,
+  );
+  return (
+    // ── it takes room, it does not float ─────────────────────────────────
+    //
+    // `flexShrink={0}`, and it is the whole of the menu appearing *above*
+    // the composer rather than over it. Every child of a column shrinks by
+    // default, so a menu with no height of its own was squeezed to two rows
+    // and its remaining rows painted outside their parent — on top of the
+    // composer, in the order they happened to be drawn. Measured: with six
+    // commands the box drew two, then the box below it, then a third
+    // command over that.
+    <box flexDirection="column" flexShrink={0} height={shown.length + (rest > 0 ? 1 : 0)}>
+      {shown.map((command, index) => (
+        /* Each row is a box so the highlight is a full-width band: a `text`
+           with a `bg` paints under its own characters and nowhere else,
+           which reads as a coloured phrase rather than a selected row. */
+        <box
+          key={command.name}
+          height={1}
+          flexDirection="row"
+          paddingLeft={1}
+          paddingRight={1}
+          backgroundColor={from + index === at ? CHROME.bar : CHROME.base}
+        >
+          <text
+            width={naming}
+            wrapMode="none"
+            fg={from + index === at ? CHROME.text : CHROME.muted}
+            content={`${command.name}${command.hint === undefined ? "" : ` ${command.hint}`}`}
+          />
+          {/* Cut, not wrapped and not left to overflow. A flex child here
+              will happily draw past the row and the `awp` mark is painted on
+              top of it — measured, and it reads as a description with three
+              letters of nonsense in the middle of it. */}
+          <text
+            flexGrow={1}
+            wrapMode="none"
+            fg={CHROME.muted}
+            content={cut(`  ${command.said}`, width - 2 - naming - (command.mine ? 4 : 0))}
+          />
+          {/* This client's two are marked, not the agent's dozens. An agent
+              here advertises 57 and this client has two, so marking the
+              majority would be marking the baseline — what somebody needs to
+              know is which rows do NOT reach their agent. */}
+          {command.mine ? <text wrapMode="none" fg={CHROME.muted} content=" awp" /> : undefined}
+        </box>
+      ))}
+      {rest <= 0 ? undefined : (
+        <box height={1} paddingLeft={1}>
+          <text fg={CHROME.muted} wrapMode="none" content={`… ${String(rest)} more`} />
+        </box>
+      )}
+    </box>
+  );
+};
+
+const Panel = ({
   place,
   onBack,
   onQuit,
+  onFresh,
+  refusal,
 }: {
   place: Place;
   onBack: () => void;
   onQuit: () => void;
+  onFresh: () => void;
+  refusal: string;
 }) => {
   const { state, saidLocally } = useConversation(place.project, place.workspace);
   // The composer owns its text — a `textarea` takes no `value`, which is the
@@ -79,6 +234,16 @@ export const Chat = ({
   const composer = useRef<TextareaRenderable | null>(null);
   const [draft, setDraft] = useState("");
   const [notice, setNotice] = useState("");
+  /**
+   * Which row of the command menu is highlighted.
+   *
+   * Kept rather than derived, because the arrows move it — and reset on every
+   * keystroke in the box, since an index into a list that has just been
+   * filtered names a row in the wrong list.
+   */
+  const [picked, setPicked] = useState(0);
+  /** `/mcp` — what the daemon handed this conversation, once it has been asked. */
+  const [mcp, setMcp] = useState<McpStatus | undefined>(undefined);
   const working = state.running > 0;
   const tick = useSpinner(working);
 
@@ -92,22 +257,36 @@ export const Chat = ({
   const [config, setConfig] = useState<ReadonlyArray<ChatConfigOption>>([]);
   useEffect(() => {
     let live = true;
-    chatConfig(place.project, place.workspace).then(
-      (answer) => {
-        if (live) setConfig(answer);
-      },
-      () => {
-        // Nothing. See above.
-      },
-    );
+    const ask = () => {
+      chatConfig(place.project, place.workspace).then(
+        (answer) => {
+          if (live) setConfig(answer);
+        },
+        () => {
+          // Nothing. See above.
+        },
+      );
+    };
+    ask();
+    // A call rather than a feed, so nothing brings it back on its own: after
+    // a daemon restart the status row had lost the model and the mode and
+    // there was no way to get them back short of leaving the screen.
+    const stop = onReconnect(ask);
     return () => {
       live = false;
+      stop();
     };
   }, [place.project, place.workspace]);
 
-  // One line until there is more than one line's worth in it, then as many as
-  // six. A composer that is three rows tall before anybody types is three rows
-  // of transcript nobody can see.
+  // ── two lines at rest, six at most ──────────────────────────────────────
+  //
+  // One was the first answer and it is too tight: a box the height of the
+  // text in it has nowhere for the caret to go, so a message being edited
+  // scrolls inside a single row and the line above what somebody is typing is
+  // the transcript. Two is a box that looks like somewhere to write.
+  //
+  // Six is still the ceiling: past that the composer is eating the
+  // conversation it is about.
   const { width } = useTerminalDimensions();
   const room = Math.max(20, width - 6);
   // ── every block is given a width, and none is left to infer one ──────────
@@ -119,7 +298,7 @@ export const Chat = ({
   // tool rows collapsed to the width of the four-cell label beside it, which
   // is where the 4 came from.
   const inner = Math.max(24, width - 2);
-  const rows = Math.min(6, Math.max(1, wrap(draft, room).length));
+  const rows = Math.min(6, Math.max(2, wrap(draft, room).length));
 
   const ask = state.items
     .toReversed()
@@ -131,11 +310,70 @@ export const Chat = ({
     );
   const pending = ask?.kind === "tool" ? ask.ask : undefined;
 
+  // ── the command menu ────────────────────────────────────────────────────
+  //
+  // Two sets, and the rule for which is which is in the contract package
+  // rather than here: `/new` and `/mcp` are things this client does, and
+  // everything else the agent advertises is a prompt the adapter passes
+  // through. A face deciding that for itself would be the second
+  // implementation, and the copy that drifts is the one nobody tests.
+  //
+  // The list is only ever open while the draft is a bare `/word`, so a
+  // message about `/tmp/build.log` puts nothing over the transcript.
+  const menu = matching(draft, agentCommands(state.commands));
+  /** The highlighted row, clamped: the list is re-filtered on every keystroke. */
+  const highlight = Math.min(picked, Math.max(0, menu.length - 1));
+
+  /** Empty the box, and the mirror of it this component keeps. */
+  const empty = () => {
+    setDraft("");
+    setPicked(0);
+    if (composer.current !== null) composer.current.clear();
+  };
+
+  /** Put something in the box, with the caret after it. */
+  const fill = (text: string) => {
+    setDraft(text);
+    setPicked(0);
+    if (composer.current !== null) {
+      // `clear` then `insertText` rather than `setText`, because the caret
+      // has to end up after what was just written — a completion somebody
+      // then types into is the whole reason Tab fills the box instead of
+      // running the command.
+      composer.current.clear();
+      composer.current.insertText(text);
+    }
+  };
+
+  /**
+   * What the status row says, in the order the row is worth reading in.
+   *
+   * A refusal first — this client's own, then the one `/new` earned on a
+   * component that no longer exists — and then whatever the keys are about
+   * to do, which is only worth a line while it is not obvious. Everything
+   * under that is the session's facts, which is the ordinary state.
+   */
+  const told = [
+    notice,
+    refusal,
+    menu.length === 0 ? "" : "tab to complete · return to run · esc to leave it",
+    mcp === undefined ? "" : "esc to put this away",
+  ].find((one) => one !== "");
+
   const send = (text: string) => {
     const message = text.trim();
     if (message === "") return;
-    setDraft("");
-    if (composer.current !== null) composer.current.clear();
+    // ── this client's commands are intercepted, and narrowly ─────────────
+    //
+    // Exact match on the whole draft. `/new` is a command and
+    // `/tmp/build.log is missing` is a message about a path — a prefix match
+    // would eat the second.
+    const command = commandOf(message);
+    if (command !== undefined) {
+      run(command);
+      return;
+    }
+    empty();
     // One name for two copies of the same message: the one drawn here on the
     // keypress, and the daemon's echo — which exists so the *window* sees what
     // was typed here. A uuid, because a counter in two clients collides.
@@ -151,6 +389,40 @@ export const Chat = ({
       () => setNotice(""),
       (error: unknown) => setNotice(said(error)),
     );
+  };
+
+  /**
+   * Run whatever was chosen in the menu.
+   *
+   * The branch on `mine` is the whole of the difference the two sets draw:
+   * this client's two are acts, and the agent's are messages. Sent as text
+   * `/new` would reach the agent as a sentence *about* a command and be
+   * answered rather than run; run, `/bro` would throw away the conversation
+   * it was meant to be typed into.
+   *
+   * A command that takes arguments is completed rather than sent. There is
+   * nothing to send yet, and the next thing to press is an argument.
+   */
+  const run = (command: Command) => {
+    if (!command.mine) {
+      if (command.hint === undefined) {
+        send(command.name);
+      } else {
+        fill(completed(command));
+      }
+      return;
+    }
+    empty();
+    if (command.name === "/mcp") {
+      setNotice("");
+      mcpStatus(place.project, place.workspace).then(setMcp, (error: unknown) =>
+        setNotice(said(error)),
+      );
+      return;
+    }
+    // `/new`. The panel above this one remounts, so nothing set after this
+    // call is set on a component that will draw again.
+    onFresh();
   };
 
   const answer = (which: "first" | "last") => {
@@ -180,6 +452,51 @@ export const Chat = ({
       onBack();
       return;
     }
+    // ── the menu's keys, and only while it is open ───────────────────────
+    //
+    // A global handler runs before the focused renderable's and
+    // `preventDefault` stops it, so these are taken from the textarea for as
+    // long as the box holds a bare `/word` and handed straight back after.
+    // The caret never leaves the box — a menu that took focus would take the
+    // typing with it.
+    if (menu.length > 0) {
+      if (key.name === "down" || key.name === "up") {
+        key.preventDefault();
+        setPicked((was) => (was + (key.name === "down" ? 1 : -1) + menu.length) % menu.length);
+        return;
+      }
+      if (key.name === "tab") {
+        // Completion, not selection: Tab fills the box and leaves the next
+        // gesture — return — to run it, so a wrong pick can still be edited
+        // or abandoned.
+        key.preventDefault();
+        const one = menu[highlight];
+        if (one !== undefined) fill(completed(one));
+        return;
+      }
+      if (key.name === "return" || key.name === "kpenter" || key.name === "linefeed") {
+        key.preventDefault();
+        const one = menu[highlight];
+        if (one !== undefined) run(one);
+        return;
+      }
+      if (key.name === "escape") {
+        // The draft is what the menu is open on, so emptying it is what
+        // closes the menu — and it takes precedence over stopping the agent,
+        // because a slash typed mid-turn is somebody reaching for a command
+        // rather than for the interrupt.
+        key.preventDefault();
+        empty();
+        return;
+      }
+    }
+    // What `/mcp` answered is dismissed before anything else escape means.
+    // It is a reading, not a mode: the next thing somebody does is type.
+    if (mcp !== undefined && (key.name === "escape" || (key.ctrl && key.name === "c"))) {
+      key.preventDefault();
+      setMcp(undefined);
+      return;
+    }
     // ── escape stops the agent, and only then the draft ──────────────────
     //
     // Two meanings, in that order, which is the order the terminal habit
@@ -204,8 +521,7 @@ export const Chat = ({
         return;
       }
       setNotice("");
-      setDraft("");
-      if (composer.current !== null) composer.current.clear();
+      empty();
       return;
     }
     if (key.ctrl && key.name === "y") {
@@ -221,14 +537,20 @@ export const Chat = ({
 
   return (
     <box flexGrow={1} flexDirection="column" backgroundColor={CHROME.base}>
-      <text
-        height={1}
-        bg={CHROME.accent}
-        fg={CHROME.base}
-        content={` ${place.project}/${place.workspace} · ${working ? `${SPIN[tick % SPIN.length]} working` : "idle"}${
-          state.asks > 0 ? ` · ${state.asks} asked` : ""
-        } `}
-      />
+      {/* ── a bar is a box, not a text ──────────────────────────────────
+          A `text` paints its background under its own characters and nowhere
+          else, so `bg` on one is a coloured phrase rather than a bar — width
+          100% does not change it, measured. What fills a row edge to edge is
+          a box's `backgroundColor`, with the words inside it. */}
+      <box height={1} backgroundColor={CHROME.accent}>
+        <text
+          fg={CHROME.base}
+          wrapMode="none"
+          content={` ${place.project}/${place.workspace} · ${working ? `${SPIN[tick % SPIN.length]} working` : "idle"}${
+            state.asks > 0 ? ` · ${state.asks} asked` : ""
+          } `}
+        />
+      </box>
 
       <scrollbox
         flexGrow={1}
@@ -246,18 +568,33 @@ export const Chat = ({
             drawn in two pieces: prose as text, which wraps, and a fence as
             code, highlighted by tree-sitter and left unwrapped because the
             line breaks in a fence are the content. The `markdown` renderable
-            was the obvious answer and cannot be used — see `wrapMarkdown`.
+            was the obvious answer and was measured not to wrap — a finding
+            that has since expired, and `wrapMarkdown`'s note says so.
 
             Grouped, so a run of receipts is one block — see `grouped`, and
             note what it does *not* fold: a call that changed a file stands on
             its own, because the change is the thing worth reading. */}
-        {grouped(state.items.slice(-200)).map((block, at) =>
+        {grouped(state.items.slice(-200), working ? state.turn : undefined).map((block, at) =>
           block.kind === "calls" ? (
-            <Calls key={at} items={block.items} inner={inner} />
+            // The turning frame only where something is turning: a finished
+            // run keeps its ticks and crosses, and passing the tick to it
+            // would be a re-render a second for a receipt.
+            <Calls
+              key={at}
+              items={block.items}
+              inner={inner}
+              live={block.live}
+              tick={block.live ? tick : undefined}
+            />
           ) : block.item.kind === "said" ? (
-            <Message key={at} item={block.item} inner={inner} />
+            <Message
+              key={at}
+              item={block.item}
+              inner={inner}
+              streaming={working && block.item.turn === state.turn}
+            />
           ) : (
-            <Call key={at} item={block.item} inner={inner} />
+            <Call key={at} item={block.item} inner={inner} tick={working ? tick : undefined} />
           ),
         )}
         {/* A blank row, then the mark hard against the left edge of the view —
@@ -268,6 +605,42 @@ export const Chat = ({
           <text fg={CHROME.muted} content={`${SPIN[tick % SPIN.length]} thinking`} />
         ) : undefined}
       </scrollbox>
+
+      {/* ── what /mcp answered ────────────────────────────────────────────
+          Above the composer, where the menu it was chosen from was, and
+          dismissed with escape. Two fields carry it: the directory, which is
+          the whole of the server's scope — no tool takes a workspace
+          argument, so that path is *why* a conversation cannot reach another
+          checkout — and the daemon it was spawned against, because a second
+          instance's agents reaching the instance somebody is working in is a
+          real failure with nothing else on screen to show it.
+
+          What is not said is whether the agent's own client accepted the
+          handshake. Nothing in ACP reports it, so this is what was handed
+          over and it says so in those words rather than drawing a tick that
+          would be a guess. */}
+      {mcp === undefined ? undefined : (
+        // `flexShrink={0}` and a height, for the reason the menu carries the
+        // same pair: a column's children shrink by default, and a box with
+        // neither draws its first rows and paints the rest over whatever is
+        // below it.
+        <box flexDirection="column" flexShrink={0} height={4} paddingLeft={1} paddingRight={1}>
+          <text
+            fg={CHROME.text}
+            wrapMode="none"
+            content={`mcp · ${mcp.name} — handed over on open`}
+          />
+          <text fg={CHROME.muted} wrapMode="none" content={`  cwd    ${mcp.cwd}`} />
+          <text fg={CHROME.muted} wrapMode="none" content={`  daemon ${mcp.url}`} />
+          <text
+            fg={CHROME.muted}
+            wrapMode="none"
+            content={`  tools  ${mcp.tools.map((tool) => tool.name).join(" · ")}`}
+          />
+        </box>
+      )}
+
+      <Menu commands={menu} at={highlight} width={width} />
 
       {/* A clear row above the composer, so the newest line is not jammed
           against a control. Text touching a control reads as text cut off. */}
@@ -286,7 +659,13 @@ export const Chat = ({
           flexGrow={1}
           height={rows}
           focused
-          onContentChange={() => setDraft(composer.current?.plainText ?? "")}
+          onContentChange={() => {
+            setDraft(composer.current?.plainText ?? "");
+            // The list is re-filtered on every keystroke, so an index into
+            // the old one names the wrong row. Reset rather than clamped:
+            // the first match is what somebody narrowing a list means.
+            setPicked(0);
+          }}
           onSubmit={() => send(composer.current?.plainText ?? "")}
           placeholder="say something to the agent"
           // Wrapped, not scrolled sideways: a message is prose, and prose that
@@ -323,6 +702,11 @@ export const Chat = ({
         />
       </box>
 
+      {/* And one below, for the same reason: the status row is a control
+          strip, and a composer hard against it reads as one box with a
+          coloured bottom edge rather than two things with different jobs. */}
+      <text height={1} content=" " />
+
       {/* ── the status row ──────────────────────────────────────────────
           What the window draws under its composer, and for the same reason:
           these are facts about the *session*, and they read in the right
@@ -342,21 +726,21 @@ export const Chat = ({
           it teaches the eye to skip the row that the one refusal lands in.
           The answer keys are the exception, because they are an offer rather
           than a report. */}
-      <text
-        height={1}
-        bg={CHROME.bar}
-        fg={notice === "" ? CHROME.muted : CHROME.text}
-        wrapMode="none"
-        content={
-          notice === ""
-            ? pending === undefined
-              ? ` ${facts(config, state.used, state.size)}`
-              : ` ctrl-y ${pending.options[0]?.label ?? "allow"} · ctrl-n ${
-                  pending.options.at(-1)?.label ?? "deny"
-                }`
-            : ` ${notice}`
-        }
-      />
+      <box height={1} backgroundColor={CHROME.bar}>
+        <text
+          fg={told === undefined ? CHROME.muted : CHROME.text}
+          wrapMode="none"
+          content={
+            told === undefined
+              ? pending === undefined
+                ? ` ${facts(config, state.used, state.size)}`
+                : ` ctrl-y ${pending.options[0]?.label ?? "allow"} · ctrl-n ${
+                    pending.options.at(-1)?.label ?? "deny"
+                  }`
+              : ` ${told}`
+          }
+        />
+      </box>
     </box>
   );
 };

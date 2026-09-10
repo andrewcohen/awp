@@ -11,6 +11,7 @@ import { useState } from "react";
 import { Chat } from "./Chat";
 import { type Place, Threads } from "./Threads";
 import { Term } from "./Term";
+import { Toast } from "./Toast";
 
 type View =
   | { readonly kind: "threads" }
@@ -27,24 +28,36 @@ export const App = ({ onQuit }: { onQuit: () => void }) => {
 
   // Keyed by the checkout, so opening another one is another component with
   // its own empty state rather than a reset inside an effect.
-  if (view.kind === "chat") {
-    return (
+  const screen =
+    view.kind === "chat" ? (
       <Chat
         key={`${view.place.project}/${view.place.workspace}`}
         place={view.place}
         onBack={back}
         onQuit={onQuit}
       />
+    ) : view.kind === "terminal" ? (
+      <Term place={view.place} onBack={back} onQuit={onQuit} />
+    ) : (
+      <Threads
+        at={at}
+        onMove={setAt}
+        onOpen={(place) => setView({ kind: "chat", place })}
+        onTerminal={(place) => setView({ kind: "terminal", place })}
+        onQuit={onQuit}
+      />
     );
-  }
-  if (view.kind === "terminal") return <Term place={view.place} onBack={back} onQuit={onQuit} />;
+
+  // ── the toast sits above every screen ─────────────────────────────────
+  //
+  // Here rather than inside one of them, because what it announces belongs
+  // to none: a copy is a gesture over whatever is on screen, and the three
+  // screens replace each other. It is absolutely positioned, so this box
+  // costs the layout nothing.
   return (
-    <Threads
-      at={at}
-      onMove={setAt}
-      onOpen={(place) => setView({ kind: "chat", place })}
-      onTerminal={(place) => setView({ kind: "terminal", place })}
-      onQuit={onQuit}
-    />
+    <box flexGrow={1} flexDirection="column">
+      {screen}
+      <Toast />
+    </box>
   );
 };

@@ -10,7 +10,13 @@
 // and its interruption, which is what makes the daemon's end of a stream close
 // when this process stops caring.
 
-import type { ChatConfigOption, ChatDelivery, ChatUpdate } from "@awp-kit/protocol";
+import type {
+  ChatConfigOption,
+  ChatDelivery,
+  ChatUpdate,
+  McpStatus,
+  WorkspaceFacts,
+} from "@awp-kit/protocol";
 import {
   AwpClient,
   type AwpClientShape,
@@ -37,6 +43,39 @@ export const onConnection = (listener: (connected: boolean) => void): (() => voi
   listeners.add(listener);
   listener(connected);
   return () => listeners.delete(listener);
+};
+
+/**
+ * Run `again` each time the daemon comes back — and not for the state it is
+ * in now.
+ *
+ * ── a stream is not a substitute for asking ─────────────────────────────
+ *
+ * The socket reconnects on its own: `makeProtocolSocket` wraps its loop in a
+ * retry, so the connection is back within seconds of a daemon restart. What
+ * does not come back is everything built on it. A feed is resubscribed by
+ * `subscribe` below; a *call* was asked once, in a mount effect, and nothing
+ * asks it again — so after a restart the thread list is whatever it was
+ * before, and one that failed during the outage is empty for good.
+ *
+ * The window has had this since it learned to survive a restart and the TUI
+ * did not, which is the whole of "the client does not reconnect": the socket
+ * was never the problem.
+ *
+ * The transition, not the state. `onConnection` reports where things stand
+ * the moment it is called, which is what a status line wants and exactly
+ * wrong here: a component that has just asked would ask again for the same
+ * answer.
+ */
+export const onReconnect = (again: () => void): (() => void) => {
+  let first = true;
+  return onConnection((state) => {
+    if (first) {
+      first = false;
+      return;
+    }
+    if (state) again();
+  });
 };
 
 /**
@@ -102,12 +141,33 @@ export const watchChat = (
   project: string,
   workspace: string,
   onUpdate: (update: ChatUpdate) => void,
-): (() => void) =>
-  subscribe((rpc) =>
-    Stream.runForEach(rpc.ChatOpen({ project, workspace }), (update) =>
-      Effect.sync(() => onUpdate(update)),
-    ).pipe(Effect.tapCause((cause) => Effect.sync(() => logTui(`chat feed: ${String(cause)}`)))),
+  /**
+   * Called before a *resubscription* replays, and never for the first one.
+   *
+   * Every `ChatOpen` replays the whole transcript — which is how a client
+   * that opens at noon sees what was said at nine, and is why resubscribing
+   * hands this one the conversation a second time. Without emptying what is
+   * held, a daemon restart draws every message twice.
+   */
+  onRestart?: () => void,
+): (() => void) => {
+  let first = true;
+  return subscribe((rpc) =>
+    // `suspend`, so it runs per attempt: the retry re-runs the effect rather
+    // than the call that built it.
+    Effect.suspend(() => {
+      if (first) {
+        first = false;
+      } else {
+        logTui("chat feed: resubscribed, replaying");
+        onRestart?.();
+      }
+      return Stream.runForEach(rpc.ChatOpen({ project, workspace }), (update) =>
+        Effect.sync(() => onUpdate(update)),
+      ).pipe(Effect.tapCause((cause) => Effect.sync(() => logTui(`chat feed: ${String(cause)}`))));
+    }),
   );
+};
 
 /**
  * Say something.
@@ -165,6 +225,47 @@ export const chatConfig = (
   workspace: string,
 ): Promise<ReadonlyArray<ChatConfigOption>> =>
   runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.ChatConfig({ project, workspace })));
+
+/**
+ * `/new`: forget which conversation this workspace is having.
+ *
+ * Not a delete and not a fork. The daemon drops the stored session id and
+ * throws away the adapter holding it, so the next open is a `session/new`;
+ * the transcript stays on disk, and is loadable by anything that knows its
+ * id. The reply is the new session id, which this client does not need — what
+ * it needs is the refusal, on the keypress rather than silently on the next
+ * subscribe.
+ */
+export const chatFresh = (project: string, workspace: string): Promise<string> =>
+  runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.ChatFresh({ project, workspace })));
+
+/**
+ * `/mcp`: the server this workspace's conversation is handed.
+ *
+ * No error channel in the contract, deliberately — it is a description of
+ * what the daemon passes on every open, composed from the same functions that
+ * pass it. A workspace with no conversation open still has an answer, which is
+ * the right one: the question is "what will this agent be able to do".
+ */
+export const mcpStatus = (project: string, workspace: string): Promise<McpStatus> =>
+  runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.McpStatus({ project, workspace })));
+
+/**
+ * What is known about every workspace, and again whenever it changes.
+ *
+ * A stream rather than a call, which is the contract's own split: a thread
+ * changes when a person changes it, but an agent goes from working to waiting
+ * on its own. The first push is the table as it stands, so a subscriber has
+ * an answer without asking for one.
+ *
+ * The list uses one field of it — `lastActiveAt`, which is what orders it.
+ */
+export const watchFacts = (onFacts: (facts: ReadonlyArray<WorkspaceFacts>) => void): (() => void) =>
+  subscribe((rpc) =>
+    Stream.runForEach(rpc.WorkspaceFactsChanges(), (facts) =>
+      Effect.sync(() => onFacts(facts)),
+    ).pipe(Effect.tapCause((cause) => Effect.sync(() => logTui(`facts feed: ${String(cause)}`)))),
+  );
 
 /** Every thread, newest first — the list this POC opens on. */
 export const threads = () =>

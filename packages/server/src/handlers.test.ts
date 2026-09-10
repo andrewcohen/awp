@@ -251,6 +251,10 @@ const run = <A>(body: (rpc: Client) => Effect.Effect<A, unknown, Scope.Scope>, f
           Layer.succeed(Chat)({
             open: () => Effect.succeed(Stream.empty),
             send: () => Effect.succeed("prompt" as const),
+            // The composer's stop button reaches this. A fake that does not
+            // answer it is a fake the type says is incomplete, which is what
+            // this one is for.
+            cancel: () => Effect.void,
             brief: () => Effect.void,
             openTerminal: () => Effect.succeed("forked-1"),
             fresh: () => Effect.succeed("fresh-1"),

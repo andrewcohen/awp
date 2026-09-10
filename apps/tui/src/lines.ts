@@ -93,10 +93,29 @@ export const linesOf = (items: ReadonlyArray<Item>, width: number): ReadonlyArra
 /**
  * DEAD END, kept for the note. Hard-wrapping markdown does not work.
  *
- * `MarkdownRenderable` builds each paragraph as a `CodeRenderable` with
- * `width: "100%"` and no `wrapMode` — read in opentui 0.5.11's own source
- * after watching three paragraphs arrive cut at exactly the same column. So a
- * long sentence is clipped, not wrapped, however much width it is given.
+ * ── and the premise under it is no longer true, so re-read this ─────────
+ *
+ * The note below says `MarkdownRenderable` clips rather than wraps. Measured
+ * again against the installed opentui 0.5.11, in a box the shape `Message`
+ * draws — a 4-cell gutter and `width={inner - 4}` — and it **wraps**:
+ *
+ * ```
+ *   ··· A heading            #eed49f bold
+ *       A paragraph long enough to need breaking at this width,
+ *       with inline code and bold in it.      ← wrapped, tail present
+ *       - a list item that is itself long enough to want
+ *       wrapping somewhere around here
+ *       ┌───────┬─────────┐                   ← a table, drawn
+ * ```
+ *
+ * So the reason prose is drawn as `text` is a finding that has expired, and
+ * what it costs is every inline mark an agent writes: a heading, a list, a
+ * table, `code`, **bold**. What `<markdown>` still does that this column
+ * does not want is wrap a **fence** — the breaks in one are the content —
+ * so a move to it is a decision about fences and not about wrapping.
+ *
+ * Nothing is deleted yet, because the change is a rendering somebody has to
+ * look at rather than a bug.
  *
  * Wrapping the text before it gets there is safe for prose: a newline inside a
  * paragraph is a soft break and markdown joins it back up. It is *not* safe

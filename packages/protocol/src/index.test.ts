@@ -326,10 +326,20 @@ const handlers = AwpRpcs.toLayer({
     }),
   ReviewStart: () => Effect.succeed({ thread, job, workspace: "pr-412", created: true }),
   PullRequestRepair: () => Effect.succeed({ prompt: "PR #412 has failing CI checks.", mine: true }),
-  AgentSend: () => Effect.void,
+  // No `AgentSend` — there is no such rpc. The fixture carried one, which
+  // is an excess property on a handlers object and therefore eight
+  // typecheck errors in this file, none of them about the thing that was
+  // wrong. `PullRequestRepair` both composes the prompt and delivers it
+  // today; CLAUDE.md still describes a two-step version where the window
+  // sends what is in the box, and that is a design note rather than a call
+  // this contract has.
   ChatOpen: () =>
     Stream.fromArray([{ kind: "message" as const, role: "agent" as const, text: "hello" }]),
   ChatSend: () => Effect.succeed("prompt" as const),
+  // The contract gained this when the composer's stop button did; a
+  // handlers fixture is exhaustive by construction, which is the point of
+  // it — a call added with nothing able to answer it fails here first.
+  ChatCancel: () => Effect.void,
   ChatFork: () => Effect.succeed("forked-1"),
   ChatFresh: () => Effect.succeed("fresh-1"),
   McpStatus: (payload) =>
