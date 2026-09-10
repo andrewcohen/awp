@@ -31,7 +31,7 @@ import {
   said,
 } from "./daemon";
 import { grouped } from "./conversation";
-import { Call, Calls, Message } from "./Items";
+import { Boundary, Call, Calls, Message } from "./Items";
 import { wrap } from "./lines";
 import { isBack, isQuit } from "./keys";
 import { CHROME, SPIN } from "./theme";
@@ -593,6 +593,8 @@ const Panel = ({
               inner={inner}
               streaming={working && block.item.turn === state.turn}
             />
+          ) : block.item.kind === "compacted" ? (
+            <Boundary key={at} item={block.item} inner={inner} tick={working ? tick : undefined} />
           ) : (
             <Call key={at} item={block.item} inner={inner} tick={working ? tick : undefined} />
           ),

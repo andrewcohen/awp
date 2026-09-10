@@ -1,4 +1,5 @@
 import type { ChatCommand, ChatDiff, ChatUpdate } from "@awp-kit/protocol";
+import { toolLabel } from "@awp-kit/protocol/tools";
 
 // What a conversation looks like once the updates have been folded together.
 //
@@ -86,6 +87,23 @@ export interface Ran {
   readonly title: string;
   /** `execute`, `read`, `edit` — what sort of thing it is, not what it ran. */
   readonly toolKind: string;
+  /**
+   * The tool's own name — `Bash`, `Read`, `mcp__awp__awp_thread`.
+   *
+   * What the row is labelled with; the kind is the fallback. See `toolVerb`,
+   * which is shared with the TUI so the two faces read the same.
+   */
+  readonly toolName: string;
+  /**
+   * What the call is for, in the agent's own words — Bash's own
+   * `description`, and empty for every tool that has no such field.
+   *
+   * The row draws this in place of the title when it is there; the title
+   * stays on the tooltip and in the opened row. See `toolTitleOf`.
+   */
+  readonly purpose: string;
+  /** Which turn made the call. See `Conversation.turn` — the mark needs it. */
+  readonly turn: number;
   readonly status: string;
   readonly output: string;
   /**
@@ -142,7 +160,27 @@ export interface Asked {
   readonly answered: string | undefined;
 }
 
-export type Item = Said | Ran | Asked;
+/**
+ * A compaction: the point where most of the conversation above stopped being
+ * something the agent can see.
+ *
+ * A boundary rather than a message. `/compact` is reported by the adapter as
+ * three ordinary sentences — see `compactionOf` in the daemon — which drew as
+ * three paragraphs mid-conversation, saying nothing about what had actually
+ * happened to the transcript. The counts are not here for the reason the
+ * contract gives: the context figure under the composer already has them, and
+ * corrects itself from `compact_boundary` seconds later.
+ */
+export interface Compacted {
+  readonly kind: "compacted";
+  readonly key: string;
+  /** `running`, `done` or `failed` — the adapter's three sentences. */
+  readonly status: string;
+  /** The adapter's own sentence, when it failed. */
+  readonly reason: string;
+}
+
+export type Item = Said | Ran | Asked | Compacted;
 
 /**
  * The conversation as the panel holds it.
@@ -163,6 +201,18 @@ export interface Conversation {
    * states it is worst to be wrong about.
    */
   readonly running: number;
+  /**
+   * Which turn is current, counted up on every start.
+   *
+   * Only the running mark needs it, and it needs it for a reason worth
+   * stating: a call whose terminal status never arrived — a turn cancelled
+   * under it, an adapter that stopped talking — sits at `pending` for the
+   * life of the conversation. Turning on "not finished" therefore leaves a
+   * row from this morning spinning under one from now. Reported as exactly
+   * that. A call turns while **its own** turn is in flight, and stops when
+   * that turn ends whatever the adapter last said about it.
+   */
+  readonly turn: number;
   /** Why the last turn ended, when it ended for a reason worth saying. */
   readonly stopped: string | undefined;
   /**
@@ -200,6 +250,7 @@ export interface Conversation {
 export const nothing: Conversation = {
   items: [],
   running: 0,
+  turn: 0,
   stopped: undefined,
   full: undefined,
   used: undefined,
@@ -241,7 +292,7 @@ export const fold = (state: Conversation, update: ChatUpdate): Conversation => {
   // in the middle of a turn says so.
   if (update.kind === "turn") {
     if (update.status === "started") {
-      return { ...state, running: state.running + 1, stopped: undefined };
+      return { ...state, running: state.running + 1, turn: state.turn + 1, stopped: undefined };
     }
     const left = Math.max(0, state.running - 1);
     return {
@@ -272,6 +323,28 @@ export const fold = (state: Conversation, update: ChatUpdate): Conversation => {
     return used === undefined || size === undefined || size <= 0
       ? state
       : { ...state, full: used / size, used, size };
+  }
+
+  if (update.kind === "compact" && update.id !== undefined) {
+    // A patch on one row, like a tool call: `running` opens it and the
+    // outcome settles it. The daemon numbers them, so two compactions in one
+    // conversation are two boundaries rather than one row changing its mind.
+    const id = update.id;
+    const at = state.items.findIndex((item) => item.kind === "compacted" && item.key === id);
+    const was = at === -1 ? undefined : (state.items[at] as Compacted);
+    const now: Compacted = {
+      kind: "compacted",
+      key: id,
+      status: update.status ?? was?.status ?? "running",
+      reason: update.text ?? was?.reason ?? "",
+    };
+    return {
+      ...state,
+      items:
+        at === -1
+          ? [...state.items, now]
+          : state.items.map((item, index) => (index === at ? now : item)),
+    };
   }
 
   if (update.kind === "message") {
@@ -340,6 +413,12 @@ export const fold = (state: Conversation, update: ChatUpdate): Conversation => {
       // shown. That is what makes this a merge rather than a replacement.
       title: update.title ?? found?.title ?? "a tool",
       toolKind: update.toolKind ?? found?.toolKind ?? "",
+      toolName: update.toolName ?? found?.toolName ?? "",
+      // The turn it first appeared in, kept across every later patch: a
+      // call that finishes after its turn ended still belongs to the turn
+      // that made it. See `Conversation.turn`.
+      turn: found?.turn ?? state.turn,
+      purpose: update.purpose ?? found?.purpose ?? "",
       status: update.status ?? found?.status ?? "pending",
       output: update.output ?? found?.output ?? "",
       // Replaced when a later update carries any, kept when it says nothing.
@@ -476,29 +555,15 @@ export const waiting = (state: Conversation, key: string): Conversation => ({
 });
 
 /**
- * What a tool is, in a word, from the agent's own vocabulary.
+ * What a tool is, in a word — and nothing at all for a command, which is
+ * most rows. See `toolLabel`: a label on the majority is a label on the
+ * baseline, and the row's own text already says a command is one.
  *
- * A row that says only what was run leaves the reader parsing a command to
- * find out whether anything was written. The kind is the field that answers
- * it, and it is already on the wire.
+ * The 4rem column stays here, unlike the TUI's. This panel is one of three
+ * and its rows are short, so the empty slot is what keeps the subjects
+ * sharing an edge.
  */
-export const verb = (item: Ran): string =>
-  // A delegated call is the exception, and it is the one worth making: `ran
-  // Task` is what a spawn used to read as, which says neither that work was
-  // handed off nor to what.
-  item.subagent !== undefined
-    ? "spawned"
-    : item.toolKind === "execute"
-      ? "ran"
-      : item.toolKind === "read"
-        ? "read"
-        : item.toolKind === "edit"
-          ? "edited"
-          : item.toolKind === "search"
-            ? "searched"
-            : item.toolKind === ""
-              ? "did"
-              : item.toolKind;
+export const verb = (item: Ran): string => toolLabel(item);
 
 /**
  * The transcript as blocks, with a run of tool calls counted as one.

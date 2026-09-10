@@ -1,6 +1,8 @@
 import { Tabs } from "@base-ui/react/tabs";
 import { SidebarSimpleIcon } from "@phosphor-icons/react/SidebarSimple";
 import * as stylex from "@stylexjs/stylex";
+import { motion } from "motion/react";
+import { pill } from "./springs";
 import { type ReactNode, useState } from "react";
 import { Diff } from "./Diff";
 import { Jobs } from "./Jobs";
@@ -234,6 +236,7 @@ const styles = stylex.create({
   /** The sidebar's glyph, turned round to point at the edge it acts on. */
   mirrored: { transform: "scaleX(-1)" },
   tab: {
+    position: "relative",
     padding: "0.2rem 0.55rem",
     backgroundColor: "transparent",
     borderStyle: "none",
@@ -263,9 +266,21 @@ const styles = stylex.create({
   // spent — the other is the selected sidebar row's edge — and both answer the
   // same question, which is "this, here".
   tabOn: {
-    backgroundColor: colors.raised,
+    // The fill is `tabFill` now — a single element that moves between tabs
+    // — so what is left here is the colour, which does not travel.
     color: colors.accent,
   },
+  /** The fill that travels between tabs. See the note at its `layoutId`. */
+  tabFill: {
+    position: "absolute",
+    insetBlock: 0,
+    insetInline: 0,
+    zIndex: 0,
+    borderRadius: "0.25rem",
+    backgroundColor: colors.raised,
+  },
+  /** The label, over the travelling fill. */
+  tabWord: { position: "relative", zIndex: 1 },
   // The panel scrolls, not the column and certainly not the window.
   panel: { flex: 1, minHeight: 0, overflowY: "auto" },
   /**
@@ -342,7 +357,25 @@ export function Accessory({ onFold, ...context }: PanelContext & { readonly onFo
             value={panel.id}
             {...stylex.props(typeset.control, styles.tab, panel.id === open && styles.tabOn)}
           >
-            {panel.label}
+            {/* ── the fill travels; it does not blink out and back in ──────
+                One element with a `layoutId`, so switching tabs moves the
+                selected fill from where it was to where it is going. Four
+                fills appearing and disappearing is the same information and
+                none of the continuity: what a person is following with
+                their eye is *which* tab, and a thing that moves has already
+                said it by the time it arrives.
+
+                Behind the label rather than around it — `position:
+                absolute` and a negative z — because the label is a Base UI
+                tab's own child and must keep its own layout. */}
+            {panel.id === open && (
+              <motion.span
+                layoutId="accessory-tab"
+                {...stylex.props(styles.tabFill)}
+                transition={pill}
+              />
+            )}
+            <span {...stylex.props(styles.tabWord)}>{panel.label}</span>
           </Tabs.Tab>
         ))}
 

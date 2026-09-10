@@ -1,8 +1,10 @@
 import { type Job, isTerminal } from "@awp-kit/jobs";
 import * as stylex from "@stylexjs/stylex";
+import { motion } from "motion/react";
+import { pill } from "./springs";
 import { useState } from "react";
 import { cancelJob, clearJobs, jobLog, retryJob } from "./daemon";
-import { colors, text } from "./tokens.stylex";
+import { colors, text, timing } from "./tokens.stylex";
 import { useJobs } from "./useJobs";
 
 // What the jobs are doing, and what to do about them.
@@ -64,7 +66,41 @@ const styles = stylex.create({
   list: { flex: 1, minHeight: 0, overflowY: "auto", padding: "0.4rem 0" },
   empty: { padding: "0.5rem 0.6rem", color: colors.muted, fontSize: text.small },
 
-  row: { padding: "0.3rem 0.6rem" },
+  row: {
+    position: "relative",
+    padding: "0.3rem 0.6rem",
+    borderRadius: "0.3rem",
+    transitionProperty: "background-color",
+    transitionDuration: { default: timing.quick, "@media (prefers-reduced-motion: reduce)": "0s" },
+    ":hover": { backgroundColor: colors.surface },
+  },
+  /** A running job's row sits on its own ground, so the bar reads as its. */
+  rowGoing: { backgroundColor: colors.surface },
+  /** The track the bar runs in: the row's full width, under everything. */
+  track: {
+    position: "absolute",
+    insetInline: 0,
+    insetBlockEnd: 0,
+    height: "2px",
+    overflow: "hidden",
+    backgroundColor: colors.border,
+    borderEndStartRadius: "0.3rem",
+    borderEndEndRadius: "0.3rem",
+  },
+  /**
+   * The filled part.
+   *
+   * `scaleX` from a left origin rather than a width: a transform is the
+   * compositor's and a width is a layout every frame — and this is a
+   * panel that can hold a dozen rows while four of them advance.
+   */
+  fill: {
+    display: "block",
+    width: "100%",
+    height: "100%",
+    transformOrigin: "left center",
+    backgroundColor: colors.live,
+  },
   head: { display: "flex", alignItems: "baseline", gap: "0.4rem" },
   // The title takes the room, because it is the only field on the row that can
   // be arbitrarily long and the only one that cannot be reconstructed.
@@ -218,8 +254,33 @@ function Row({
 }) {
   const stopped = job.status !== "running" && job.status !== "queued";
 
+  // How far along, as a fraction, for the bar under a running row. `done`
+  // and not `step`: the step is where it *is*, and what has finished is
+  // what has been paid for.
+  const through = job.steps.length === 0 ? 0 : job.done.length / job.steps.length;
+  const going = job.status === "running";
+
   return (
-    <div {...stylex.props(styles.row)}>
+    <div {...stylex.props(styles.row, going && styles.rowGoing)}>
+      {/* ── the panel about progress had none ────────────────────────────
+          `3 of 5` is the figure and it is a figure: a row of them is read
+          one at a time, where a bar is read at a glance across a list.
+          Under the row rather than beside it, so the text keeps its
+          column and the bar keeps the row's whole width.
+
+          Only while running. A finished job's bar would be a full bar on
+          every row, which is furniture — the same rule the status bar and
+          the elapsed times follow. */}
+      {going && (
+        <span {...stylex.props(styles.track)} aria-hidden="true">
+          <motion.span
+            {...stylex.props(styles.fill)}
+            initial={false}
+            animate={{ scaleX: Math.max(0.04, through) }}
+            transition={pill}
+          />
+        </span>
+      )}
       <div {...stylex.props(styles.head)}>
         <span aria-hidden {...stylex.props(styles.dot, hue(job))}>
           {GLYPH[job.status]}

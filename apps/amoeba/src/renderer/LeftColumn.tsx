@@ -2,6 +2,8 @@ import type { Job } from "@awp-kit/jobs";
 import type { SessionInfo, Thread } from "@awp-kit/protocol";
 import { Tabs } from "@base-ui/react/tabs";
 import * as stylex from "@stylexjs/stylex";
+import { motion } from "motion/react";
+import { pill } from "./springs";
 import { useState } from "react";
 import { Inbox } from "./Inbox";
 import { Sidebar } from "./Sidebar";
@@ -66,6 +68,7 @@ const styles = stylex.create({
     borderBottomColor: colors.border,
   },
   tab: {
+    position: "relative",
     padding: "0.2rem 0.55rem",
     backgroundColor: "transparent",
     borderStyle: "none",
@@ -85,7 +88,18 @@ const styles = stylex.create({
   // The accent as the text and a fill it can be read on — one of the two places
   // in the window the accent is spent, and it answers the same question the
   // other does: this, here.
-  on: { backgroundColor: colors.raised, color: colors.accent },
+  // The colour stays here; the fill is `fill`, which moves.
+  on: { color: colors.accent },
+  /** The travelling fill, behind the word. */
+  fill: {
+    position: "absolute",
+    insetBlock: 0,
+    insetInline: 0,
+    zIndex: 0,
+    borderRadius: "0.25rem",
+    backgroundColor: colors.raised,
+  },
+  word: { position: "relative", zIndex: 1 },
   panel: { flex: 1, minHeight: 0, display: "flex", flexDirection: "column" },
 });
 
@@ -134,18 +148,20 @@ export function LeftColumn({
       {...stylex.props(styles.column)}
     >
       <Tabs.List {...stylex.props(styles.list)}>
-        <Tabs.Tab
-          value="work"
-          {...stylex.props(typeset.control, styles.tab, open === "work" && styles.on)}
-        >
-          work
-        </Tabs.Tab>
-        <Tabs.Tab
-          value="inbox"
-          {...stylex.props(typeset.control, styles.tab, open === "inbox" && styles.on)}
-        >
-          inbox
-        </Tabs.Tab>
+        {/* The fill travels between the two rather than blinking out of one
+            and into the other — see the same `layoutId` in `Accessory`. */}
+        {(["work", "inbox"] as const).map((tab) => (
+          <Tabs.Tab
+            key={tab}
+            value={tab}
+            {...stylex.props(typeset.control, styles.tab, open === tab && styles.on)}
+          >
+            {open === tab && (
+              <motion.span layoutId="left-tab" {...stylex.props(styles.fill)} transition={pill} />
+            )}
+            <span {...stylex.props(styles.word)}>{tab}</span>
+          </Tabs.Tab>
+        ))}
       </Tabs.List>
 
       <Tabs.Panel value="work" {...stylex.props(styles.panel)}>

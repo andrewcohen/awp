@@ -1,11 +1,38 @@
 import { Effect, Exit, Ref } from "effect";
 import { describe, expect, it } from "vitest";
-import { MODE, hanging, migrations, optionsOf, permissionOf, settledWhen, updateOf } from "./chat";
+import {
+  MODE,
+  compactionOf,
+  hanging,
+  migrations,
+  optionsOf,
+  permissionOf,
+  settledWhen,
+  updateOf,
+} from "./chat";
 
 // The shapes here are not invented: they are the updates a real turn produced,
 // copied off a spike against the adapter on 2026-08-28. A fixture written from
 // the schema would agree with the schema rather than with the adapter, which is
 // the thing that has to be got right.
+
+/** One `agent_message_chunk`, which is how a compaction announces itself. */
+const chunk = (text: string) =>
+  updateOf({ update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text } } });
+
+describe("compactionOf", () => {
+  it("takes a failure with no reason on it", () => {
+    // The adapter writes `Compacting failed.` when the SDK gives it no
+    // `compact_error`, and a row saying `failed` with an empty sentence
+    // under it is worse than one saying nothing.
+    expect(compactionOf("Compacting failed.")).toEqual({ kind: "compact", status: "failed" });
+  });
+
+  it("is not fooled by a sentence that only starts with the word", () => {
+    expect(compactionOf("Compacting is about to happen")).toBeUndefined();
+    expect(compactionOf("done compacting")).toBeUndefined();
+  });
+});
 
 describe("updateOf", () => {
   it("reads an agent's words", () => {
@@ -69,6 +96,29 @@ describe("updateOf", () => {
     });
     expect(said?.kind).toBe("commands");
     expect(said?.commands).toStrictEqual([]);
+  });
+
+  it("recognises a compaction rather than drawing it as three paragraphs", () => {
+    expect(chunk("Compacting...")).toEqual({ kind: "compact", status: "running" });
+    expect(chunk("\n\nCompacting completed.")).toEqual({ kind: "compact", status: "done" });
+    expect(chunk("\n\nCompacting failed: out of tokens")).toEqual({
+      kind: "compact",
+      status: "failed",
+      text: "out of tokens",
+    });
+  });
+
+  it("leaves an agent talking ABOUT compaction alone", () => {
+    // The match is the whole trimmed chunk, so the one cost of reading three
+    // English sentences is bounded: prose that merely mentions the word is
+    // still a message.
+    const said = updateOf({
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "Compacting... is what /compact prints. Run it yourself." },
+      },
+    });
+    expect(said?.kind).toBe("message");
   });
 
   it("reads the context figure, which arrives as a whole reading", () => {

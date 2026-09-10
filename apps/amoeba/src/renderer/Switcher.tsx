@@ -5,7 +5,7 @@ import { useState } from "react";
 import { useOverlay } from "./overlays";
 import { type Row, filtered, ordered } from "./switching";
 import { typeset } from "./typeset";
-import { colors } from "./tokens.stylex";
+import { colors, lift, timing } from "./tokens.stylex";
 
 // cmd+P: go to a thread.
 //
@@ -37,6 +37,19 @@ import { colors } from "./tokens.stylex";
 const styles = stylex.create({
   backdrop: { position: "fixed", inset: 0, backgroundColor: "rgba(0, 0, 0, 0.4)" },
   popup: {
+    // ── it arrives, rather than being there ─────────────────────────────
+    //
+    // Nothing pops: the window's mandate, and a dialog is the largest
+    // thing in it that appears. Scale from just under, so it reads as
+    // coming forward rather than as growing — and the transform is
+    // composed with the centring translate, which is why the keyframe
+    // carries both.
+    animationName: stylex.keyframes({
+      from: { opacity: 0, transform: "translate(-50%, -50%) scale(0.97)" },
+      to: { opacity: 1, transform: "translate(-50%, -50%) scale(1)" },
+    }),
+    animationDuration: { default: timing.enter, "@media (prefers-reduced-motion: reduce)": "0s" },
+    animationTimingFunction: timing.spring,
     position: "fixed",
     // Higher than the other dialogs. A palette is read from the top down and a
     // long list has to have somewhere to go.
@@ -53,7 +66,7 @@ const styles = stylex.create({
     borderColor: colors.border,
     borderRadius: "0.4rem",
     color: colors.text,
-    boxShadow: "0 1rem 3rem rgba(0, 0, 0, 0.35)",
+    boxShadow: lift.high,
   },
   // The field is the dialog's own edge, so there is no box inside a box — the
   // same decision the new-thread composer's brief made.

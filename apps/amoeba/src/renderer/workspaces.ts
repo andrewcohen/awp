@@ -345,11 +345,43 @@ const stateRank = (status: WorkspaceStatus | undefined): number =>
  *                Only the unclaimed group is sorted by it — inside a thread the
  *                order is the thread's own, which is a person's arrangement of
  *                their work and not something to reorder underneath them.
+ * @param when    when each `project/workspace` was last worked in, which is what
+ *                orders the threads. See {@link activeAt}.
  */
+/**
+ * When a thread was last worked in, as a number to sort by.
+ *
+ * ── the record has no such field, and it should not ──────────────────────
+ *
+ * A `Thread` carries `createdAt` and nothing else about time, which is right:
+ * a thread is a claim somebody made, and the moment it was made does not
+ * change. What *does* change is the work — so the reading comes from the
+ * workspaces it holds, which is where activity actually happens.
+ *
+ * This column used to order on `createdAt` outright, and the failure that
+ * shows is a thread somebody has been working in all afternoon sitting under
+ * three they started last week and have not opened since. The TUI's thread
+ * list already had this rule; the two faces sort one list two ways otherwise.
+ *
+ * `lastActiveAt` is written by the agent's own hooks into
+ * `~/.awp/workspace-state.json` and reaches the window as a fact. A thread
+ * with two checkouts is as recent as its most recent one; a thread whose
+ * workspaces have never been stamped falls back to when it was created, which
+ * leaves an untouched thread where it was rather than at the bottom.
+ */
+const activeAt = (thread: Thread | undefined, when: ReadonlyMap<string, number>): number =>
+  thread === undefined
+    ? 0
+    : Math.max(
+        thread.createdAt.getTime(),
+        ...thread.members.map((member) => when.get(`${member.project}/${member.workspace}`) ?? 0),
+      );
+
 export const groupByThread = (
   threads: ReadonlyArray<Thread>,
   workspaces: ReadonlyArray<Workspace>,
   status: (workspace: Workspace) => WorkspaceStatus | undefined = () => undefined,
+  when: ReadonlyMap<string, number> = new Map(),
   now: number = Date.now(),
 ): ReadonlyArray<ThreadGroup> => {
   const live = threads.filter(
@@ -387,12 +419,9 @@ export const groupByThread = (
     };
   });
 
-  // Newest thread first — a thread is made when work starts, so the one at the
-  // top is the one being worked on. Workspaces inside stay in the order
+  // Most recently worked in first. Workspaces inside stay in the order
   // `groupByWorkspace` put them, which is alphabetical and does not move.
-  groups.sort(
-    (a, b) => (b.thread?.createdAt.getTime() ?? 0) - (a.thread?.createdAt.getTime() ?? 0),
-  );
+  groups.sort((a, b) => activeAt(b.thread, when) - activeAt(a.thread, when));
 
   // Sorted by what needs attention, and only here. A thread's own workspaces
   // stay in the order it holds them; this bucket is not an arrangement anybody

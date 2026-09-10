@@ -229,8 +229,40 @@ describe("groupByThread", () => {
     const soon = made.getTime() + 60_000;
     const later = made.getTime() + 60 * 60_000;
 
-    expect(groupByThread([thread({ createdAt: made })], [], undefined, soon)).toHaveLength(1);
-    expect(groupByThread([thread({ createdAt: made })], [], undefined, later)).toHaveLength(0);
+    expect(
+      groupByThread([thread({ createdAt: made })], [], undefined, undefined, soon),
+    ).toHaveLength(1);
+    expect(
+      groupByThread([thread({ createdAt: made })], [], undefined, undefined, later),
+    ).toHaveLength(0);
+  });
+
+  test("the most recently worked in thread is first, not the newest", () => {
+    // The failure this replaced: a thread somebody has been in all afternoon
+    // sitting under three started last week and not opened since. A thread's
+    // `createdAt` is a claim and does not move; the work does, and the reading
+    // for it is the workspaces the thread holds.
+    const old = thread({
+      id: "old",
+      title: "worked in today",
+      createdAt: new Date(1_787_000_000_000),
+      members: [{ project: "rowan", workspace: "discounts" }],
+    });
+    const recent = thread({
+      id: "recent",
+      title: "started later, untouched",
+      createdAt: new Date(1_787_000_900_000),
+      members: [{ project: "beta", workspace: "lantern" }],
+    });
+    const when = new Map([["rowan/discounts", 1_787_009_000_000]]);
+
+    expect(groupByThread([old, recent], [], undefined, when).map((one) => one.key)).toEqual([
+      "old",
+      "recent",
+    ]);
+    // And with nothing stamped it is the order `createdAt` gives, so a machine
+    // whose hooks have never written anything is not reordered at random.
+    expect(groupByThread([old, recent], []).map((one) => one.key)).toEqual(["recent", "old"]);
   });
 
   test("a thread holding a workspace shows however old it is", () => {
@@ -243,7 +275,7 @@ describe("groupByThread", () => {
       members: [{ project: "rowan", workspace: "discounts" }],
     });
 
-    expect(groupByThread([old], workspaces, undefined, Date.now())).toHaveLength(1);
+    expect(groupByThread([old], workspaces, undefined, undefined, Date.now())).toHaveLength(1);
   });
 
   test("the unclaimed group is ordered by what needs attention", () => {
@@ -255,7 +287,7 @@ describe("groupByThread", () => {
       inProject("orchard", "busy"),
       inProject("orchard", "asking"),
     ]);
-    const groups = groupByThread([], workspaces, byAddress, Date.now());
+    const groups = groupByThread([], workspaces, byAddress, undefined, Date.now());
 
     expect(groups.at(-1)?.workspaces.map((w) => w.address)).toEqual([
       "orchard.asking",
@@ -272,7 +304,7 @@ describe("groupByThread", () => {
       inProject("orchard", "never"),
       inProject("orchard", "finished"),
     ]);
-    const groups = groupByThread([], workspaces, byAddress, Date.now());
+    const groups = groupByThread([], workspaces, byAddress, undefined, Date.now());
 
     expect(groups.at(-1)?.workspaces.map((w) => w.address)).toEqual([
       "orchard.finished",

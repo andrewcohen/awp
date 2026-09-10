@@ -98,6 +98,10 @@ export const hue = stylex.defineConsts({
   latteRaised: "#ffffff",
   /** White, and the only pure white in the window. See `page`. */
   lattePage: "#ffffff",
+  // `page` with the transcript allowed through it. See `colors.glass` — the
+  // alpha is what the blur has to work on, so it is part of the hue rather
+  // than composed at the call site.
+  latteGlass: "rgba(255, 255, 255, 0.68)",
   latteText: "#4c4f69",
   latteMuted: "#5e6173",
   // One step deeper than Latte's surface0 as well. A divider at #ccd0da on a
@@ -127,6 +131,10 @@ export const hue = stylex.defineConsts({
   macchiatoRaised: "#363a4f",
   /** Catppuccin's crust: the deepest of the greys, and the mirror of white. */
   macchiatoPage: "#181926",
+  // Deeper than the page it sits over rather than lighter, and that is not
+  // symmetry with Latte: a light blur *lightens* what is behind it and a dark
+  // one has to darken, or the transcript reads through as a bright smear.
+  macchiatoGlass: "rgba(20, 21, 32, 0.62)",
   macchiatoText: "#cad3f5",
   // Overlay1 rather than surface2. The old value was 2.60 against the base,
   // which is below the mark threshold let alone the text one — and this is the
@@ -189,6 +197,26 @@ export const colors = stylex.defineVars({
    * invisible.
    */
   page: { default: hue.lattePage, [dark]: hue.macchiatoPage },
+  /**
+   * `page`, translucent — the dock the composer and the activity line sit on.
+   *
+   * The one colour here that is deliberately not opaque, and the reason is
+   * that the surface behind it is *this column's own transcript*: the dock
+   * overlays the scroller rather than sitting under it, so what is blurred
+   * through the glass is the last few lines of the conversation sliding
+   * underneath. An opaque fill there is the same picture as the old layout
+   * and buys nothing.
+   *
+   * Alpha, and not `color-mix` at the call site, because the two themes want
+   * different amounts of it: white over dark text hides more per unit of
+   * alpha than near-black over light text does.
+   *
+   * It is measured against nothing. Every other token here is judged by its
+   * ratio on a ground, and this one *is* a ground — the words drawn on it are
+   * `text` and `muted`, which are measured against `page`, and the blur only
+   * ever moves what is behind it closer to this colour.
+   */
+  glass: { default: hue.latteGlass, [dark]: hue.macchiatoGlass },
   /** Ordinary reading weight. */
   text: { default: hue.latteText, [dark]: hue.macchiatoText },
   /** Present but secondary — a reason, a subtitle, a disabled row. */
@@ -379,4 +407,100 @@ export const space = stylex.defineVars({
   lightsInline: "5.25rem",
   row: "0.35rem",
   gutter: "1rem",
+});
+
+/**
+ * How things move, as variables rather than as literals in twenty files.
+ *
+ * ── why this file, and not `columns.ts` ──────────────────────────────────
+ *
+ * The duration and the curve have been written out by hand at every site
+ * that animates, each with a comment explaining that an identifier inside
+ * `stylex.create` must come from a `.stylex.ts` file or the Babel pass fails
+ * with a message about theming rules. That is the rule, and this is the file
+ * it points at: a var declared here **can** be used in a static style.
+ *
+ * `columns.ts` keeps `FOLD_MS` for the arithmetic — a component that has to
+ * hold an unmount open for the length of a transition needs the number, not
+ * a var. Neither is the copy: the number is stated once in each language.
+ */
+/**
+ * Named `timing` and not `motion`, which is what it wanted to be called:
+ * `motion` is the library this window animates with, and a file importing
+ * both would have to alias one. A token group that cannot be imported next
+ * to the thing it describes is a token group nobody uses.
+ */
+export const timing = stylex.defineVars({
+  /**
+   * The window's own duration, and the one every fold has used since the
+   * columns were first animated. 260ms is long enough to be followed and
+   * short enough not to be waited for.
+   */
+  fold: "260ms",
+  /** A hover, a press, a colour — half the fold, because nothing moved. */
+  quick: "130ms",
+  /** A thing arriving from nowhere: an item in a list, a panel, a dialog. */
+  enter: "220ms",
+  /**
+   * Out fast, in gently. The window's curve, and it is not
+   * `ease-in-out` — that one starts slowly, which reads as lag on anything
+   * a person just clicked.
+   */
+  ease: "cubic-bezier(0.32, 0.72, 0, 1)",
+  /** For something that has to look like it is being carried: a lift. */
+  spring: "cubic-bezier(0.34, 1.56, 0.64, 1)",
+  /** Nothing eases a rotation or a sweep: it reads as hesitation. */
+  even: "linear",
+});
+
+/**
+ * The blur behind a pane of glass, which is one value and is therefore a
+ * token.
+ *
+ * Two surfaces wear it — the activity ledge and the composer, stacked — and
+ * two blurs that disagree about their radius read as two materials rather
+ * than as one dock. It cannot be a plain constant: an identifier inside
+ * `stylex.create` is resolved by StyleX and has to come from a `.stylex.ts`
+ * file, which is this one.
+ *
+ * `saturate` beside the blur is the part that makes it read as glass rather
+ * than as fog. Blurring alone averages the colour behind it towards grey;
+ * pushing the saturation back up keeps the accent of a running row and the
+ * green of a completed one recognisable as they pass underneath.
+ */
+export const glaze = stylex.defineVars({
+  /** The dock: the composer and the line above it. */
+  pane: "blur(18px) saturate(1.7)",
+});
+
+/**
+ * Depth, which the window had none of.
+ *
+ * Reported as "a lot of the gui is super flat". Every surface was a flat
+ * fill against another flat fill, so a panel, a dialog and a row were the
+ * same object at three brightnesses — and nothing on screen looked like it
+ * was *above* anything else.
+ *
+ * Three steps and no more, each with a job. They are deliberately soft and
+ * mostly black: a coloured shadow reads as a glow, and a glow reads as a
+ * state rather than as height.
+ */
+export const lift = stylex.defineVars({
+  /** A row under the pointer, a chip, a control that can be pressed. */
+  low: {
+    default: "0 1px 2px rgba(0, 0, 0, 0.28)",
+    "@media (prefers-color-scheme: light)": "0 1px 2px rgba(24, 24, 37, 0.10)",
+  },
+  /** A panel, a card, the composer — a surface that holds other things. */
+  mid: {
+    default: "0 2px 6px rgba(0, 0, 0, 0.30), 0 8px 24px rgba(0, 0, 0, 0.22)",
+    "@media (prefers-color-scheme: light)":
+      "0 2px 6px rgba(24, 24, 37, 0.08), 0 8px 24px rgba(24, 24, 37, 0.07)",
+  },
+  /** A dialog, a menu, a popover: something over everything. */
+  high: {
+    default: "0 8px 16px rgba(0, 0, 0, 0.36), 0 24px 56px rgba(0, 0, 0, 0.34)",
+    "@media (prefers-color-scheme: light)":
+      "0 8px 16px rgba(24, 24, 37, 0.10), 0 24px 56px rgba(24, 24, 37, 0.12)",
+  },
 });

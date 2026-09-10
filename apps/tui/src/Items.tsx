@@ -404,3 +404,56 @@ export const Calls = ({
     </box>
   );
 };
+
+/**
+ * A compaction, as a rule across the column.
+ *
+ * ── the one row that is about the transcript rather than in it ───────────
+ *
+ * The adapter reports `/compact` as three ordinary agent sentences — see
+ * `compactionOf` in the daemon, which is the one place they are recognised —
+ * so left alone a compaction reads as the agent saying "compacting" twice in
+ * the middle of its own answer, and nothing says that the conversation above
+ * is no longer what it can see.
+ *
+ * A rule is the shape that says "everything above this is different from
+ * everything below it", and it is the same shape the window draws. It turns
+ * while it runs: a compaction of a long conversation is half a minute of
+ * nothing else happening.
+ */
+export const Boundary = ({
+  item,
+  inner,
+  tick,
+}: {
+  item: Item;
+  inner: number;
+  /** The turning frame, while it is running. See `mark`. */
+  tick?: number | undefined;
+}) => {
+  if (item.kind !== "compacted") return undefined;
+  const running = item.status === "running";
+  const failed = item.status === "failed";
+  const word = running
+    ? `${SPIN[(tick ?? 0) % SPIN.length]} compacting`
+    : failed
+      ? "compacting failed"
+      : "compacted";
+  // Half the width either side, so the word sits in the middle whatever the
+  // column is doing. Two cells is the floor: a rule that vanishes at a narrow
+  // width is worse than a short one.
+  const rule = "─".repeat(Math.max(2, Math.floor((inner - word.length - 4) / 2)));
+  return (
+    <box width={inner} flexDirection="column" paddingBottom={1}>
+      <text
+        width={inner}
+        wrapMode="none"
+        fg={failed ? CHROME.warn : CHROME.muted}
+        content={`  ${rule} ${word} ${rule}`}
+      />
+      {failed && item.reason !== undefined && item.reason !== "" ? (
+        <text width={inner} wrapMode="none" fg={CHROME.muted} content={`    ${item.reason}`} />
+      ) : undefined}
+    </box>
+  );
+};

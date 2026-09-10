@@ -15,7 +15,7 @@ import { growth, useGrow } from "./grow";
 import { useOverlay } from "./overlays";
 import { type Face, rememberFaceDefault, rememberedFaceDefault } from "./remembered";
 import { typeset } from "./typeset";
-import { colors, text } from "./tokens.stylex";
+import { colors, lift, text, timing } from "./tokens.stylex";
 
 // Starting a thread: a composer, not a form.
 //
@@ -110,6 +110,19 @@ const styles = stylex.create({
   backdrop: { position: "fixed", inset: 0, backgroundColor: "rgba(0, 0, 0, 0.4)" },
 
   popup: {
+    // ── it arrives, rather than being there ─────────────────────────────
+    //
+    // Nothing pops: the window's mandate, and a dialog is the largest
+    // thing in it that appears. Scale from just under, so it reads as
+    // coming forward rather than as growing — and the transform is
+    // composed with the centring translate, which is why the keyframe
+    // carries both.
+    animationName: stylex.keyframes({
+      from: { opacity: 0, transform: "translate(-50%, -50%) scale(0.97)" },
+      to: { opacity: 1, transform: "translate(-50%, -50%) scale(1)" },
+    }),
+    animationDuration: { default: timing.enter, "@media (prefers-reduced-motion: reduce)": "0s" },
+    animationTimingFunction: timing.spring,
     position: "fixed",
     // Above centre. A dialog centred exactly reads as low, because the eye
     // takes the middle of a window to be above its middle.
@@ -141,7 +154,7 @@ const styles = stylex.create({
     //
     // Every portal in this window needs this line. There are three — this, the
     // chip menu below, and MoveToThread's.
-    boxShadow: "0 1rem 3rem rgba(0, 0, 0, 0.35)",
+    boxShadow: lift.high,
     // No padding of its own. Each band pads itself, so the rules between them
     // run the full width — a rule stopping short of the edge reads as a
     // mistake rather than as a division.
@@ -291,7 +304,7 @@ const styles = stylex.create({
     // a person will type at jj afterwards. The model and effort menus share the
     // component and get it too, which is the cost of one component for four
     // chips and is a smaller cost than four components.
-    boxShadow: "0 0.5rem 1.5rem rgba(0, 0, 0, 0.3)",
+    boxShadow: lift.high,
   },
   item: {
     display: "flex",

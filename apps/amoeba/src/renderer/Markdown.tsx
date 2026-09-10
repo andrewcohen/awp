@@ -50,7 +50,14 @@ const styles = stylex.create({
    * pull request body in a 280px column, where 14px is right.
    */
   reading: { fontSize: text.lead, lineHeight: 1.7 },
-  p: { marginBlock: "0.5rem" },
+  // The outer margins come off, so a block of markdown occupies exactly its
+  // own box. It is drawn inside containers that space their own children — the
+  // transcript's gap, a review comment's row — and a leading margin there is
+  // space nobody asked for, doubled at the top of every message.
+  p: {
+    marginBlockStart: { default: "0.5rem", ":first-child": 0 },
+    marginBlockEnd: { default: "0.5rem", ":last-child": 0 },
+  },
   // Headings step down by weight rather than by size: the type floor is 14px
   // and a PR body's `####` would otherwise land under it. See AGENTS.md.
   h1: { marginBlock: "0.8rem 0.35rem", fontSize: text.lead, fontWeight: text.strong },

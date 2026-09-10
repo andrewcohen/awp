@@ -9,9 +9,9 @@ import * as stylex from "@stylexjs/stylex";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { AppearanceToggle } from "./Appearance";
 import type { ChatConfigOption } from "@awp-kit/protocol";
-import { Transcript } from "./Chat";
+import { Transcript, Working } from "./Chat";
 import { Chip } from "./Chip";
-import { type Command, agentCommands } from "./commands";
+import { type Command, agentCommands } from "@awp-kit/protocol/commands";
 import { Composer } from "./Composer";
 import type { Item } from "./conversation";
 import { AA_TEXT, channels, hexOf, ratio, verdict } from "./contrast";
@@ -391,7 +391,18 @@ const styles = stylex.create({
     borderColor: colors.border,
     borderRadius: "0.35rem",
   },
-  working: { margin: 0, color: colors.muted, fontSize: text.small },
+  /** A control on the page itself, for putting a specimen into a state. */
+  toggle: {
+    alignSelf: "flex-start",
+    padding: "0.2rem 0.5rem",
+    backgroundColor: "transparent",
+    borderWidth: 1,
+    borderStyle: "solid",
+    borderColor: colors.border,
+    borderRadius: "0.25rem",
+    color: colors.muted,
+    cursor: "pointer",
+  },
   document: {
     padding: "0.6rem 0.8rem",
     backgroundColor: colors.page,
@@ -663,7 +674,20 @@ const go = (id: string): void => {
 // The pair is a workspace that does not exist, deliberately. Pressing `Allow
 // Once` here refuses, which is the honest answer and is better than wiring the
 // buttons to nothing.
+/** The three states a compaction is drawn in. */
+const COMPACTIONS: ReadonlyArray<Item> = [
+  { kind: "compacted", key: "c-1", status: "running", reason: "" },
+  { kind: "compacted", key: "c-2", status: "done", reason: "" },
+  { kind: "compacted", key: "c-3", status: "failed", reason: "the summary was refused" },
+];
+
 const FIXTURE: ReadonlyArray<Item> = [
+  // A compaction, which is the one row in a transcript that is about the
+  // transcript. On the page because it is otherwise only visible by running
+  // `/compact` on a conversation long enough to need it, and then only for
+  // the half minute it takes — the same argument as the failed call and the
+  // question with no row above it.
+  { kind: "compacted", key: "f-0", status: "done", reason: "" },
   {
     kind: "said",
     key: "f-1",
@@ -700,6 +724,9 @@ highlighting where you stand.`,
     key: "f-4",
     title: "rg -n 'WorkerPoolContextProvider' node_modules/@pierre/diffs",
     toolKind: "execute",
+    toolName: "Bash",
+    purpose: "Find who provides the worker pool",
+    turn: 1,
     status: "completed",
     output: "src/context.tsx:14:export const WorkerPoolContextProvider = ({ children }) => {",
     diffs: [],
@@ -713,6 +740,9 @@ highlighting where you stand.`,
     key: "f-5",
     title: "Task",
     toolKind: "execute",
+    toolName: "Bash",
+    purpose: "",
+    turn: 1,
     status: "in_progress",
     output: "",
     diffs: [],
@@ -726,6 +756,9 @@ highlighting where you stand.`,
     key: "f-6",
     title: "rm -rf node_modules/.cache/highlight",
     toolKind: "execute",
+    toolName: "Bash",
+    purpose: "Clear the highlighter cache",
+    turn: 1,
     status: "pending",
     output: "",
     diffs: [],
@@ -767,6 +800,9 @@ const CALLS: ReadonlyArray<Item> = [
     key: "c-read",
     title: "apps/amoeba/src/renderer/highlighting.tsx",
     toolKind: "read",
+    toolName: "Read",
+    purpose: "",
+    turn: 1,
     status: "completed",
     output: "",
     diffs: [],
@@ -780,6 +816,9 @@ const CALLS: ReadonlyArray<Item> = [
     key: "c-edit",
     title: "apps/amoeba/src/renderer/Fence.tsx",
     toolKind: "edit",
+    toolName: "Edit",
+    purpose: "",
+    turn: 1,
     status: "completed",
     output: "",
     // ── the one call that has something to show ─────────────────────────
@@ -822,6 +861,9 @@ const CALLS: ReadonlyArray<Item> = [
     // What must survive the clip is the basename.
     title: "packages/server/src/probe/thread-parent-and-a-long-tail/create-workspace.test.ts",
     toolKind: "read",
+    toolName: "Read",
+    purpose: "",
+    turn: 1,
     status: "completed",
     output: "",
     diffs: [],
@@ -838,6 +880,9 @@ const CALLS: ReadonlyArray<Item> = [
     title:
       "jj describe --stdin <<'EOF'\nwip: the tool row draws one line\n\nthe rest is behind the disclosure\nEOF",
     toolKind: "execute",
+    toolName: "Bash",
+    purpose: "",
+    turn: 1,
     status: "completed",
     output: "Working copy  (@) now at: svkwrnpm a91def11",
     diffs: [],
@@ -851,6 +896,9 @@ const CALLS: ReadonlyArray<Item> = [
     key: "c-search",
     title: "WorkerPoolContext",
     toolKind: "search",
+    toolName: "Grep",
+    purpose: "",
+    turn: 1,
     status: "completed",
     output: "3 files",
     diffs: [],
@@ -864,6 +912,9 @@ const CALLS: ReadonlyArray<Item> = [
     key: "c-failed",
     title: "bun run typecheck",
     toolKind: "execute",
+    toolName: "Bash",
+    purpose: "",
+    turn: 1,
     status: "failed",
     output:
       "src/renderer/Fence.tsx(163,9): error TS2322: Type '{ file: { name: string; }; }' is not\nassignable to type 'IntrinsicAttributes & CodeViewProps'.",
@@ -878,6 +929,9 @@ const CALLS: ReadonlyArray<Item> = [
     key: "c-long",
     title: "bun run test",
     toolKind: "execute",
+    toolName: "Bash",
+    purpose: "",
+    turn: 1,
     status: "completed",
     // Long enough to prove the output box scrolls rather than growing the
     // column, which is the window's rule and the thing a two-line fixture
@@ -897,6 +951,9 @@ const CALLS: ReadonlyArray<Item> = [
     key: "c-slow",
     title: "bun install",
     toolKind: "execute",
+    toolName: "Bash",
+    purpose: "",
+    turn: 1,
     status: "in_progress",
     output: "",
     diffs: [],
@@ -912,6 +969,9 @@ const CALLS: ReadonlyArray<Item> = [
     key: "c-plain",
     title: "an unnamed tool with no kind",
     toolKind: "",
+    toolName: "Bash",
+    purpose: "",
+    turn: 1,
     status: "completed",
     output: "",
     diffs: [],
@@ -1002,6 +1062,8 @@ const OPTIONS: ReadonlyArray<ChatConfigOption> = [
 export function StyleGuide() {
   const appearance = useAppearance();
   const [draft, setDraft] = useState("");
+  /** Whether the composer specimen is drawn mid-turn. See its toggle. */
+  const [stopping, setStopping] = useState(false);
   const system = useColorScheme();
   const scheme = appearance === "system" ? system : appearance;
   const [chosen, setChosen] = useState<"opus" | "sonnet">("opus");
@@ -1099,8 +1161,38 @@ export function StyleGuide() {
                       `Transcript`. Drawing the rows one at a time here showed
                       a run of tool calls as a run of paragraphs while the
                       panel drew it as one block. */}
-                  <Transcript items={FIXTURE} project="thicket" workspace="no-such-workspace" />
-                  <p {...stylex.props(styles.working)}>working…</p>
+                  <Transcript
+                    items={FIXTURE}
+                    project="thicket"
+                    workspace="no-such-workspace"
+                    // The live turn, so the running row turns and sweeps
+                    // here as well. This page is the only place those two
+                    // states can be looked at on purpose: a real agent is
+                    // in them exactly when nobody is comparing hues.
+                    live={1}
+                  />
+                  {/* The panel's own, not a copy of it. A page that draws
+                      its own `working…` is a page that goes on saying the
+                      old one is fine. */}
+                  {/* The live line rolls between activities — see
+                      `Working`. Given one here so the page shows what it
+                      looks like mid-turn rather than idle. */}
+                  <Working doing="Find who provides the worker pool" />
+                </div>
+              </div>
+
+              <div {...stylex.props(styles.group)}>
+                <h3 {...stylex.props(styles.h3)}>a compaction</h3>
+                <div {...stylex.props(styles.transcript)}>
+                  {/* Three states, because the row is only itself in one of
+                      them and the other two are what a person actually
+                      stops to read. `live` so the running one turns. */}
+                  <Transcript
+                    items={COMPACTIONS}
+                    project="thicket"
+                    workspace="no-such-workspace"
+                    live={1}
+                  />
                 </div>
               </div>
 
@@ -1124,6 +1216,8 @@ export function StyleGuide() {
                     draft={draft}
                     onDraft={setDraft}
                     onSend={() => setDraft("")}
+                    onStop={() => setStopping(false)}
+                    working={stopping}
                     onCommand={(command) => setDraft(`${command.name} would run here`)}
                     theirs={THEIRS}
                     config={OPTIONS}
@@ -1131,6 +1225,17 @@ export function StyleGuide() {
                     usage={{ full: 0.62, used: 124_000, size: 200_000 }}
                   />
                 </div>
+                {/* ── the send is a stop while the agent works ─────────────
+                    One button with two jobs, and the only way to look at
+                    the second one on this page is to be able to put it
+                    there: a live turn is not a state a fixture is in. */}
+                <button
+                  type="button"
+                  {...stylex.props(typeset.control, styles.toggle)}
+                  onClick={() => setStopping((was) => !was)}
+                >
+                  {stopping ? "show it idle" : "show it working"}
+                </button>
               </div>
             </section>
 

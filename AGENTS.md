@@ -5042,6 +5042,615 @@ Descriptions are cut to their first sentence. A tool description is written for
 a model choosing between tools and is a paragraph; a person scanning a list
 reads none of it.
 
+## Two slash commands, in two faces, and one rule between them
+
+The TUI reads a slash now, so `commands.ts` moved out of the renderer to
+`@awp-kit/protocol/commands`. Which commands are the _client's own_ is a rule
+rather than a rendering — the same argument that puts `SessionIdentity` on the
+wire — and a second face deciding it for itself is the copy that drifts.
+
+The move found the bug it exists to prevent, already shipped in the window:
+the menu called `onCommand` for **every** row and `run` branched only on the
+name, so a highlighted `/bro` ran `/new`. Picking a skill from the menu threw
+the conversation away.
+
+```
+  mine        /new · /mcp        the client acts, nothing is sent
+  not mine    /bro · /usage      a prompt. `run` sends it, or completes it
+                                 when it takes arguments
+```
+
+`/compact` needs nothing, for the same reason `/usage` did not: the adapter
+advertises it and passes it through.
+
+### A bar is a box, and a menu that shrinks lands on top of the composer
+
+Three findings from putting that menu in a terminal, none of which has a web
+equivalent.
+
+**`bg` on a `text` paints under its own characters and stops.** Width 100%
+does not change it — measured, `["17:245,169,127","23:30,32,48"]` on a
+40-cell row. What fills a row edge to edge is a **box's**
+`backgroundColor`, with the text inside it. Every bar in the TUI was a `text`,
+so every bar was a coloured phrase.
+
+**Every child of a column shrinks by default, and one with no height of its
+own overflows its parent rather than pushing its siblings.** The menu drew two
+of its six rows, then the composer, then a third row _over_ the composer.
+`flexShrink={0}` and a height is the pair; the scrollbox is what gives.
+
+**A rolled-up run opens again on a click.** A summary is an offer to look, so
+the row is a control — `onMouseDown` on the whole row, because a two-cell
+target in a terminal is one nobody hits. No chord: a transcript has no focus
+model, and every row would have to be reachable before one row could be.
+Driven in `probe:transcript` with `createMockMouse`, which puts a real press
+through the renderer's hit testing rather than calling the handler.
+
+**A copy leaves the screen exactly as it was**, which is what a gesture that
+did nothing also looks like — so `notices.ts` and `Toast.tsx` say `copied 12
+characters`, bottom right, for 1.6 seconds. Module scope and not component
+state, because the copy happens off a renderer event outside React: what is
+wanted is a value _plus_ a subscription, the same argument the window's
+`atoms.ts` makes.
+
+`notices.ts` is named that way because `Toast.tsx` sits beside it and this
+filesystem is case-insensitive — `toast.ts` and `Toast.tsx` are one module,
+and the import resolves to the wrong one. Already recorded here as the cause
+of a webview nothing could close.
+
+**A run of tool calls folds when its turn ends, not while it is running.** The
+window keeps the last four of every run whatever is happening, and in a column
+that is the whole screen that is wrong for the one case somebody is watching:
+while the agent works those rows are the progress. So `Item` carries the turn
+it was made in — nothing on the wire does — and `grouped(items, live)` draws a
+live run whole and a finished one as `ran 7 tools`, with the mark set by
+whether any of them failed.
+
+### `toolKind` is ACP's coarse enum, and the tool's own name is one field away
+
+The verb on a tool row comes from ACP's `kind`, which the adapter maps from
+the tool it actually ran. Most of what an agent does in a terminal is `Bash`,
+so most rows read `execute`, and everything the adapter has no case for —
+skills, MCP tools, `AskUserQuestion` — reads `other`.
+
+```
+  Bash                                    execute
+  Read                                    read
+  Edit · Write                            edit
+  Grep · Glob                             search
+  WebFetch · WebSearch                    fetch
+  Task · TodoWrite · Task{Create,Get,…}   think
+  Skill · AskUserQuestion · mcp__*        other
+  ExitPlanMode                            switch_mode
+```
+
+`_meta.claudeCode.toolName` is the real name — `Bash`, `Grep`,
+`mcp__awp__awp_thread` — and it was simply not being read. It is on the wire
+now as `ChatUpdate.toolName`, and `toolVerb` in `@awp-kit/protocol/tools` is
+the rule **both faces** read it by:
+
+```
+  Bash                  bash          the name, lowercased
+  mcp__awp__awp_thread  awp_thread    the server is already in the title
+  WebFetch              fetch         two words where one will do
+  a subagent            code-reviewer `spawned` said neither what nor to what
+  nothing               execute       an older daemon, or a replayed row
+```
+
+**And then most rows do not draw it.** `toolLabel` is what a row actually
+puts in front of its title, and for a command that is nothing at all — the
+same arithmetic as the accent and the inbox's leading icon: most of what an
+agent does in a terminal is `Bash`, so a column saying `bash` on every other
+row has spent its left edge on the thing nobody is scanning for.
+
+```
+  before   ✓ bash      Check the types        ← nine cells of padding, and a
+           ✓ read      apps/tui/src/lines.ts    word true of half the column
+           ✓ awp_tasks awp_tasks
+
+  after    ✓ Check the types
+           ✓ read apps/tui/src/lines.ts       ← the row that is NOT a command
+           ✓ awp_tasks                          says so once
+```
+
+Three suppressions: the baseline (`bash`, and `execute` for an older
+daemon), and a tool that names itself, where the label would repeat the
+title. Reported as "i think you can remove bash and all the spaces".
+
+**With the label gone, a title-less row would be a blank line**, so
+`toolTitleOf` falls back to the name — which is the whole of what a pending
+Bash call has until its command streams in. The TUI drops the padded column
+with it; the window keeps its 4rem one, because that panel is one of three
+and the empty slot is what keeps its short rows sharing an edge.
+
+**Passed through, not translated.** A list of known tools here would report
+every tool this repo has not heard of as `other`, which is the failure being
+repaired. Anything unrecognised is drawn as itself.
+
+**And the row says what the call was FOR, where the agent said.** Bash's own
+schema requires a description — "Clear, concise description of what this
+command does in active voice" — and the adapter forwards it as
+`_meta.claudeCode.title`. It is the only field on a tool call that carries
+intent rather than mechanism, and it was going nowhere:
+
+```
+  bash  python3 - <<'PY' … forty lines of heredoc …
+  bash  Show where the adapter reads a tool's description field
+```
+
+`ChatUpdate.purpose` on the wire, `toolTitleOf` prefers it, and **the command
+stays reachable** — the window on the tooltip and in the opened row, the TUI
+as a dim line under any call that stands alone. That last one is not
+symmetry: a call waiting on a permission is drawn as `Remove the build
+output`, and approving `rm -rf` from a description alone is the decision
+nobody should be asked to make.
+
+`heldBack` is what each face asks — a row drawn as its purpose has something
+to open, a row drawn as its command does not, and a pending `Terminal` has
+nothing worth either.
+
+Only Bash and `Task` carry one, which is why nothing tries to invent one:
+`Task`'s is already its title.
+
+**One rule, beside commands.ts and for the same reason.** The window said
+`ran`, `read`, `edited`, `searched` off the kind while the terminal said
+`bash` — two vocabularies for one conversation, and somebody moving between
+the faces had to learn both. The window's `verb` and the TUI's `verbOf` are
+shape adapters over `toolLabel` now, and the rule is tested beside itself.
+
+Still unread, and both are worth having the day a row wants more than a
+label: `rawInput` (the call's own arguments) and `locations` (the paths it
+touches). Read out of the installed adapter's `tools.js` and `acp-agent.js`,
+0.70.0.
+
+## The window moves now, and it moves on physics
+
+Reported in three sentences over one evening: the spinner was "lame", the
+thinking line "super weak", and "a lot of the gui is super flat and lame
+JUICE IT UP". Taken together they are one finding — **every state in this
+window was a still frame** — and the answer is a vocabulary rather than a
+pile of animations.
+
+### Motion is the fifth thing, and the stack rule still holds
+
+`motion` (motion.dev, 13.2.0) is in `apps/amoeba`. The rule in CLAUDE.md is
+about UI frameworks — Base UI for behaviour, StyleX for appearance — and an
+animation runtime sits beside `@pierre/diffs` and `react-markdown` as a
+renderer of one thing this window cannot do itself. Two things earn it:
+
+```
+  a spring   a curve is a guess at how long something takes; a spring is a
+             statement about weight. An interrupted spring carries its
+             velocity, where a CSS transition restarts from wherever it got
+             to — which is the stutter every re-toggled fold had
+  layoutId   one element moves to where another one was. The selected tab's
+             fill and the sidebar's accent edge were four elements blinking
+             out and in; each is now one thing that travels
+```
+
+`springs.ts` holds the presets and nothing invents its own numbers:
+`jelly` for a row arriving, `pill` for a selection travelling, `snap` for a
+press, `heavy` for a panel. Everything goes through `useArriving` /
+`useSquish`, which answer **still** under `prefers-reduced-motion` — the
+mandate is unchanged and it means none, not slower.
+
+### Two token groups the window was missing
+
+```
+  timing   fold · quick · enter · ease · spring · even
+  lift     low · mid · high — a hover, a surface, a dialog
+```
+
+Named `timing` and not `motion` because a file cannot import both under one
+name, and a token group that will not sit beside the thing it describes is a
+token group nobody uses. Every duration was previously written out by hand at
+each site with a comment explaining that an identifier inside `stylex.create`
+must come from a `.stylex.ts` file — this **is** that file, so they can stop.
+
+`lift` is the answer to "flat": every surface was a fill against another
+fill, so a panel, a row and a dialog were the same object at three
+brightnesses. Three steps, soft and mostly black — a coloured shadow reads as
+a glow, and a glow reads as a state rather than as height.
+
+### What actually moves, and what each movement says
+
+```
+  a row arriving      springs up 8px. Only rows that are NEW: a snapshot of
+                      the keys at mount enters still, because Base UI
+                      unmounts a hidden tab and a glance at the diff would
+                      otherwise spring forty rows
+  the running call    a turning braille mark, the same frames the TUI turns,
+                      plus a slow band of light across the row — the mark is
+                      one cell and cannot catch an eye reading three rows up
+  the working line    what the agent is doing this second, rolling as it
+                      changes, and an elapsed count past ten seconds. A
+                      still word is the same picture as a dead adapter
+  the answer          a block caret at the tail while it streams, and only
+                      on the AGENT's row — see below
+  a tab               the fill travels between tabs
+  the sidebar         the accent edge slides down the strip; a working or
+                      waiting dot breathes at 2.6s
+  a running job       a progress bar under the row, `scaleX` on a spring
+  every press         the send, the permission buttons: a lift on hover and
+                      a squash on press
+```
+
+**An empty panel says so like it meant to.** Every panel's empty state was
+one line of muted text at the top left of several hundred pixels of nothing
+— which reads as a panel that failed to load. The accessory column is empty
+whenever nothing is selected, so it is the first thing somebody sees, not an
+edge case. `Nothing.tsx` centres a mark, a sentence and a line saying why.
+It offers nothing: where there is something to do about the emptiness the
+panel says so itself, which is what the chat's `continue the terminal's
+conversation` already does.
+
+**Your own messages are drawn as the prompt they were typed at.** A
+transcript in one voice reads as an essay with a name in the margin, so the
+two halves have to look different — and the first attempt at that was a
+rounded fill, which came back as "what am i imessage 2007".
+
+That is the right complaint, and the deeper one is that a chat bubble is a
+**borrowed idiom**: it says "this is a messaging app" about a window whose
+whole subject is terminals. A prompt says the same thing in this
+application's own vocabulary, and it is the mark every person using this
+reads a hundred times a day in the pane two columns over:
+
+```
+  ❯ the diff panel feels chunky when i scroll it. can you find out why
+
+  agent
+  Every file was being tokenized on the main thread — …
+```
+
+One character, no fill, no radius, no shadow. It replaces the `you` label
+rather than joining it, since a chevron and the word `you` are two marks for
+one fact, and the label row comes back only for a message that is queued.
+
+**A `<p>` carries a 1em margin from the UA**, which put the mark a whole line
+above its own sentence. Measured — the row began 16px above its text — and
+the fix is to reset it, because the column already spaces its blocks with a
+gap. Space goes _before_ a prompt instead, which is where an exchange
+starts.
+
+**A shimmer was the first answer and it was borrowed.** A gradient sweeping
+through the word `working` is what every chat in the world does, and it was
+reported back as exactly that — "the shimmer is lame… dont just copy codex".
+The deeper fault is that it is **decoration**: it says something is happening
+without saying what, on the one line that could say it.
+
+So the line carries the work instead. It reads the live turn's last
+unfinished call by its `purpose` — the field that says intent — and each new
+activity **rolls** the last one up and out of a one-line window:
+
+```
+  ⠹  Check the types              2m14s
+  ⠼  Find who provides the pool          ← rolls up; the new line rises
+  ⠧  thinking                            ← between calls, and honest
+```
+
+The movement is a consequence of the information changing, which is the only
+kind that stays worth looking at. `AnimatePresence` with `mode="popLayout"`,
+so the outgoing line leaves the flow at once rather than pushing the
+incoming one down, and `overflow: hidden` on a fixed one-line strip is the
+whole mechanism.
+
+Two things this gets for free: the mark and the words now say different
+things — one that it is alive, one what it is doing — and a turn that has
+stalled says `thinking` for two minutes, which is a reading rather than a
+mood.
+
+**And it is a ledge on the composer, not the tail of the transcript.** That
+is where it started, which put a line changing every few seconds _inside_
+the surface somebody is reading: every new activity re-laid the tail out,
+and the follow-the-tail effect chased it — so a transcript being read three
+screens up was not still either. Reported as "pin the thinking line above
+our composer so its not causing so much shifting".
+
+```
+  ┌──────────────────────────────┐
+  │ transcript · scrolls · still │   the document
+  ├──────────────────────────────┤
+  │ ⠹  Check the types      2m14s│   the ledge — height springs in once
+  ├──────────────────────────────┤     per turn, and never again
+  │ say something…            ↑  │
+  └──────────────────────────────┘
+```
+
+The strip animates its **height**, so the composer is moved once when a turn
+starts and once when it ends, rather than on every change of activity — and
+the activity itself rolls inside a box that no longer changes size.
+`overflow: hidden` is what makes a height spring possible at all, and the
+padding is inline-only for the same reason: vertical padding on a box
+animating to `height: 0` leaves a gap that never closes. `Working` lost its
+own entrance with the move, because two animations on one thing is the fight
+`springs.ts` exists to stop.
+
+### The dock is glass, and that is what made it a layout change
+
+Asked for as "give our thinking line a blurred background instead of white,
+give it a glassy. same with the composer maybe we can split it in half and
+pin the bottom controls and make the composer feel more floaty".
+
+**A backdrop filter over the page colour is the page colour.** The ledge and
+the composer were the last two children of a flex column, so there was
+nothing painted behind either of them to blur — the glass and the layout are
+one change, not a style on top of an existing one.
+
+```
+  ┌──────────────────────────────┐
+  │ transcript                   │   the scroller, full height
+  │ ~~~ the tail, blurred ~~~~~~ │   ← runs UNDER the dock
+  │ ⠹  Check the types     2m14s │   ledge    ┐
+  │ ┌──────────────────────────┐ │            │ the dock: absolute,
+  │ │ say something…        ↑  │ │   card     │ inset-inline 0, bottom 0
+  │ └──────────────────────────┘ │            │
+  │  Manual  Opus  62% context   │   strip    ┘
+  └──────────────────────────────┘
+```
+
+**The scroller's bottom padding is the dock's measured height**, through a
+`ResizeObserver` rather than a constant. The dock is one to four rows tall
+depending on the draft, whether a turn is running, and whether the settings
+chips have wrapped at a narrow column — a number written down here is a
+number that is wrong in three of those four states, and what that produces is
+a transcript whose last message cannot be scrolled out from under the glass.
+Padding that _grows_ has to take a reader at the tail with it, which is the
+same rule as content arriving and reuses `followIfStuck`.
+
+**Each pane carries its own glass; the dock carries none.** `Composer` is
+drawn on its own in the style guide, and a dock that held the fill would make
+that page a picture of something the window does not have.
+
+**The blur is a token.** `glaze.pane` in `tokens.stylex.ts`, because two
+surfaces wear it and two radii that disagree read as two materials rather
+than one dock — and because a plain constant interpolated into
+`stylex.create` is the build error about theming rules this file records
+three times already.
+
+`saturate` beside the blur is what separates glass from fog: blurring alone
+averages what is behind it towards grey, and pushing the saturation back up
+keeps a running row's accent recognisable as it passes underneath.
+
+**`colors.glass` is the one token here deliberately not opaque, and the
+themes want different amounts of alpha.** White over dark text hides more per
+unit than near-black over light text does — and the dark value is _deeper_
+than the page rather than lighter, which is not symmetry: a light blur
+lightens what is behind it and a dark one has to darken, or the transcript
+reads through as a bright smear.
+
+```
+  latte      rgba(255, 255, 255, 0.68)
+  macchiato  rgba( 20,  21,  32, 0.62)   ← below #181926, not above
+```
+
+It is measured against nothing, which is the exception to the style guide's
+rule. Every other token is judged by its ratio on a ground; this one _is_ a
+ground, and the words on it are `text` and `muted`, already measured against
+`page` — which is what the blur moves everything behind it towards.
+
+**The split is a control and a readout, which is why one floats and one is
+pinned.** What somebody types takes the keyboard, has a border that goes
+accent and is the only part that acts; what is under it is four facts about
+the session. So the card is inset from every edge and carries `lift.mid` at
+rest, and the strip is flush, edge to edge, under a faint rule. Inset with
+the card, the chips read as more of the composer rather than as a status
+line.
+
+Verified in the served stylesheet, because StyleX drops what it does not
+understand in silence and three of these are properties it had never emitted
+here before:
+
+```
+  backdrop-filter:var(--x1617d6r)              → blur(18px) saturate(1.7)
+  border-top-color:color-mix(in oklab, …55%…)
+  rgba(255, 255, 255, 0.68) · rgba(20, 21, 32, 0.62)
+```
+
+### The caret was on the wrong row, and it looked random
+
+Reported as "a random blinking orange cursor when i send a message". The
+transcript marks the last row of a live turn as streaming — and the moment
+somebody sends, the last row is _theirs_. So the caret blinked after what you
+had just typed, over nothing arriving. It is the agent's row only.
+
+### A composer keeps what you were writing
+
+Switching threads unmounts the panel, and the draft went with it. A
+half-written sentence is not a preference — it is the only copy of something
+somebody was in the middle of. `amoeba.draft` in localStorage, per
+**workspace** rather than per thread, because two checkouts of one piece of
+work have two conversations. Written on unmount rather than per keystroke.
+
+### The send button is a stop while the agent works
+
+`onStop` and `working` had been props on `Composer` that nothing used —
+which was two of the repo's three red gates and, more to the point, a window
+with no way to interrupt an agent short of the terminal. One button rather
+than two: an empty draft's disabled send is exactly the moment a stop is
+wanted, and the arrow and the square trade places on a spring.
+
+`warn` and not the accent, so the two states are told apart by somebody
+whose eyes are on the transcript — and so the accent's count stays honest.
+
+### The row that is running has to look like it
+
+Three complaints in one breath: the mark was lame, the chat was boring, and
+**an old tool call was still spinning**. The third is the one that mattered.
+
+`going(status)` — anything but `completed` or `failed` — is not the same
+question as "is this happening now". A call whose terminal status never
+arrived sits at `pending` for the life of the conversation: a turn cancelled
+under it, an adapter that stopped talking, a permission denied. So a row from
+this morning turned forever, under a row from now.
+
+**A call turns while its own turn is in flight**, which means the window's
+fold needed the turn counter the TUI's already had — `Conversation.turn`, and
+`turn` on every `Ran`. `held.running > 0 ? held.turn : undefined` is what the
+transcript is handed, and a style guide that passes nothing sits perfectly
+still, which is what a transcript of finished work should do.
+
+What the window draws now, and each of the three says something different:
+
+```
+  the mark    the same braille the TUI turns — TURNING, in the contract
+              package, because a spinning notch in one face and a braille dot
+              in the other is two vocabularies for one state
+  the row     a slow band of light across it, 2.4s. The mark is one cell and
+              cannot catch an eye reading three rows up, which is the
+              ordinary case while an agent works
+  the caret   a block at the tail of the answer arriving. A paragraph that
+              has stopped mid-sentence and one still growing are otherwise
+              the same picture
+```
+
+**One clock, and it stops.** `useTurning` runs a single 100ms interval for
+the whole panel while a turn is in flight — an interval per row is a dozen
+timers and a dozen renders — and it does not run at all under
+`prefers-reduced-motion`, where the mark falls back to `…`. That is the
+mandate read strictly: reduced motion means none, and a still mark is a state
+rather than a slower animation.
+
+**A background, not `background-clip: text`.** StyleX drops what it does not
+understand in silence, and a dropped `background-clip` beside a
+`color: transparent` is an invisible row. This way a dropped rule is a row
+that does not sweep. Verified in the served sheet rather than the source,
+which is the rule for anything StyleX:
+
+```
+  @keyframes …{from{background-position:180% 0;}to{background-position:-80% 0;}}
+  @keyframes …{0%, 49%{opacity:1;}50%, 100%{opacity:0;}}
+  prefers-reduced-motion: reduce){… animation-duration:0s
+```
+
+The accent is spent here for the fifth time, and it earns it on the same
+rule as the other four: at most one row in a transcript is running, so it
+marks a deviation rather than a baseline.
+
+### A call the turn ended underneath never resolves itself
+
+Reported as bash calls "that just spin forever and dont resolve", and the
+spinner was the smaller half: **every client read those rows as work still
+happening**, hours later.
+
+ACP has no update meaning "the turn took this call with it", and the adapter
+sends no terminal status for a call in flight when a turn is cancelled,
+refused, or dies. So the row keeps whatever it last had, which is `pending`.
+
+The daemon settles them, because a client deriving the rule would be a second
+implementation and the two faces would disagree about what a hanging call
+means. `hanging()` folds the transcript to the last status per tool id — a
+call is a patch keyed by id, so "did any update say completed" is the wrong
+question — and every id that is not over gets one more ordinary `tool`
+update, which every fold already merges.
+
+```
+  cancelled   the turn stopped; nothing is known about what the call did
+  failed      the tool said so
+```
+
+`cancelled` and not `failed`, and the mark is `⊘` rather than `✗` in both
+faces: a cross is a claim about the tool, and this is a claim about the
+turn. Emitted _before_ the turn's own `ended`, so a client folding a batch
+sees the rows resolve and then the turn stop, rather than a turn that ended
+with work apparently still going on inside it.
+
+### A stream resubscribes; a call is asked once
+
+The window re-asks six lists when the socket comes back — `onReconnect` in
+its `daemon.ts`, one per list — and the TUI re-asked nothing. So a daemon
+restart left the thread list showing what it had before, the status row
+without its model or mode, and a screen that mounted _during_ the outage
+empty for good.
+
+The socket was never the problem: `makeProtocolSocket` retries its own loop,
+and the TUI's `subscribe` retries every feed on top of that. What has no
+retry is a question, because nothing knows it was asked.
+
+```
+  feed   ChatOpen · WorkspaceFactsChanges   subscribe retries      ✓
+  call   ThreadList · ChatConfig            asked in a mount effect ✗
+```
+
+`onReconnect` is the transition and not the state, which is the distinction
+the window's own note makes: `onConnection` reports where things stand the
+moment it is called, and a list that has just asked would ask again for the
+same answer.
+
+### Two more measurements in the TUI
+
+**The composer is two lines at rest, not one.** A box the height of the text
+in it has nowhere for the caret to go — the line above what somebody is
+typing is the transcript. Six is still the ceiling.
+
+**The thread list is ordered by activity, and the record has no such field.**
+A `Thread` carries `createdAt`, which is right: a thread is a claim, and when
+it was made does not change. What changes is the work, so the reading comes
+from the workspaces it holds — `WorkspaceFacts.lastActiveAt`, written by the
+agent's own hooks into `~/.awp/workspace-state.json` and already on the wire.
+Counted on this machine: 57 entries, all 57 stamped. A thread is as recent as
+its most recent checkout, and one whose workspaces were never stamped falls
+back to `createdAt` rather than to the bottom.
+
+**Copy is the end of a drag, and paste needed nothing.** Reported together
+as "i cant copy paste", and they are two different things:
+
+```
+  paste   the renderer already enables bracketed paste (`?2004h`) and the
+          textarea inserts the text whole — including a two-line paste,
+          whose newline is a newline and not a send
+  copy    opentui owns the mouse, so a drag is ITS selection and the
+          terminal never sees one. Nothing wrote it anywhere: `copyOnSelect`
+          in `clipboard.ts` is the missing last step of the gesture
+```
+
+Selecting copies, with no chord — there is none a terminal reliably delivers:
+ctrl+shift+c needs the kitty protocol and cmd+C never reaches a program. Both
+routes, every time: **OSC 52** for the terminal (the only one that survives
+ssh or a multiplexer) and opentui's **host** backend for this machine.
+
+`bun run probe:paste` is a pty driving a composer, and the OSC 52 coming back
+is the only evidence a selection was copied rather than merely painted:
+
+```
+  asked for 2004h  yes
+  a paste          arrived
+  two lines        both arrived
+  a drag copied    "a line worth"
+```
+
+**A missing space is not a dropped paste.** The renderer repaints only the
+cells that changed, and a space drawn over a space has not changed — so
+`pasted one line` arrives on the probe's side as `pastedoneline`, with the
+gaps never sent. It read as a failure until the screen was printed.
+
+**`<markdown>` wraps now, and the note saying it does not is expired.**
+`lines.ts` records — from opentui's own source — that `MarkdownRenderable`
+clips a long paragraph, which is why an agent's prose is drawn as `text` and
+every inline mark is thrown away. Re-measured against the installed 0.5.11 in
+the shape `Message` draws, it wraps, and draws headings, lists, tables, bold
+and inline code. What it also wraps is a **fence**, whose breaks are the
+content — so prose goes to `<markdown>` and a fence still goes to `<code>`,
+which is why `segments` survives the move. `streaming` is on while the turn
+is in flight, which is the renderable's own instruction.
+
+Measured in `probe:transcript`, because characters alone cannot tell a
+rendered heading from a paragraph that says the same words:
+
+```
+  no literal ##  parsed
+  the heading    What #eed49f          ← markup.heading.2, and bold
+  inline code    wrap #91d7e3
+  a table drawn  yes
+  the fence      unwrapped
+```
+
+**And `Terminal` is not a title.** The adapter titles a Bash call
+`input?.command ? input.command : "Terminal"`, so a call whose input is still
+streaming reads `…  bash  Terminal` — a word that names no command and
+repeats the verb. Reported as "i dont know what that is and i do not like
+it". `toolTitleOf` drops that one pair, from that one tool; the real command
+lands on the same id a moment later.
+
 ## Never write a real name down
 
 No real project, repository, branch, customer, product or person's name goes

@@ -69,6 +69,15 @@ describe("fold", () => {
       key: "t1",
       title: "cat notes.txt",
       toolKind: "execute",
+      // The adapter did not send one in this sequence, so the row keeps the
+      // kind to fall back on. A real `Bash` call carries `toolName: "Bash"`.
+      toolName: "",
+      // Bash's own `description`, when the adapter forwards one. This
+      // sequence has none, so the row is drawn as the command.
+      purpose: "",
+      // The turn it was made in, which is what decides whether its mark
+      // turns — nothing here started one, so it is turn zero.
+      turn: 0,
       status: "completed",
       output: "the word is: heron",
       // Empty rather than absent: a `cat` changed no file, and every row
@@ -381,7 +390,9 @@ describe("a delegated call", () => {
       toolKind: "other",
       subagent: "code-reviewer",
     });
-    expect(verb(after.items[0] as never)).toBe("spawned");
+    // The subagent's own type, not `spawned` — which said neither what was
+    // handed off nor to what. One rule for both faces: see `toolVerb`.
+    expect(verb(after.items[0] as never)).toBe("code-reviewer");
     expect(after.items[0]).toMatchObject({ subagent: "code-reviewer" });
   });
 
@@ -639,5 +650,36 @@ describe("two clients on one conversation", () => {
     } as never);
     const row = after.items[0];
     expect(row?.kind === "asked" && row.answered).toBe("answered");
+  });
+});
+
+describe("a compaction", () => {
+  it("is one row that settles, not three paragraphs", () => {
+    const started = fold(nothing, { kind: "compact", id: "compact-1", status: "running" } as never);
+    expect(started.items).toHaveLength(1);
+    const ended = fold(started, { kind: "compact", id: "compact-1", status: "done" } as never);
+    // One row still: the outcome patches the row that announced it, which is
+    // the whole reason the daemon numbers them — the adapter's three
+    // sentences carry no id of their own.
+    expect(ended.items).toHaveLength(1);
+    const row = ended.items[0];
+    expect(row?.kind === "compacted" && row.status).toBe("done");
+  });
+
+  it("keeps the adapter's own sentence when it failed", () => {
+    const after = fold(nothing, {
+      kind: "compact",
+      id: "compact-1",
+      status: "failed",
+      text: "the summary was refused",
+    } as never);
+    const row = after.items[0];
+    expect(row?.kind === "compacted" && row.reason).toBe("the summary was refused");
+  });
+
+  it("is a second boundary when it happens twice", () => {
+    const once = fold(nothing, { kind: "compact", id: "compact-1", status: "done" } as never);
+    const twice = fold(once, { kind: "compact", id: "compact-2", status: "running" } as never);
+    expect(twice.items).toHaveLength(2);
   });
 });

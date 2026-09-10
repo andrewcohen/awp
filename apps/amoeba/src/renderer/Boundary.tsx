@@ -221,3 +221,45 @@ export class Boundary extends Component<
     );
   }
 }
+
+/**
+ * Keep one thing from taking its column with it.
+ *
+ * ── a render-time throw is not a parse failure ────────────────────────────
+ *
+ * `@pierre/diffs` parses a patch and *renders* it in two separate steps, and
+ * it can accept one and then die on the other:
+ *
+ *   DiffHunksRenderer.processDiffResult: deletionLine and additionLine are
+ *   null, something is wrong
+ *
+ * — thrown from `CodeView.render`, several frames inside the library, for a
+ * patch its own parser was happy with. Every caller here already guards the
+ * parse in a `try`, and no `try` can reach a throw that happens later, during
+ * React's render. So the whole agent column became a stack trace for one
+ * patch, which is the outcome `Boundary` exists to prevent one level up.
+ *
+ * This is that, at the size of the thing that failed: the patch loses its
+ * rendering and keeps its text, and everything around it is untouched. React
+ * logs the error to the console on its way through, and `main.ts` forwards
+ * the console's error level to the app's own log — so the cause stays
+ * findable rather than being swallowed by the repair.
+ *
+ * Deliberately not `Boundary`: that one draws a report with a stack and a
+ * copy button, which is right for a panel and absurd for a code block inside
+ * a sentence.
+ */
+export class Salvage extends Component<
+  { readonly fallback: ReactNode; readonly children: ReactNode },
+  { readonly fell: boolean }
+> {
+  override state = { fell: false };
+
+  static getDerivedStateFromError() {
+    return { fell: true };
+  }
+
+  override render() {
+    return this.state.fell ? this.props.fallback : this.props.children;
+  }
+}

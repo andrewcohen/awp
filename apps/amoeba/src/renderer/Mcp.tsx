@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import { mcpStatus, said } from "./daemon";
 import { useOverlay } from "./overlays";
 import { typeset } from "./typeset";
-import { colors, text } from "./tokens.stylex";
+import { colors, lift, text, timing } from "./tokens.stylex";
 
 // `/mcp`: what the agent on the other end of this conversation was handed.
 //
@@ -35,6 +35,19 @@ import { colors, text } from "./tokens.stylex";
 const styles = stylex.create({
   backdrop: { position: "fixed", inset: 0, backgroundColor: "rgba(0, 0, 0, 0.4)" },
   popup: {
+    // ── it arrives, rather than being there ─────────────────────────────
+    //
+    // Nothing pops: the window's mandate, and a dialog is the largest
+    // thing in it that appears. Scale from just under, so it reads as
+    // coming forward rather than as growing — and the transform is
+    // composed with the centring translate, which is why the keyframe
+    // carries both.
+    animationName: stylex.keyframes({
+      from: { opacity: 0, transform: "translate(-50%, -50%) scale(0.97)" },
+      to: { opacity: 1, transform: "translate(-50%, -50%) scale(1)" },
+    }),
+    animationDuration: { default: timing.enter, "@media (prefers-reduced-motion: reduce)": "0s" },
+    animationTimingFunction: timing.spring,
     position: "fixed",
     top: "38%",
     left: "50%",
@@ -53,7 +66,7 @@ const styles = stylex.create({
     borderColor: colors.border,
     borderRadius: "0.4rem",
     color: colors.text,
-    boxShadow: "0 1rem 3rem rgba(0, 0, 0, 0.35)",
+    boxShadow: lift.high,
   },
   head: { display: "flex", alignItems: "baseline", gap: "0.5rem" },
   title: { margin: 0 },

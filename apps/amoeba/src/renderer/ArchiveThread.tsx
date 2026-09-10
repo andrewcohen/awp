@@ -6,7 +6,7 @@ import { useState } from "react";
 import { threadLink } from "./address";
 import { archiveThread, said } from "./daemon";
 import { typeset } from "./typeset";
-import { colors, text } from "./tokens.stylex";
+import { colors, lift, text, timing } from "./tokens.stylex";
 
 // Putting a thread away, and taking its checkouts back with it.
 //
@@ -68,7 +68,7 @@ const styles = stylex.create({
     borderColor: colors.border,
     borderRadius: "0.35rem",
     color: colors.text,
-    boxShadow: "0 0.5rem 1.5rem rgba(0, 0, 0, 0.35)",
+    boxShadow: lift.high,
   },
   item: {
     display: "flex",
@@ -86,6 +86,19 @@ const styles = stylex.create({
     backgroundColor: "rgba(0, 0, 0, 0.45)",
   },
   popup: {
+    // ── it arrives, rather than being there ─────────────────────────────
+    //
+    // Nothing pops: the window's mandate, and a dialog is the largest
+    // thing in it that appears. Scale from just under, so it reads as
+    // coming forward rather than as growing — and the transform is
+    // composed with the centring translate, which is why the keyframe
+    // carries both.
+    animationName: stylex.keyframes({
+      from: { opacity: 0, transform: "translate(-50%, -50%) scale(0.97)" },
+      to: { opacity: 1, transform: "translate(-50%, -50%) scale(1)" },
+    }),
+    animationDuration: { default: timing.enter, "@media (prefers-reduced-motion: reduce)": "0s" },
+    animationTimingFunction: timing.spring,
     position: "fixed",
     top: "50%",
     left: "50%",
@@ -102,7 +115,7 @@ const styles = stylex.create({
     borderColor: colors.border,
     borderRadius: "0.5rem",
     color: colors.text,
-    boxShadow: "0 1rem 3rem rgba(0, 0, 0, 0.45)",
+    boxShadow: lift.high,
   },
   title: { margin: 0 },
   said: { margin: 0, color: colors.muted, fontSize: text.small },

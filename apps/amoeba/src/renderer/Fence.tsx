@@ -1,4 +1,5 @@
 import { parsePatchFiles } from "@pierre/diffs";
+import { Salvage } from "./Boundary";
 import { CodeView } from "@pierre/diffs/react";
 import * as stylex from "@stylexjs/stylex";
 import { type ReactNode, isValidElement, useEffect, useId, useMemo, useState } from "react";
@@ -139,23 +140,31 @@ export const Patch = ({ source }: { readonly source: string }) => {
   }
 
   return (
-    <div {...stylex.props(styles.block)}>
-      <CodeView
-        items={items}
-        options={{
-          theme: THEME,
-          themeType: scheme,
-          // Wrapped, never scrolled sideways — the window's rule, and this is
-          // a column narrower than the diff panel's.
-          overflow: "wrap",
-          diffStyle: "unified",
-          // Nothing here is selectable or commentable: a patch in a message is
-          // something to read, and the anchors a comment needs (a revision, a
-          // path, a side) do not exist for it.
-          enableLineSelection: false,
-        }}
-      />
-    </div>
+    // ── the parse is guarded and the render was not ──────────────────────
+    //
+    // `parsePatchFiles` throwing is caught above; `CodeView` throwing while
+    // React renders it cannot be, and it does — see `Salvage`. The fallback
+    // is the same one a failed parse gets: the patch as text, highlighted as
+    // a diff, which is what this component is for in the first place.
+    <Salvage fallback={<Code source={source} language="diff" />}>
+      <div {...stylex.props(styles.block)}>
+        <CodeView
+          items={items}
+          options={{
+            theme: THEME,
+            themeType: scheme,
+            // Wrapped, never scrolled sideways — the window's rule, and this
+            // is a column narrower than the diff panel's.
+            overflow: "wrap",
+            diffStyle: "unified",
+            // Nothing here is selectable or commentable: a patch in a message
+            // is something to read, and the anchors a comment needs (a
+            // revision, a path, a side) do not exist for it.
+            enableLineSelection: false,
+          }}
+        />
+      </div>
+    </Salvage>
   );
 };
 

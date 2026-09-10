@@ -13,6 +13,8 @@ import { type Job, isTerminal } from "@awp-kit/jobs";
 import type { InboxItem } from "@awp-kit/protocol";
 import { bucketLabel, inboxBuckets } from "@awp-kit/protocol";
 import * as stylex from "@stylexjs/stylex";
+import { GitPullRequestIcon } from "@phosphor-icons/react/GitPullRequest";
+import { Nothing } from "./Nothing";
 import { useState } from "react";
 import { said, startReview } from "./daemon";
 import { guide } from "./stacks";
@@ -551,7 +553,11 @@ export function Inbox({
         {refused !== undefined && <div {...stylex.props(styles.trouble)}>{refused}</div>}
 
         {inbox !== undefined && items.length === 0 && (
-          <div {...stylex.props(styles.empty)}>no open pull requests</div>
+          <Nothing
+            mark={<GitPullRequestIcon size={22} weight="light" />}
+            say="no open pull requests"
+            hint="nothing is waiting on you, and nothing of yours is waiting"
+          />
         )}
 
         {inboxBuckets.map((bucket) => {

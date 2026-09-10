@@ -773,12 +773,39 @@ export const watchChat = (
   project: string,
   workspace: string,
   onUpdate: (update: ChatUpdate) => void,
-): (() => void) =>
-  subscribe((rpc) =>
-    Stream.runForEach(rpc.ChatOpen({ project, workspace }), (update) =>
-      Effect.sync(() => onUpdate(update)),
-    ),
+  /**
+   * Called before a *resubscription* replays, and never for the first one.
+   *
+   * ── every ChatOpen replays the whole transcript ────────────────────────
+   *
+   * Which is right — it is how a window opened at noon shows what was said
+   * at nine. It is also why the retry above is not enough on its own: the
+   * stream comes back and hands the panel the conversation a second time,
+   * and the fold appends it to the copy already on screen. Reported as the
+   * chat "not reconnecting properly", which it does — twice over.
+   *
+   * A daemon restart makes it certain rather than likely: the new process
+   * has an empty transcript, loads the session from disk and replays all of
+   * it. So the caller empties what it holds and lets the replay rebuild it.
+   */
+  onRestart?: () => void,
+): (() => void) => {
+  let first = true;
+  return subscribe((rpc) =>
+    // `suspend`, so this runs per attempt rather than once when the effect
+    // is built — the retry re-runs the effect, not the call that made it.
+    Effect.suspend(() => {
+      if (first) {
+        first = false;
+      } else {
+        onRestart?.();
+      }
+      return Stream.runForEach(rpc.ChatOpen({ project, workspace }), (update) =>
+        Effect.sync(() => onUpdate(update)),
+      );
+    }),
   );
+};
 
 /**
  * Say something to the agent working in a workspace.

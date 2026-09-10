@@ -1795,7 +1795,7 @@ export type ChatPermissionOption = (typeof ChatPermissionOption)["Type"];
  * optional, and the window merges by id rather than appending.
  */
 export const ChatUpdate = Schema.Struct({
-  kind: Schema.Literals(["message", "tool", "permission", "turn", "usage", "commands"]),
+  kind: Schema.Literals(["message", "tool", "permission", "turn", "usage", "commands", "compact"]),
 
   /** message: who, and what they said. Chunks, so they are appended. */
   role: Schema.optional(ChatRole),
@@ -1966,6 +1966,36 @@ export const ChatUpdate = Schema.Struct({
 
   /** Every command the agent advertises. Replaces the set, never merges. */
   commands: Schema.optional(Schema.Array(ChatCommand)),
+
+  // ── compact ─────────────────────────────────────────────────────────────
+  //
+  // `/compact` throws most of a conversation away and keeps a summary, which
+  // is a thing that HAPPENED to the transcript rather than a thing anybody
+  // said. The adapter reports it as three ordinary agent messages — measured
+  // in its own source, `acp-agent.js`:
+  //
+  //   status "compacting"          →  a chunk reading `Compacting...`
+  //   compact_result "success"     →  a chunk reading `Compacting completed.`
+  //   compact_result "failed"      →  a chunk, `Compacting failed: <error>`
+  //   compact_boundary             →  a usage_update carrying the real
+  //                                   post-compaction figure
+  //
+  // Left as prose, a compaction is three paragraphs in the middle of a
+  // conversation — reported as "it just said compacting compacting
+  // compacting" — and nothing on screen says the transcript above is no
+  // longer what the agent can see. So the daemon recognises the three and
+  // says so as a state on one row, which both faces draw as a boundary.
+  //
+  // The token counts are deliberately absent: only the usage figure knows
+  // them, it is already under the composer, and it corrects itself from
+  // `compact_boundary` seconds later. A second copy here would be the one
+  // that drifts.
+  //
+  // `status` is `running`, `done` or `failed`, and `text` carries the
+  // adapter's own sentence when it failed. `id` is one per compaction, so
+  // the outcome patches the row that announced it rather than adding a
+  // second — assigned by the daemon, because the three messages are prose
+  // and carry no id of their own.
 });
 
 export type ChatUpdate = (typeof ChatUpdate)["Type"];

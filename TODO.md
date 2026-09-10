@@ -13,7 +13,7 @@ Regenerated wholesale. Do not hand-edit a single entry expecting it to survive �
 
 46 open, 75 finished, as of 2026-09-08.
 
-Hand-edited rather than regenerated, for #111, #115, #118, #121, #124
+Hand-edited rather than regenerated, for #111, #115, #118, #121, #124, #128, #129
 and the two #91 bullets they closed: the list they are regenerated from lives in a session that
 has ended. The next regeneration will overwrite this.
 
@@ -1291,3 +1291,106 @@ message.
 Related: the annotator's note box needed `CH.focus` for the mirror image of
 this — a control the _renderer_ draws because of a click that happened in the
 page.
+
+## 128. Panels as rearrangeable tabs, with a layout per thread — and named modalities
+
+Andrew's, 2026-09-10, written down before it is designed. Today the window's
+shape is fixed: an agent column with the chat or the pane in it, and an
+accessory column whose panels are a tab strip in an order this repo chose.
+The proposal is two steps, and the second is the interesting one.
+
+**Rearrangeable, and remembered per thread.** Every panel — chat, pane, diff,
+PR, jobs, tasks, web, style guide — becomes a tab that can be moved between
+the two columns and reordered, and the arrangement is a property of the
+thread rather than of the window. A review thread wants the PR beside the
+diff; an implementation thread wants the pane beside the chat, and neither
+wants the other's furniture.
+
+**Then: saved configurations, one per kind of work.** The stronger half of
+the idea, because it says the layout is not a preference but a claim about
+what the session is _for_:
+
+```
+  research        chat · web · tasks            reading, and writing down
+  architecture    chat · diff · tasks           shape, not lines
+  implementation  chat · pane · diff            write, run, look
+  code review     PR · diff · chat              somebody else's argument
+```
+
+A thread would open in the configuration its work implies — a review thread
+already knows it is a review — with the arrangement editable from there and
+kept if it is changed.
+
+Three things that already exist and point at this, and one that fights it:
+
+- The PR tab is **already conditional** on the thread naming a pull request,
+  and the argument for it is exactly this one: "a permanent empty room in the
+  column somebody switches most costs a keystroke every time". That is this
+  idea applied once, by hand, to one panel.
+- The chat/pane split is **already a per-thread choice** — `Face` is on the
+  wire and on the create job, because the face somebody picked in the form
+  decided which agent got briefed. So "what is in the agent column" is
+  already thread state; this generalises it to the accessory column and to
+  order.
+- `ThreadStart` already carries an intent — the description, the base, the
+  face — so the moment a configuration would be chosen is a moment the window
+  is already asking about the work.
+- Against: **Base UI unmounts a hidden tab**, which is why the inbox needed
+  an atom and why the web panel is `keepMounted`. A layout with more panels
+  visible at once is more mounted at once, and two of them are native views
+  and a wasm terminal. Whatever this becomes has to say which panels may be
+  live simultaneously, or it is a design that gets slower as it gets better.
+
+Open questions worth settling before any of it is built: whether a
+configuration is a **preset** (a starting point, then the thread owns its
+own) or a **binding** (the thread points at a named configuration and edits
+change every thread using it); whether the layout is per thread or per
+(thread, workspace), since a thread holds several checkouts; and where it is
+stored — a thread record on the daemon makes it follow the work to another
+machine, `localStorage` makes it this window's, and the existing split says
+per-window for `amoeba.place` and per-thread-on-the-daemon for everything
+that is a claim about the work.
+
+## 129. Two faces, two jobs: the TUI for popping in and out, the window as the IDE
+
+Andrew's, 2026-09-10, written down beside #128 because they are halves of
+one question — what each face is _for_ — and answering one without the
+other will produce a window and a terminal that disagree about it.
+
+The claim: the TUI is not a small version of the window. It is the face
+somebody uses from a terminal they are already in, to see what an agent is
+doing, say one thing to it, and leave. The window is where the work is
+actually done — the diff, the pull request, the browser, the tasks, the
+layout of #128.
+
+```
+  TUI      list · open · read the last answer · say one thing · leave
+           seconds. No layout to arrange, because there is nothing to
+           arrange: one column, one conversation
+  window   the IDE. Panels, a terminal, a diff, a page, a review, and a
+           shape per kind of work
+```
+
+What follows if it is taken seriously, and each of these is a decision
+this repo has already half-made in one direction or the other:
+
+- **The TUI stops growing panels.** No diff panel, no PR panel, no browser.
+  What it grows instead is speed to a conversation — the thread list
+  ordered by activity landed for exactly that reason, and a fuzzy jump
+  straight to a thread would be the next.
+- **A vocabulary is shared; a surface is not.** The tool-name rule, the
+  slash commands and the spinner frames are in the contract package on the
+  argument that two faces must not disagree about what a thing _is_. That
+  argument does not extend to what each face draws — the TUI already drops
+  the label column the window keeps, and that is right rather than a drift.
+- **The window may assume it is on a desktop**, and the TUI may assume it
+  is over ssh. Which is the honest reading of why the copy path has two
+  routes: OSC 52 exists for the second case.
+- Against, and worth arguing before committing: the TUI is currently the
+  only face that works from a machine somebody has ssh'd into, and
+  "everything real happens in the window" makes that a second-class way to
+  work rather than a deliberate one.
+
+Open: whether the TUI keeps a diff at all — reading a patch is arguably a
+pop-in-and-out act — and whether "leave" should mean detach rather than
+quit, which is a zmx question and not a UI one.

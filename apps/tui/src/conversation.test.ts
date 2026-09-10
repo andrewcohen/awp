@@ -230,3 +230,17 @@ describe("the agent's own commands", () => {
     expect(after.commands).toEqual([]);
   });
 });
+
+describe("a compaction", () => {
+  it("is one row that settles, and stands on its own in the grouping", () => {
+    const started = fold(empty, { kind: "compact", id: "compact-1", status: "running" } as never);
+    const ended = fold(started, { kind: "compact", id: "compact-1", status: "done" } as never);
+    expect(ended.items).toHaveLength(1);
+    const row = ended.items[0];
+    expect(row?.kind === "compacted" && row.status).toBe("done");
+    // Never swallowed by a run of receipts: a boundary rolled up behind
+    // `ran 7 tools` is the one thing in a transcript that cannot be folded,
+    // because it is a statement about the transcript.
+    expect(grouped(ended.items).every((block) => block.kind === "one")).toBe(true);
+  });
+});

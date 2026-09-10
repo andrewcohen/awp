@@ -84,6 +84,24 @@ export type Item =
         /** What was chosen, once anybody in any client has chosen. */
         answered?: string;
       };
+    }
+  | {
+      /**
+       * A compaction: where most of the conversation above stopped being
+       * something the agent can see.
+       *
+       * A boundary rather than three sentences. The adapter reports
+       * `/compact` as ordinary agent prose — see `compactionOf` in the
+       * daemon, which is where the three are recognised — so left alone it
+       * reads as the agent saying "compacting" twice in the middle of its
+       * own answer.
+       */
+      kind: "compacted";
+      id: string;
+      /** `running`, `done` or `failed`. */
+      status: string;
+      /** The adapter's own sentence, when it failed. */
+      reason?: string;
     };
 
 export type Conversation = {
@@ -270,6 +288,32 @@ export const fold = (state: Conversation, update: ChatUpdate): Conversation => {
   // A whole reading each time and never a delta, and the newest wins: `size`
   // is not constant — measured 200000 on a turn's first update and 1000000 on
   // its last, because the adapter learns the model's real window as it goes.
+  if (update.kind === "compact" && update.id !== undefined) {
+    // Patched by id like a tool call, so the outcome settles the row that
+    // announced it. The daemon numbers them — the three sentences carry no
+    // id of their own.
+    const id = update.id;
+    const at = state.items.findIndex((item) => item.kind === "compacted" && item.id === id);
+    const was = at === -1 ? undefined : state.items[at];
+    const now: Item = {
+      kind: "compacted",
+      id,
+      status: update.status ?? (was?.kind === "compacted" ? was.status : "running"),
+      ...(update.text === undefined
+        ? was?.kind === "compacted" && was.reason !== undefined
+          ? { reason: was.reason }
+          : {}
+        : { reason: update.text }),
+    };
+    return {
+      ...state,
+      items:
+        at === -1
+          ? [...state.items, now]
+          : state.items.map((item, index) => (index === at ? now : item)),
+    };
+  }
+
   if (update.kind === "usage") {
     return {
       ...state,

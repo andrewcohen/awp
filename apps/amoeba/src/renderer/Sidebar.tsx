@@ -1,11 +1,13 @@
 import type { SessionInfo, Thread, WorkspaceFacts, WorkspaceStatus } from "@awp-kit/protocol";
 import * as stylex from "@stylexjs/stylex";
-import { useEffect, useRef, useState } from "react";
+import { motion } from "motion/react";
+import { pill } from "./springs";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ArchiveThread } from "./ArchiveThread";
 import { type Facts, factsKey } from "./useFacts";
 import { rememberLooseOpen, rememberedLooseOpen } from "./remembered";
 import { typeset } from "./typeset";
-import { colors, space, text } from "./tokens.stylex";
+import { colors, space, text, timing } from "./tokens.stylex";
 import {
   PRIMARY,
   type ThreadGroup,
@@ -115,8 +117,18 @@ const styles = stylex.create({
   // the row rather than around it, so a selected workspace is a strip and not a
   // floating rectangle.
   row: {
+    // `relative`, so the travelling accent edge has this row to sit in.
+    position: "relative",
     padding: `${space.row} ${space.gutter}`,
     marginBottom: "0.3rem",
+    borderRadius: "0.35rem",
+    // A strip of rows that does nothing under the pointer reads as a
+    // listing rather than as a set of things to open. Cheap, and it is the
+    // only feedback this column gives before a click.
+    transitionProperty: "background-color, transform",
+    transitionDuration: { default: timing.quick, "@media (prefers-reduced-motion: reduce)": "0s" },
+    transitionTimingFunction: timing.ease,
+    ":hover": { backgroundColor: colors.surface },
   },
   // The one level of indent. Enough that the eye finds the thread's left edge,
   // not so much that the name loses its column.
@@ -268,7 +280,21 @@ const styles = stylex.create({
   // whose position a person is tracking.
   rowOn: {
     backgroundColor: colors.raised,
-    boxShadow: `inset 2px 0 0 ${colors.accent}`,
+    // The accent bar is `edge` now, a single element that slides between
+    // rows. What stays here is the fill, which does not travel: two rows
+    // briefly filled during the slide reads as the selection being handed
+    // over, which is what is happening.
+  },
+  /** The travelling accent edge. See the note at its `layoutId`. */
+  edge: {
+    position: "absolute",
+    insetBlockStart: 0,
+    insetBlockEnd: 0,
+    insetInlineStart: 0,
+    width: "2px",
+    borderStartEndRadius: "2px",
+    borderEndEndRadius: "2px",
+    backgroundColor: colors.accent,
   },
 
   // Line one is a button and line two is not, which is why the padding lives on
@@ -319,6 +345,35 @@ const styles = stylex.create({
   // the strip for the one thing nobody needs to look at.
   dotWorking: { color: colors.live },
   dotWaiting: { color: colors.waiting },
+  /**
+   * A dot that is doing something, breathing.
+   *
+   * ── the two states that are about *now* ────────────────────────────────
+   *
+   * This strip is a set of hues that are all equally still, so `working`
+   * and `idle` differ only by a colour somebody has to have learned. A dot
+   * that moves is the one thing on the strip that cannot be a screenshot —
+   * and the two states worth spending it on are the two that will change on
+   * their own: an agent working, and an agent waiting for a person.
+   *
+   * Opacity and scale rather than a colour cycle: the hue is already
+   * carrying the state, and a hue that changes would be a second claim.
+   *
+   * 2.6s, which is slow — a fast pulse on a list of eight rows is a
+   * christmas tree, and this has to survive being on screen all day.
+   */
+  breathing: {
+    animationName: stylex.keyframes({
+      "0%, 100%": { opacity: 1, transform: "scale(1)" },
+      "50%": { opacity: 0.45, transform: "scale(0.88)" },
+    }),
+    animationDuration: { default: "2.6s", "@media (prefers-reduced-motion: reduce)": "0s" },
+    animationTimingFunction: "cubic-bezier(0.45, 0, 0.55, 1)",
+    animationIterationCount: {
+      default: "infinite",
+      "@media (prefers-reduced-motion: reduce)": "1",
+    },
+  },
   dotError: { color: colors.warn },
   dotIdle: { color: colors.muted },
   // A workspace nothing has reported on, with an unread mark. There is a state
@@ -428,6 +483,9 @@ const Dot = ({
   const known = status === undefined ? undefined : DOT[status];
   const style = known?.style ?? (live ? styles.dotWorking : styles.dotIdle);
   const say = known?.say ?? (live ? "running" : "not running");
+  // The two states that are about *now* rather than about how a checkout
+  // was left. See `breathing`.
+  const moving = status === "working" || status === "waiting";
 
   return (
     <span
@@ -435,7 +493,12 @@ const Dot = ({
       // circle", which is a description of the ink rather than of the row.
       role="img"
       aria-label={unread ? `${say}, unread` : say}
-      {...stylex.props(styles.dot, style, known === undefined && unread && styles.dotUnknownUnread)}
+      {...stylex.props(
+        styles.dot,
+        style,
+        moving && styles.breathing,
+        known === undefined && unread && styles.dotUnknownUnread,
+      )}
     >
       {unread ? GLYPH.unseen : GLYPH.seen}
     </span>
@@ -586,6 +649,18 @@ function Row({
       onPointerLeave={() => setHovered(false)}
       {...stylex.props(styles.row, active && styles.rowOn)}
     >
+      {/* ── the edge travels down the strip ──────────────────────────────
+          One accent bar with a `layoutId`, so moving between rows slides it
+          from the row you left to the row you are on. As an inset shadow it
+          was two rows changing colour, which says the same thing and shows
+          none of the movement — and this strip is the one place in the
+          window where "which row" is the whole question.
+
+          Absolutely positioned rather than a border, so gaining it moves
+          the row's contents by nothing at all. */}
+      {active && (
+        <motion.span layoutId="sidebar-edge" {...stylex.props(styles.edge)} transition={pill} />
+      )}
       <div {...stylex.props(styles.titleRow)}>
         <button
           type="button"
@@ -942,10 +1017,26 @@ export function Sidebar({
   readonly onThreadsChanged: () => void;
   readonly failure: string | undefined;
 }) {
+  // What orders the column: when each checkout was last worked in. The same
+  // table the dots are read from, so there is no second source to disagree
+  // with them — see `activeAt` in workspaces.ts for why a thread's own
+  // `createdAt` is the wrong field to sort on.
+  const when = useMemo(
+    () =>
+      new Map(
+        [...facts.values()].flatMap((one) =>
+          one.lastActiveAt === undefined
+            ? []
+            : [[factsKey(one.project, one.workspace), one.lastActiveAt.getTime()] as const],
+        ),
+      ),
+    [facts],
+  );
   const groups = groupByThread(
     threads,
     groupByWorkspace(sessions),
     (workspace) => factsFor(facts, workspace)?.status,
+    when,
   );
   const sentinel = useRef<HTMLDivElement | null>(null);
   const stuck = useStuck(sentinel);

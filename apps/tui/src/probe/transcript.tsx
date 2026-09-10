@@ -21,7 +21,7 @@
 import { createMockMouse } from "@opentui/core/testing";
 import { testRender } from "@opentui/react/test-utils";
 import { type Item, grouped } from "../conversation";
-import { Call, Calls, Message } from "../Items";
+import { Boundary, Call, Calls, Message } from "../Items";
 import { CHROME } from "../theme";
 
 // A real patch, out of `createTwoFilesPatch`, because a hand-written one is
@@ -149,6 +149,10 @@ const ITEMS: ReadonlyArray<Item> = [
   // title already.
   receipt("t8", "awp_tasks", "mcp__awp__awp_tasks"),
   { kind: "said", role: "agent", text: "Done — one line, and the gates are green.", turn: 1 },
+  // A compaction: the one row that is about the transcript rather than in it,
+  // and a state a live agent is in for half a minute every few hours. See
+  // `compactionOf` in the daemon for why it is recognised at all.
+  { kind: "compacted", id: "compact-1", status: "done" },
 ];
 
 const WIDTH = 76;
@@ -166,6 +170,8 @@ const App = () => (
         <Calls key={at} items={block.items} inner={WIDTH} live={block.live} />
       ) : block.item.kind === "said" ? (
         <Message key={at} item={block.item} inner={WIDTH} />
+      ) : block.item.kind === "compacted" ? (
+        <Boundary key={at} item={block.item} inner={WIDTH} />
       ) : (
         <Call key={at} item={block.item} inner={WIDTH} />
       ),
@@ -234,6 +240,10 @@ console.log(`  its patch      ${has("Array<string>")}`);
 console.log(`  line numbers   ${has(" 3 -") && has(" 3 +") ? "yes" : "NO"}`);
 console.log(`  patch header   ${frame.includes("+++ lines.ts") ? "STILL THERE" : "not drawn"}`);
 console.log(`  status row     ${has("% context")}`);
+// A compaction is a rule with a word in it, and the rule is what says the
+// conversation above is no longer what the agent can see. Checked for the
+// rule rather than the word alone: `compacted` in a sentence is not one.
+console.log(`  the boundary   ${has("─ compacted ─")}`);
 // A row drawn as what the call was FOR, with the command still under it.
 // Approving `rm -rf` from a description alone is the decision nobody should
 // be asked to make, so both have to be on screen.

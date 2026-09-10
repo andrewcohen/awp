@@ -467,6 +467,49 @@ export const commandsOf = (raw: ReadonlyArray<unknown>): ReadonlyArray<ChatComma
     .filter((one) => one.name !== "/");
 
 /**
+ * A compaction, if that is what an agent chunk is announcing.
+ *
+ * ── why this is a string match, and what that costs ───────────────────────
+ *
+ * `/compact` is the one thing an agent does that changes what it can *see*,
+ * and the adapter reports it as ordinary prose. Read out of its own source
+ * (`acp-agent.js`, the `status` and `compact_boundary` cases): the three
+ * sentences below are composed there and sent as `agent_message_chunk`s,
+ * with no `_meta`, no id and no kind to tell them apart from the agent
+ * talking about compaction. The only structured thing a compaction produces
+ * is a `usage_update` at `compact_boundary`, which says the figure dropped
+ * and not why.
+ *
+ * So the choice is between matching three English sentences and drawing a
+ * compaction as three paragraphs of prose. This matches them — narrowly, on
+ * the whole trimmed chunk rather than on a substring, so an agent *saying*
+ * the word is untouched — and the fallback when upstream rewords one is the
+ * behaviour that exists today: the sentence appears as a message. That is a
+ * cosmetic regression rather than a broken conversation, which is what makes
+ * the trade acceptable.
+ *
+ * The counts are not read here. `compact_boundary`'s usage update already
+ * carries the authoritative post-compaction figure and the context reading
+ * under the composer already shows it; a second copy on this row would be
+ * the one that drifts.
+ */
+export const compactionOf = (text: string): ChatUpdate | undefined => {
+  const said = text.trim();
+  if (/^compacting\.\.\.$/i.test(said)) {
+    return { kind: "compact", status: "running" };
+  }
+  if (/^compacting completed\.$/i.test(said)) {
+    return { kind: "compact", status: "done" };
+  }
+  const failed = /^compacting failed(?::\s*(?<why>.+?))?\.?$/i.exec(said);
+  if (failed !== null) {
+    const why = failed.groups?.["why"];
+    return { kind: "compact", status: "failed", ...(why === undefined ? {} : { text: why }) };
+  }
+  return undefined;
+};
+
+/**
  * One `session/update` as something the window can draw, or nothing.
  *
  * Deliberately lossy: an update kind with nothing in it a person reads is
@@ -482,9 +525,12 @@ export const updateOf = (params: Record<string, unknown>): ChatUpdate | undefine
 
   if (kind === "agent_message_chunk" || kind === "user_message_chunk") {
     const text = textOf(update["content"]);
-    return text === undefined
-      ? undefined
-      : { kind: "message", role: kind === "user_message_chunk" ? "user" : "agent", text };
+    if (text === undefined) return undefined;
+    if (kind === "agent_message_chunk") {
+      const compaction = compactionOf(text);
+      if (compaction !== undefined) return compaction;
+    }
+    return { kind: "message", role: kind === "user_message_chunk" ? "user" : "agent", text };
   }
 
   if (kind === "agent_thought_chunk") {
@@ -763,6 +809,24 @@ export const conversation = (
         );
       });
 
+    // ── one row per compaction ──────────────────────────────────────────
+    //
+    // The three sentences a compaction produces are prose and carry no id, so
+    // the outcome has nothing to patch and would draw as a second row under
+    // the first. Counted here because this is the process that sees the whole
+    // conversation — `compactionOf` is per-update and pure, and keeping it
+    // that way is what makes it testable.
+    //
+    // A `done` arriving with no `running` before it still lands on a row of
+    // its own rather than on nothing, which is what a transcript replayed
+    // from the middle of a compaction looks like.
+    let compactions = 0;
+    const identified = (update: ChatUpdate): ChatUpdate => {
+      if (update.kind !== "compact") return update;
+      if (update.status === "running" || compactions === 0) compactions += 1;
+      return { ...update, id: `compact-${String(compactions)}` };
+    };
+
     const lines = Stream.splitLines(Stream.decodeText(handle.stdout));
     const reader = Stream.runForEach(lines, (line) =>
       Effect.gen(function* () {
@@ -785,7 +849,7 @@ export const conversation = (
         if (method === "session/update") {
           const update = updateOf((message["params"] ?? {}) as Record<string, unknown>);
           if (update !== undefined) {
-            yield* emit(update);
+            yield* emit(identified(update));
           }
           return;
         }

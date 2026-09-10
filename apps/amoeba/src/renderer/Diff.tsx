@@ -10,6 +10,10 @@ import { ArrowsOutLineVerticalIcon } from "@phosphor-icons/react/ArrowsOutLineVe
 import { CodeView, type CodeViewHandle, type CodeViewItem } from "@pierre/diffs/react";
 import type { CodeViewLineSelection, DiffLineAnnotation, SelectedLineRange } from "@pierre/diffs";
 import * as stylex from "@stylexjs/stylex";
+import { GitDiffIcon } from "@phosphor-icons/react/GitDiff";
+import { Nothing } from "./Nothing";
+import { Salvage } from "./Boundary";
+import { Markdown } from "./Markdown";
 import { parsePatchFiles } from "@pierre/diffs";
 import {
   type MouseEvent as ReactMouseEvent,
@@ -215,6 +219,23 @@ const spanOf = (
 };
 
 const styles = stylex.create({
+  /**
+   * The patch as text, when the renderer would not draw it.
+   *
+   * Preformatted and scrolled in its own box rather than wrapped: a patch's
+   * line breaks and its alignment *are* the content, which is the same rule
+   * `Fence.tsx` records for a fence with no language on it. Scrolled inside a
+   * deliberate container is allowed; the column itself still must not.
+   */
+  raw: {
+    margin: 0,
+    padding: "0.75rem 1rem",
+    fontFamily: text.mono,
+    fontSize: text.small,
+    color: colors.muted,
+    whiteSpace: "pre",
+    overflowX: "auto",
+  },
   panel: {
     display: "flex",
     flexDirection: "column",
@@ -617,7 +638,11 @@ const styles = stylex.create({
   },
   draft: { borderLeftColor: colors.live },
   noteRow: { display: "flex", alignItems: "baseline", gap: "0.4rem" },
-  noteBody: { flex: 1, minWidth: 0, whiteSpace: "pre-wrap", overflowWrap: "anywhere" },
+  // `pre-wrap` came off with the raw text: `Markdown` draws real blocks now,
+  // and preserved whitespace inside them turns every paragraph's own wrapping
+  // into a second set of line breaks. What it was for — a comment's newlines
+  // surviving — is what markdown does with them properly.
+  noteBody: { flex: 1, minWidth: 0, overflowWrap: "anywhere" },
   noteWhen: { flexShrink: 0, color: colors.muted, fontSize: text.small },
   noteWhere: {
     flexShrink: 0,
@@ -1321,7 +1346,13 @@ export function Diff({
   const stat = patch === undefined ? undefined : statOf(patch);
 
   if (dir === undefined) {
-    return <div {...stylex.props(styles.said)}>no workspace open</div>;
+    return (
+      <Nothing
+        mark={<GitDiffIcon size={22} weight="light" />}
+        say="no workspace open"
+        hint="a patch is a workspace's — open one in the sidebar, or start a thread"
+      />
+    );
   }
 
   return (
@@ -1696,258 +1727,291 @@ export function Diff({
         )}
 
         {items.length > 0 && (
-          <CodeView<Note>
-            ref={view}
-            items={items}
-            selectedLines={live}
-            // Every range the gesture passes through, including the ones it is
-            // only passing through. This is what draws the band, and it
-            // deliberately does not touch `selection` — see above.
-            //
-            // It also arrives from somewhere that is not a gesture: CodeView
-            // clears the selection itself when the item holding it stops
-            // existing. A composer left open over a file no longer in the patch
-            // would save a comment onto a line nobody can see, so that case
-            // settles immediately.
-            onSelectedLinesChange={(next) => {
-              setLive(next);
-              if (next === null) {
-                setSelection(null);
-                setWriting("");
-              }
-            }}
-            // The header is the library's; the control in front of it is ours.
-            // See `fold` — CodeView folds a file when the item says so and has
-            // no click of its own to say it.
-            //
-            // Read off `item`, never off state closed over here. This closure is
-            // handed to CodeView and called back with the *current* item, so the
-            // item is the value guaranteed to be fresh.
-            //
-            // Measured after the change: folding Sidebar.tsx-0 took its button
-            // from `collapse`/expanded to `expand`/collapsed, and a second
-            // file's header rose into view as the content shrank from 19984px
-            // to 13304px — which is also what made the first attempt to measure
-            // this read wrong. `locator.first()` re-resolves, so after the fold
-            // it was reporting a *different* file's button and looked like a
-            // stale label.
-            renderHeaderPrefix={(item) => (
-              <button
-                type="button"
-                aria-expanded={item.collapsed !== true}
-                aria-label={`${item.collapsed === true ? "expand" : "collapse"} ${item.id}`}
-                onClick={() => toggle(item.id)}
-                // Read back by `headerToggle`, which has the header and needs
-                // the item. See the note there.
-                data-item-id={item.id}
-                {...stylex.props(styles.fold)}
-              >
-                {item.collapsed === true ? (
-                  <CaretRightIcon size={14} />
-                ) : (
-                  <CaretDownIcon size={14} />
-                )}
-              </button>
-            )}
-            // The right-hand end of the file header, past the +/- counts.
-            // `renderHeaderMetadata` rather than a second prefix, because the
-            // fold caret is already the prefix and these two controls belong at
-            // opposite ends: one says "show me less of this", the other says
-            // "I am done with this".
-            renderHeaderMetadata={(item) => {
-              const path = item.type === "diff" ? item.fileDiff.name : item.id;
-              const on = seen.has(path);
-              return (
-                <label {...stylex.props(styles.viewed)} title="viewed">
-                  <input
-                    type="checkbox"
-                    checked={on}
-                    aria-label="viewed"
-                    {...stylex.props(styles.box)}
-                    onChange={(event) => markViewed(path, event.target.checked)}
-                  />
-                </label>
-              );
-            }}
-            renderAnnotation={(annotation) => {
-              // Lifted out before it is asked about. `annotation` is itself a
-              // union of the file and diff shapes, so `annotation.metadata.kind`
-              // is not a reference TypeScript will narrow through — the local is.
-              const note = annotation.metadata;
-              return note.kind === "draft" ? (
-                <div {...stylex.props(styles.note, styles.draft)}>
-                  <textarea
-                    // The one place in this panel where focus has to be moved
-                    // rather than offered. The selection was made with a
-                    // pointer or with the keyboard, and either way the next
-                    // thing anybody wants is to type — an autofocus that has to
-                    // be reached for is a box that looks ready and is not.
-                    autoFocus
-                    value={writing}
-                    placeholder="what about this line?"
-                    aria-label="comment on the selected line"
-                    {...stylex.props(styles.write)}
-                    onChange={(event) => setWriting(event.target.value)}
-                    onKeyDown={(event) => {
-                      // Escape abandons, cmd/ctrl+enter keeps. A bare enter is
-                      // a newline, because a comment about code is a comment
-                      // that quotes code.
-                      if (event.key === "Escape") {
-                        event.stopPropagation();
-                        setSelection(null);
-                        setLive(null);
-                        setWriting("");
-                      }
-                      if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
-                        event.preventDefault();
-                        save();
-                      }
-                    }}
-                  />
-                  <div {...stylex.props(styles.noteRow)}>
-                    <span {...stylex.props(styles.hint, styles.noteBody)}>
-                      {/* Which lines, said out loud. The selection is
+          // ── one patch must not cost the panel ────────────────────────
+          //
+          // The parse is in a `try` and the *render* is not reachable by one:
+          // `CodeView` throws several frames inside the library, during
+          // React's render, on patches its own parser accepted —
+          // `DiffHunksRenderer.processDiffResult: deletionLine and
+          // additionLine are null`. What that cost was the whole column,
+          // replaced by a stack trace, for a revision that is otherwise
+          // readable. See `Salvage`, and note the cause is still unknown:
+          // this keeps the panel usable and leaves the error in the log
+          // where it can be read.
+          <Salvage fallback={<pre {...stylex.props(styles.raw)}>{patch ?? "nothing to show"}</pre>}>
+            <CodeView<Note>
+              ref={view}
+              items={items}
+              selectedLines={live}
+              // Every range the gesture passes through, including the ones it is
+              // only passing through. This is what draws the band, and it
+              // deliberately does not touch `selection` — see above.
+              //
+              // It also arrives from somewhere that is not a gesture: CodeView
+              // clears the selection itself when the item holding it stops
+              // existing. A composer left open over a file no longer in the patch
+              // would save a comment onto a line nobody can see, so that case
+              // settles immediately.
+              onSelectedLinesChange={(next) => {
+                setLive(next);
+                if (next === null) {
+                  setSelection(null);
+                  setWriting("");
+                }
+              }}
+              // The header is the library's; the control in front of it is ours.
+              // See `fold` — CodeView folds a file when the item says so and has
+              // no click of its own to say it.
+              //
+              // Read off `item`, never off state closed over here. This closure is
+              // handed to CodeView and called back with the *current* item, so the
+              // item is the value guaranteed to be fresh.
+              //
+              // Measured after the change: folding Sidebar.tsx-0 took its button
+              // from `collapse`/expanded to `expand`/collapsed, and a second
+              // file's header rose into view as the content shrank from 19984px
+              // to 13304px — which is also what made the first attempt to measure
+              // this read wrong. `locator.first()` re-resolves, so after the fold
+              // it was reporting a *different* file's button and looked like a
+              // stale label.
+              renderHeaderPrefix={(item) => (
+                <button
+                  type="button"
+                  aria-expanded={item.collapsed !== true}
+                  aria-label={`${item.collapsed === true ? "expand" : "collapse"} ${item.id}`}
+                  onClick={() => toggle(item.id)}
+                  // Read back by `headerToggle`, which has the header and needs
+                  // the item. See the note there.
+                  data-item-id={item.id}
+                  {...stylex.props(styles.fold)}
+                >
+                  {item.collapsed === true ? (
+                    <CaretRightIcon size={14} />
+                  ) : (
+                    <CaretDownIcon size={14} />
+                  )}
+                </button>
+              )}
+              // The right-hand end of the file header, past the +/- counts.
+              // `renderHeaderMetadata` rather than a second prefix, because the
+              // fold caret is already the prefix and these two controls belong at
+              // opposite ends: one says "show me less of this", the other says
+              // "I am done with this".
+              renderHeaderMetadata={(item) => {
+                const path = item.type === "diff" ? item.fileDiff.name : item.id;
+                const on = seen.has(path);
+                return (
+                  <label {...stylex.props(styles.viewed)} title="viewed">
+                    <input
+                      type="checkbox"
+                      checked={on}
+                      aria-label="viewed"
+                      {...stylex.props(styles.box)}
+                      onChange={(event) => markViewed(path, event.target.checked)}
+                    />
+                  </label>
+                );
+              }}
+              renderAnnotation={(annotation) => {
+                // Lifted out before it is asked about. `annotation` is itself a
+                // union of the file and diff shapes, so `annotation.metadata.kind`
+                // is not a reference TypeScript will narrow through — the local is.
+                const note = annotation.metadata;
+                return note.kind === "draft" ? (
+                  <div {...stylex.props(styles.note, styles.draft)}>
+                    <textarea
+                      // The one place in this panel where focus has to be moved
+                      // rather than offered. The selection was made with a
+                      // pointer or with the keyboard, and either way the next
+                      // thing anybody wants is to type — an autofocus that has to
+                      // be reached for is a box that looks ready and is not.
+                      autoFocus
+                      value={writing}
+                      placeholder="what about this line?"
+                      aria-label="comment on the selected line"
+                      {...stylex.props(styles.write)}
+                      onChange={(event) => setWriting(event.target.value)}
+                      onKeyDown={(event) => {
+                        // Escape abandons, cmd/ctrl+enter keeps. A bare enter is
+                        // a newline, because a comment about code is a comment
+                        // that quotes code.
+                        if (event.key === "Escape") {
+                          event.stopPropagation();
+                          setSelection(null);
+                          setLive(null);
+                          setWriting("");
+                        }
+                        if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+                          event.preventDefault();
+                          save();
+                        }
+                      }}
+                    />
+                    <div {...stylex.props(styles.noteRow)}>
+                      <span {...stylex.props(styles.hint, styles.noteBody)}>
+                        {/* Which lines, said out loud. The selection is
                           highlighted in the gutter, but a composer that has
                           scrolled a few lines away from a six-line block leaves
                           nothing on screen saying what is being commented on. */}
-                      {note.endLine > note.line
-                        ? `lines ${note.line}–${note.endLine} · ⌘↵ save · esc discard`
-                        : `line ${note.line} · ⌘↵ save · esc discard`}
-                    </span>
-                    <button type="button" {...stylex.props(styles.button)} onClick={save}>
-                      save
-                    </button>
+                        {note.endLine > note.line
+                          ? `lines ${note.line}–${note.endLine} · ⌘↵ save · esc discard`
+                          : `line ${note.line} · ⌘↵ save · esc discard`}
+                      </span>
+                      <button type="button" {...stylex.props(styles.button)} onClick={save}>
+                        save
+                      </button>
+                    </div>
                   </div>
-                </div>
-              ) : (
-                <div
-                  {...stylex.props(styles.note, note.comment.sentAt === undefined && styles.draft)}
-                >
-                  {/* The meta on its own row, above the words. Sharing a row
+                ) : (
+                  <div
+                    {...stylex.props(
+                      styles.note,
+                      note.comment.sentAt === undefined && styles.draft,
+                    )}
+                  >
+                    {/* The meta on its own row, above the words. Sharing a row
                       with the body is what squeezed a comment into a column
                       four characters wide in this column's narrow case: the
                       range, the state and the delete button are all
                       `flex-shrink: 0`, so everything they need comes out of the
                       one item that can give — the text. */}
-                  <div {...stylex.props(styles.noteRow)}>
-                    {note.comment.endLine > note.comment.line && (
-                      // Only for a block. A single-line comment sits under the
-                      // line it is about and saying so is a label that repeats
-                      // what the position already says.
-                      <span {...stylex.props(styles.noteWhere)}>
-                        {note.comment.line}–{note.comment.endLine}
+                    <div {...stylex.props(styles.noteRow)}>
+                      {note.comment.endLine > note.comment.line && (
+                        // Only for a block. A single-line comment sits under the
+                        // line it is about and saying so is a label that repeats
+                        // what the position already says.
+                        <span {...stylex.props(styles.noteWhere)}>
+                          {note.comment.line}–{note.comment.endLine}
+                        </span>
+                      )}
+                      <span {...stylex.props(styles.noteWhen, styles.noteBody)}>
+                        {note.comment.sentAt === undefined ? "draft" : "sent"}
                       </span>
-                    )}
-                    <span {...stylex.props(styles.noteWhen, styles.noteBody)}>
-                      {note.comment.sentAt === undefined ? "draft" : "sent"}
-                    </span>
-                    <button
-                      type="button"
-                      aria-label="delete this comment"
-                      {...stylex.props(styles.button)}
-                      onClick={() => review.remove(note.comment.id)}
-                    >
-                      ×
-                    </button>
+                      <button
+                        type="button"
+                        aria-label="delete this comment"
+                        {...stylex.props(styles.button)}
+                        onClick={() => review.remove(note.comment.id)}
+                      >
+                        ×
+                      </button>
+                    </div>
+                    {/* ── a comment is markdown, and was drawn as characters ──
+
+                        Review comments are written in the same box as
+                        everything else somebody types at an agent, so they
+                        arrive full of backticks, dashes and the occasional
+                        fenced block — and this drew `\`toolKind\`` as three
+                        literal characters and a word. The PR panel and the
+                        chat both render the same text properly; this was the
+                        one surface that did not, which made it the one place
+                        a quoted path was unreadable.
+
+                        `Markdown` and not a second renderer: it is already
+                        the window's one answer for prose from outside, and
+                        its components map is at module scope so a comment
+                        costs no element identities per render. */}
+                    <div {...stylex.props(styles.noteBody)}>
+                      <Markdown>{note.comment.body}</Markdown>
+                    </div>
                   </div>
-                  <div {...stylex.props(styles.noteBody)}>{note.comment.body}</div>
-                </div>
-              );
-            }}
-            {...stylex.props(styles.view)}
-            options={{
-              // Unified by default, because this column is two hundred pixels
-              // wide at its floor and split would give each side a hundred of
-              // them. The control is offered at every width all the same — see
-              // the note on `side` above.
-              diffStyle: side ? "split" : "unified",
-              // Wrapped for the same reason. A horizontal scrollbar per file
-              // in a narrow column is a diff nobody reads the right-hand half
-              // of.
-              overflow: "wrap",
-              // The same object the worker pool was built with — see
-              // highlighting.tsx. Disagreeing here makes the pool re-resolve
-              // the theme and re-broadcast it to every worker before it can
-              // answer the first request.
-              theme: THEME,
-              // The scheme the window resolved, not "system". The appearance
-              // toggle is the window's own and the media query knows nothing
-              // about it — see theme.ts.
-              themeType: scheme,
-              stickyHeaders: true,
-              // What makes a line clickable at all. Without it there is no
-              // selection, and with no selection there is nowhere to anchor a
-              // comment. It is also what gives a *drag* meaning, which is the
-              // whole of multi-line support — the library reports a range and
-              // `spanOf` decides what that range means.
-              enableLineSelection: true,
-              // ── the gutter is the handle, and it has to look like one ────
-              //
-              // A drag can only *start* on the line number. That is the
-              // library's decision and it is the right one — dragging over the
-              // code is how text gets selected and copied, and stealing it
-              // would break copying a snippet out of a diff. GitHub draws the
-              // same line. `startLineSelectionFromPointerDown` passes
-              // `requireNumberColumn: true` and takes no option to change it.
-              //
-              // What that leaves is a discoverability problem, and it is a real
-              // one: the natural gesture is to drag across the code, and doing
-              // that produced *nothing at all* — no selection, no cursor
-              // change, no hint that the numbers to the left were the grip.
-              //
-              // Measured, each gesture on its own page so nothing inherited the
-              // last selection:
-              //
-              //   drag the line numbers    lines 4–9   ✓
-              //   click, then shift-click  lines 4–9   ✓
-              //   drag over the code       nothing     ← what a person does
-              //
-              // So the number column is lit on hover and given a pointer
-              // cursor. Both are about the same sentence: this part is grabbable
-              // and the part beside it is text.
-              lineHoverHighlight: "number",
-              unsafeCSS: GUTTER_CSS,
-              // The hover control: a `+` beside the line under the pointer.
-              // Off by default, and without it the only way to start a comment
-              // is to already know that a line number is clickable — which is a
-              // feature nobody finds.
-              enableGutterUtility: true,
-              // The library hands back the range under the pointer — one line
-              // when nothing is dragged, the whole run when something is. So
-              // the `+` and a drag are the same gesture and reach the composer
-              // by one path rather than two.
-              //
-              // In `options` and not as a prop, unlike the render callbacks
-              // beside it. The React wrapper lifts the `render*` names to props
-              // and leaves the `on*Click` ones here; the second argument is the
-              // context, which is where the item being clicked is named.
-              //
-              // **`renderGutterUtility` cannot be used with this**, and the
-              // library says so by throwing: "Use only one gutter utility API."
-              // A custom node was the first attempt and is the worse half of
-              // the choice — its callback is handed `getHoveredLine()`, which
-              // is one line, while this one is handed the whole `range`. So
-              // pressing `+` after dragging over six lines comments on six
-              // lines here, and on one line there. A nicer-looking button is
-              // not worth the feature.
-              onGutterUtilityClick: (range, context) => {
-                setSelection({ id: context.item.id, range });
-                setLive({ id: context.item.id, range });
-                setWriting("");
-              },
-              // The end of the gesture, and the only place a selection is
-              // taken from. Both ways of starting one arrive here — the library
-              // brackets its `selecting` and `gutterSelecting` sessions alike —
-              // so there is one rule and not one per gesture. A plain click is
-              // a gesture too: press and release, with no move in between.
-              onLineSelectionEnd: (range, context) => {
-                const settled = range === null ? null : { id: context.item.id, range };
-                setSelection(settled);
-                setLive(settled);
-                setWriting("");
-              },
-            }}
-          />
+                );
+              }}
+              {...stylex.props(styles.view)}
+              options={{
+                // Unified by default, because this column is two hundred pixels
+                // wide at its floor and split would give each side a hundred of
+                // them. The control is offered at every width all the same — see
+                // the note on `side` above.
+                diffStyle: side ? "split" : "unified",
+                // Wrapped for the same reason. A horizontal scrollbar per file
+                // in a narrow column is a diff nobody reads the right-hand half
+                // of.
+                overflow: "wrap",
+                // The same object the worker pool was built with — see
+                // highlighting.tsx. Disagreeing here makes the pool re-resolve
+                // the theme and re-broadcast it to every worker before it can
+                // answer the first request.
+                theme: THEME,
+                // The scheme the window resolved, not "system". The appearance
+                // toggle is the window's own and the media query knows nothing
+                // about it — see theme.ts.
+                themeType: scheme,
+                stickyHeaders: true,
+                // What makes a line clickable at all. Without it there is no
+                // selection, and with no selection there is nowhere to anchor a
+                // comment. It is also what gives a *drag* meaning, which is the
+                // whole of multi-line support — the library reports a range and
+                // `spanOf` decides what that range means.
+                enableLineSelection: true,
+                // ── the gutter is the handle, and it has to look like one ────
+                //
+                // A drag can only *start* on the line number. That is the
+                // library's decision and it is the right one — dragging over the
+                // code is how text gets selected and copied, and stealing it
+                // would break copying a snippet out of a diff. GitHub draws the
+                // same line. `startLineSelectionFromPointerDown` passes
+                // `requireNumberColumn: true` and takes no option to change it.
+                //
+                // What that leaves is a discoverability problem, and it is a real
+                // one: the natural gesture is to drag across the code, and doing
+                // that produced *nothing at all* — no selection, no cursor
+                // change, no hint that the numbers to the left were the grip.
+                //
+                // Measured, each gesture on its own page so nothing inherited the
+                // last selection:
+                //
+                //   drag the line numbers    lines 4–9   ✓
+                //   click, then shift-click  lines 4–9   ✓
+                //   drag over the code       nothing     ← what a person does
+                //
+                // So the number column is lit on hover and given a pointer
+                // cursor. Both are about the same sentence: this part is grabbable
+                // and the part beside it is text.
+                lineHoverHighlight: "number",
+                unsafeCSS: GUTTER_CSS,
+                // The hover control: a `+` beside the line under the pointer.
+                // Off by default, and without it the only way to start a comment
+                // is to already know that a line number is clickable — which is a
+                // feature nobody finds.
+                enableGutterUtility: true,
+                // The library hands back the range under the pointer — one line
+                // when nothing is dragged, the whole run when something is. So
+                // the `+` and a drag are the same gesture and reach the composer
+                // by one path rather than two.
+                //
+                // In `options` and not as a prop, unlike the render callbacks
+                // beside it. The React wrapper lifts the `render*` names to props
+                // and leaves the `on*Click` ones here; the second argument is the
+                // context, which is where the item being clicked is named.
+                //
+                // **`renderGutterUtility` cannot be used with this**, and the
+                // library says so by throwing: "Use only one gutter utility API."
+                // A custom node was the first attempt and is the worse half of
+                // the choice — its callback is handed `getHoveredLine()`, which
+                // is one line, while this one is handed the whole `range`. So
+                // pressing `+` after dragging over six lines comments on six
+                // lines here, and on one line there. A nicer-looking button is
+                // not worth the feature.
+                onGutterUtilityClick: (range, context) => {
+                  setSelection({ id: context.item.id, range });
+                  setLive({ id: context.item.id, range });
+                  setWriting("");
+                },
+                // The end of the gesture, and the only place a selection is
+                // taken from. Both ways of starting one arrive here — the library
+                // brackets its `selecting` and `gutterSelecting` sessions alike —
+                // so there is one rule and not one per gesture. A plain click is
+                // a gesture too: press and release, with no move in between.
+                onLineSelectionEnd: (range, context) => {
+                  const settled = range === null ? null : { id: context.item.id, range };
+                  setSelection(settled);
+                  setLive(settled);
+                  setWriting("");
+                },
+              }}
+            />
+          </Salvage>
         )}
       </div>
     </div>

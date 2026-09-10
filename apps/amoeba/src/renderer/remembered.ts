@@ -49,6 +49,7 @@ const SPLIT = "amoeba.split";
 const SPLIT_OPEN = "amoeba.split.open";
 const SIDE_BY_SIDE = "amoeba.diff.split";
 const PAGE = "amoeba.page";
+const DRAFT = "amoeba.draft";
 const PANELS = "amoeba.panels";
 const LEFT = "amoeba.left";
 const VISITS = "amoeba.visits";
@@ -284,6 +285,41 @@ export const rememberPage = (thread: string | undefined, url: string | undefined
     was[thread] = url;
   }
   writeStored(PAGE, JSON.stringify(was));
+};
+
+/**
+ * What was half-typed in a chat composer, per workspace.
+ *
+ * ── switching threads is not the same as changing your mind ─────────────
+ *
+ * The panel is keyed by the checkout, so opening another thread unmounts it
+ * and takes the draft with it — and going back gives you an empty box. A
+ * sentence somebody was in the middle of is not a preference; it is the
+ * only copy of something they were writing, and nothing else in the system
+ * has it. Reported as "save the wip text in this box in case i switch
+ * thread and switch back".
+ *
+ * Per **workspace** and not per thread, unlike the page beside it: two
+ * checkouts of one piece of work have two conversations and two agents, and
+ * a half-written message belongs to the one it was aimed at.
+ *
+ * localStorage rather than the daemon, on this file's own rule: it is the
+ * window's, and a second window open on the same workspace should be able
+ * to be writing something else.
+ */
+export const rememberedDrafts = (): Record<string, string> => asMap(readStored(DRAFT));
+
+export const rememberDraft = (place: string, draft: string): void => {
+  const was = asMap(readStored(DRAFT));
+  if (draft.trim() === "") {
+    // Sent, or emptied on purpose. Keeping it would restore a message the
+    // agent has already been given.
+    // eslint-disable-next-line @typescript-eslint/no-dynamic-delete
+    delete was[place];
+  } else {
+    was[place] = draft;
+  }
+  writeStored(DRAFT, JSON.stringify(was));
 };
 
 // ── which files of a patch have been looked at ─────────────────────────────

@@ -65,6 +65,24 @@ export const linesOf = (items: ReadonlyArray<Item>, width: number): ReadonlyArra
       continue;
     }
 
+    if (item.kind === "compacted") {
+      // A rule across the column: the one row that is about the transcript
+      // rather than in it. See `compactionOf` in the daemon for why a
+      // compaction is recognised at all.
+      const word =
+        item.status === "running"
+          ? "compacting"
+          : item.status === "failed"
+            ? "compacting failed"
+            : "compacted";
+      const rule = "─".repeat(Math.max(2, Math.floor((body - word.length - 2) / 2)));
+      out.push({ text: `  ${rule} ${word} ${rule}`, role: "gutter" });
+      if (item.status === "failed" && item.reason !== undefined && item.reason !== "") {
+        out.push({ text: `      ${item.reason.slice(0, Math.max(0, body))}`, role: "gutter" });
+      }
+      continue;
+    }
+
     const title = item.subagent === undefined ? item.title : `${item.title} · ${item.subagent}`;
     out.push({ text: `  ${status(item.status)} ${title}`, role: "tool" });
     // One line of output, because a tool row is a receipt: what ran and
