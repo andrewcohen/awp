@@ -1,4 +1,4 @@
-import type { Effort, Project, ThreadBase } from "@awp-kit/protocol";
+import type { Effort, Face, Project, ThreadBase } from "@awp-kit/protocol";
 import { Dialog } from "@base-ui/react/dialog";
 import { ArrowUpIcon } from "@phosphor-icons/react/ArrowUp";
 import { FolderIcon } from "@phosphor-icons/react/Folder";
@@ -13,7 +13,6 @@ import { ImportProject } from "./ImportProject";
 import { Chip } from "./Chip";
 import { growth, useGrow } from "./grow";
 import { useOverlay } from "./overlays";
-import { type Face, rememberFaceDefault, rememberedFaceDefault } from "./remembered";
 import { acceptsFiles } from "./dropped";
 import { typeset } from "./typeset";
 import { colors, lift, text, timing } from "./tokens.stylex";
@@ -88,6 +87,20 @@ const INHERIT = "";
  * only as a default while the daemon's list is still arriving.
  */
 const TRUNK = "trunk()";
+
+/**
+ * Which agent a new thread's work goes into unless somebody says otherwise.
+ *
+ * The chat, and the argument is what the two halves actually are rather than
+ * which is newer. Both are made either way — the create job starts a zmx
+ * session on either face, deliberately — so this picks which one gets briefed,
+ * and the chat is the one with a transcript, permission buttons, a context
+ * figure and a window that can show all three. A terminal-faced thread is
+ * still one press from being moved, and the move brings the conversation.
+ *
+ * A constant and not a remembered preference: see the note at its `useState`.
+ */
+const START_FACE: Face = "chat";
 
 /** What the window knew when the modal was opened. */
 export interface NewThreadRequest {
@@ -391,14 +404,16 @@ function Composer({
   const [bases, setBases] = useState<ReadonlyArray<ThreadBase>>([]);
   const [model, setModel] = useState(INHERIT);
   const [effort, setEffort] = useState<Effort | typeof INHERIT>(INHERIT);
-  // Which face the workspace this makes should open as.
+  // Which agent this workspace's work should live in.
   //
-  // A default rather than a choice recorded against the workspace, and it has
-  // to be: the workspace has no name yet when this dialog closes — the model
-  // invents one, one step into the job — so there is nothing to key a
-  // per-workspace preference by. The bar above the agent is where a particular
-  // workspace is switched afterwards.
-  const [face, setFace] = useState<Face>(rememberedFaceDefault);
+  // Not remembered between dialogs, and that changed with the model: it used to
+  // write `awp.face.default` so the next thread inherited it, back when a face
+  // was a view preference and a wrong one cost a click. It is a fact about the
+  // workspace now — the `claim` step records it and every send follows it — so
+  // inheriting it silently is how somebody ends up with work in an agent they
+  // did not choose. Asked each time, with the answer that is right most of the
+  // time already filled in.
+  const [face, setFace] = useState<Face>(START_FACE);
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | undefined>();
   const [importing, setImporting] = useState(false);
@@ -475,7 +490,6 @@ function Composer({
     // model one step into the job, and the window reads the default the first
     // time it draws that workspace — which can be well before this promise
     // settles.
-    rememberFaceDefault(face);
     const overrides = {
       model: model === INHERIT ? undefined : model,
       effort: effort === INHERIT ? undefined : effort,
@@ -741,7 +755,10 @@ function Composer({
             { value: "terminal", label: "terminal" },
             { value: "chat", label: "chat" },
           ]}
-          quiet={face === "terminal"}
+          // Muted when nothing unusual is being asked for, which followed the
+          // default and therefore moved with it: the chat is the default now,
+          // so the terminal is the choice worth drawing attention to.
+          quiet={face === "chat"}
           disabled={busy}
         />
 

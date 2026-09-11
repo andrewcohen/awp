@@ -2,10 +2,11 @@ import type { Job } from "@awp-kit/jobs";
 import type { SessionInfo, WorkspaceFacts } from "@awp-kit/protocol";
 import { SidebarSimpleIcon } from "@phosphor-icons/react/SidebarSimple";
 import * as stylex from "@stylexjs/stylex";
+import { Menu } from "@base-ui/react/menu";
+import type { Face } from "@awp-kit/protocol";
 import { FOLD_MS, type Collapsed } from "./columns";
-import type { Face } from "./remembered";
 import { typeset } from "./typeset";
-import { colors, space, text } from "./tokens.stylex";
+import { colors, lift, space, text } from "./tokens.stylex";
 import { tally } from "./useJobs";
 
 // The two strips the columns sit between.
@@ -79,30 +80,131 @@ const withRegion = (
   className: props.className === undefined ? region : `${props.className} ${region}`,
 });
 
+/**
+ * Where the work is, and the one act that moves it.
+ *
+ * ── a readout and a menu, not a toggle ────────────────────────────────────
+ *
+ * The pair this replaced was two buttons with the current one lit, which reads
+ * as a view switch and was one — it changed the drawn panel and nothing else,
+ * while every send went wherever the daemon thought the work was. Two answers
+ * to one question, disagreeing silently.
+ *
+ * The swap is the real thing: it moves the conversation. So it belongs behind
+ * a menu, where a deliberate act belongs, rather than one press away from the
+ * word that reports the state.
+ *
+ * One item, because there are two faces and you are on one of them. A menu
+ * listing both with a tick beside the current one is a toggle wearing a
+ * different hat, and it makes the act look reversible in a way it is not —
+ * swapping to the chat forks a conversation, and swapping back does not
+ * unfork it.
+ */
+function FaceMenu({
+  face,
+  busy,
+  onSwap,
+}: {
+  readonly face: Face;
+  /** A swap in flight. The fork is a round trip to an adapter, not instant. */
+  readonly busy: boolean;
+  readonly onSwap: (face: Face) => void;
+}) {
+  const other: Face = face === "chat" ? "terminal" : "chat";
+  return (
+    <span {...stylex.props(styles.faces)}>
+      {/* Not a button. Reading where the work is and moving it are different
+          acts, and a readout that is also a control is one somebody changes
+          by accident — which here means forking a conversation. */}
+      <span
+        {...stylex.props(typeset.label, styles.faceNow)}
+        title={
+          face === "chat"
+            ? "the work is in the conversation — the terminal is running beside it"
+            : "the work is in the terminal — the chat beside it has nothing in it"
+        }
+      >
+        {busy ? "moving…" : face}
+      </span>
+      <Menu.Root>
+        <Menu.Trigger
+          aria-label="move this work"
+          title="move this work"
+          disabled={busy}
+          {...stylex.props(styles.faceTrigger)}
+        >
+          ⋯
+        </Menu.Trigger>
+        <Menu.Portal>
+          <Menu.Positioner sideOffset={4} align="end" {...stylex.props(styles.facePositioner)}>
+            <Menu.Popup {...stylex.props(typeset.label, styles.faceMenu)}>
+              {/* The sentence says what happens, because the two directions are
+                  not the same act and a symmetrical label would claim they
+                  were. Moving to the chat brings the conversation; moving back
+                  cannot, and the terminal has been running all along. */}
+              <Menu.Item onClick={() => onSwap(other)} {...stylex.props(styles.faceItem)}>
+                {other === "chat" ? "move the work to the chat" : "move the work to the terminal"}
+              </Menu.Item>
+            </Menu.Popup>
+          </Menu.Positioner>
+        </Menu.Portal>
+      </Menu.Root>
+    </span>
+  );
+}
+
 const styles = stylex.create({
-  /** The two faces, as one segmented control rather than two buttons. */
+  /** The readout and its menu, as one thing on the bar. */
   faces: {
     display: "flex",
+    alignItems: "center",
+    gap: "0.1rem",
     // Never squashed to make room for a name. With the title free to shrink,
     // flexbox would otherwise take it out of both in proportion to their base
     // sizes — and a bar that narrows its controls to fit a title has lost the
     // thing it was for. Same argument as the counts.
     flexShrink: 0,
-    borderStyle: "solid",
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: "0.3rem",
-    overflow: "hidden",
   },
-  faceButton: {
-    padding: "0.1rem 0.5rem",
+  /**
+   * Where the work is, as a word.
+   *
+   * `text` and not `muted`: this is the answer to a question somebody asked,
+   * which is a different weight of fact from the counts beside it. It is also
+   * not a control — see the note at the call site.
+   */
+  faceNow: { color: colors.text },
+  faceTrigger: {
+    flexShrink: 0,
+    padding: "0 0.25rem",
+    backgroundColor: { default: "transparent", ":hover": colors.raised },
     borderStyle: "none",
-    // Shorthands are dropped in silence by StyleX; the long forms are not.
-    backgroundColor: "transparent",
+    borderRadius: "0.25rem",
     color: colors.muted,
+    font: "inherit",
+    lineHeight: 1,
     cursor: "pointer",
   },
-  faceOn: { backgroundColor: colors.raised, color: colors.text },
+  facePositioner: { zIndex: 20 },
+  faceMenu: {
+    minWidth: "12rem",
+    padding: "0.25rem",
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderStyle: "solid",
+    borderColor: colors.border,
+    borderRadius: "0.35rem",
+    color: colors.text,
+    boxShadow: lift.high,
+  },
+  faceItem: {
+    display: "flex",
+    alignItems: "center",
+    padding: "0.3rem 0.5rem",
+    borderRadius: "0.25rem",
+    cursor: "pointer",
+    backgroundColor: { default: "transparent", ":hover": colors.raised },
+    outline: "none",
+  },
 
   bar: {
     display: "flex",
@@ -517,6 +619,7 @@ export function AgentBar({
   connected,
   collapsed,
   face,
+  swapping,
   onFace,
   onFold,
 }: {
@@ -528,8 +631,14 @@ export function AgentBar({
   readonly facts: WorkspaceFacts | undefined;
   readonly connected: boolean;
   readonly collapsed: Collapsed;
-  /** Which face the agent column is wearing, or nothing when there is no choice. */
+  /**
+   * Which agent holds this workspace's work, or nothing when there is no
+   * choice — a session awp did not create has no workspace to hold a
+   * conversation in.
+   */
   readonly face: Face | undefined;
+  /** A swap is in flight. It forks, so it is a round trip and not instant. */
+  readonly swapping: boolean;
   readonly onFace: (face: Face) => void;
   readonly onFold: (which: keyof Collapsed) => void;
 }) {
@@ -577,23 +686,23 @@ export function AgentBar({
           Only where there is a choice to make. A session awp did not create
           has no workspace to hold a conversation in, so the pair is absent
           rather than present and inert. */}
-      {face !== undefined && (
-        <span {...stylex.props(styles.faces)} role="group" aria-label="how to watch the agent">
-          {(["terminal", "chat"] as const).map((one) => (
-            <button
-              key={one}
-              type="button"
-              data-nav-item
-              aria-pressed={face === one}
-              title={one === "chat" ? "the conversation" : "the terminal it is running in"}
-              onClick={() => onFace(one)}
-              {...stylex.props(typeset.label, styles.faceButton, face === one && styles.faceOn)}
-            >
-              {one}
-            </button>
-          ))}
-        </span>
-      )}
+      {/* ── which agent holds the work, and one act that moves it ───────────
+
+          This was a two-state toggle, and the toggle was the bug: it changed
+          which panel was *drawn* and nothing else, so a person could be
+          looking at the chat while every review, note and task went to the
+          terminal. Both readings were true at once and only one of them was
+          the one anybody meant.
+
+          So there are two things here instead of one control doing both jobs:
+          a word that says where the work is, and a menu whose single item
+          moves it. The word is not pressable — reading and acting are
+          different, and a readout that is also a button is a readout somebody
+          changes by accident.
+
+          Only where there is a choice. A session awp did not create has no
+          workspace to hold a conversation in. */}
+      {face !== undefined && <FaceMenu face={face} busy={swapping} onSwap={onFace} />}
 
       {counted.running > 0 && (
         <span {...stylex.props(styles.strong)}>{counted.running} running</span>

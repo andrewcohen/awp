@@ -9,6 +9,7 @@ import type { Multiplexer } from "../multiplexer";
 import { IntentError, type WorkspaceIntent } from "../intent";
 import type { Bootstrap } from "../bootstrap";
 import type { Settings } from "../settings";
+import type { Faces } from "../faces";
 import type { Threads } from "../threads";
 import {
   type WorkspaceDeps,
@@ -93,6 +94,17 @@ const deps = (): WorkspaceDeps => ({
       act(`zmx.label(${name}:${labels["awp_workspace"] ?? ""})`),
     send: (name: string) => act(`zmx.send(${name})`),
   } as unknown as Multiplexer["Service"],
+
+  // Which agent the work lives in, recorded by the `claim` step and forgotten
+  // by its undo. On the trace rather than in a map, because what this suite
+  // proves is the *order* — the claim and the record are one act, and a
+  // rollback takes both back.
+  faces: {
+    face: () => Effect.succeed("terminal" as const),
+    set: (project: string, workspace: string, face: string) =>
+      act(`face.set(${project}/${workspace}:${face})`),
+    forget: (project: string, workspace: string) => act(`face.forget(${project}/${workspace})`),
+  } as unknown as Faces["Service"],
 
   threads: {
     attach: (thread: string, member: { readonly workspace: string }) =>
@@ -321,6 +333,11 @@ describe("making a workspace", () => {
       "zmx.start(awp.rowan.tabular-exports.agent)",
       "zmx.label(awp.rowan.tabular-exports.agent:tabular-exports)",
       "thread.claim(20260826-aaaa:tabular-exports)",
+      // The same step. A claim says which thread owns the work and this says
+      // which agent holds it, and the two are one act — see the note in the
+      // `claim` step. `terminal` because this job was enqueued without a face,
+      // which is what every job written before the field existed did.
+      "face.set(rowan/tabular-exports:terminal)",
       "zmx.send(awp.rowan.tabular-exports.agent)",
     ]);
   });
@@ -330,9 +347,11 @@ describe("making a workspace", () => {
     // claiming first would present a half-built workspace as a finished one for
     // as long as the rest took.
     await make();
-    // Last but one now: briefing the agent comes after, because it is the step
+    // Third from last now: the claim records the face in the same step, and
+    // briefing the agent comes after both because it is the one thing here
     // that cannot be undone.
-    expect(trace.at(-2)).toBe("thread.claim(20260826-aaaa:tabular-exports)");
+    expect(trace.at(-3)).toBe("thread.claim(20260826-aaaa:tabular-exports)");
+    expect(trace.at(-1)).toBe("zmx.send(awp.rowan.tabular-exports.agent)");
   });
 
   test("the session is labelled after it is started", async () => {

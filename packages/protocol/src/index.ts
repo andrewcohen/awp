@@ -738,7 +738,8 @@ export const CreateWorkspace = Schema.Struct({
    * after the mistake and in a message about the wrong thing.
    *
    * Absent means the terminal, which is what every job written before this
-   * field existed did.
+   * field existed did. The `claim` step records it on the workspace, which is
+   * what everything afterwards reads — see `faces.ts`.
    */
   face: Schema.optional(Face),
   /** What the agent session runs. */
@@ -1084,6 +1085,20 @@ export type McpStatus = (typeof McpStatus)["Type"];
 export class NoAgent extends Schema.TaggedError<NoAgent>()("NoAgent", {
   project: Schema.String,
   workspace: Schema.String,
+  /**
+   * Why, when there is anything to add beyond "there is nobody there".
+   *
+   * The terminal face needs none: a missing or ended zmx session is the whole
+   * of what went wrong, and the two names above say which workspace. The chat
+   * face refuses for reasons that are sentences — no adapter installed, no
+   * `claude` on the PATH — and `ChatError` already carries them, so this is
+   * where they arrive rather than being flattened to one word.
+   *
+   * `said` in the window's daemon.ts reads exactly this field. A refusal with
+   * nothing in it renders as the tag, which is what five call sites were doing
+   * before that helper existed.
+   */
+  reason: Schema.optional(Schema.String),
 }) {}
 
 // ── the agent's own task list ──────────────────────────────────────────────
@@ -2887,19 +2902,71 @@ export class AwpRpcs extends RpcGroup.make(
        * follow it, because two of a flag is a thing the CLI resolves by a rule
        * nobody here should be relying on. See `agentWith` in settings.ts.
        */
-      /**
-       * Which face to brief. Absent means the terminal.
-       *
-       * On the payload rather than left to the window, because what the window
-       * can do with it alone is draw a panel — and the thing that has to know
-       * is the job's last step. See {@link Face}.
-       */
-      face: Schema.optional(Face),
       model: Schema.optional(Model),
       effort: Schema.optional(Effort),
+      /**
+       * Which agent this workspace's work should live in. See {@link Face}.
+       *
+       * The one moment a face is chosen without a swap, and the choice does
+       * two things: it decides where the `brief` step delivers, and the
+       * `claim` step records it on the workspace so everything afterwards —
+       * every send, and the agent column itself — follows it without asking
+       * the window what it thinks.
+       */
+      face: Schema.optional(Face),
     },
     success: ThreadStarted,
     error: ThreadStartFailed,
+  }),
+
+  /**
+   * Which of a workspace's two agents holds its work.
+   *
+   * ── a call and not a field on a stream ──────────────────────────────────
+   *
+   * Nothing changes a face on its own. It is set once when a thread is made
+   * and afterwards only by {@link Rpc WorkspaceSwap}, which is a person
+   * pressing a menu item in this window — so the reply to the swap is the
+   * update, exactly as it is for threads. A stream would carry one event ever,
+   * and a client would still have to ask for the state it started in.
+   *
+   * Never fails. A workspace with nothing recorded is the terminal, which is
+   * what every workspace made before this existed actually is — see
+   * `faces.ts`, where that default is argued rather than assumed.
+   */
+  Rpc.make("WorkspaceFace", {
+    payload: { project: Schema.String, workspace: Schema.String },
+    success: Face,
+  }),
+
+  /**
+   * Move a workspace's work to the other agent, and say where it ended up.
+   *
+   * ── a hard swap, which is the whole point of it being a call ─────────────
+   *
+   * The window used to hold this as a two-state toggle in the top bar, and the
+   * toggle changed which panel was *drawn* and nothing else. What that could
+   * not express is the thing anybody actually wants when they press it: the
+   * conversation should come with them.
+   *
+   *   to chat, chat empty   forks the terminal's conversation into it, so the
+   *                         agent that answers knows what was already said
+   *   to chat, chat has one there is already work here. Just point at it —
+   *                         forking would overwrite somebody's conversation
+   *   to terminal           nothing to move. The pty has been running the
+   *                         whole time; there is no way to replay a
+   *                         conversation into an interactive claude, and
+   *                         pretending otherwise is worse than saying so
+   *
+   * Answers with the face it settled on rather than with nothing, so a window
+   * updates from the reply. It is the same face it was asked for in every case
+   * that succeeds — stated as a reply anyway, because a call whose success is
+   * silence is one a client has to assume things about.
+   */
+  Rpc.make("WorkspaceSwap", {
+    payload: { project: Schema.String, workspace: Schema.String, face: Face },
+    success: Face,
+    error: ChatUnavailable,
   }),
 
   /**

@@ -63,6 +63,29 @@ const program = Effect.gen(function* () {
     }`,
   );
 
+  // ── which agent holds each piece of work ────────────────────────────────
+  //
+  // The one fact here that no test can establish: `WorkspaceFace` reads a
+  // table, so what this proves is that the migration ran and that the daemon
+  // answering on this port is the one that has it. A fake would agree with
+  // itself about a row that does not exist.
+  //
+  // A workspace with no row reads `terminal`, which is every workspace made
+  // before the table — so a column of `terminal` is the honest picture of an
+  // old machine rather than a sign of anything wrong.
+  const faces = yield* Effect.forEach(
+    threads.filter((thread) => thread.archivedAt === undefined).flatMap((thread) => thread.members),
+    (member) =>
+      rpc
+        .WorkspaceFace({ project: member.project, workspace: member.workspace })
+        .pipe(Effect.map((face) => `${member.project}/${member.workspace} ${face}`)),
+    { concurrency: 8 },
+  );
+  console.log(`  faces         ${faces.filter((one) => one.endsWith("chat")).length} in the chat`);
+  for (const one of faces) {
+    console.log(`                ${one}`);
+  }
+
   console.log(
     `  their sessions ${
       sessions

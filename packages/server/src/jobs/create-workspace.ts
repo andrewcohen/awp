@@ -10,6 +10,7 @@ import { trustWorkspace, untrustWorkspace } from "../claude-trust";
 import { identityLabels, sessionName } from "../naming";
 import type { Bootstrap } from "../bootstrap";
 import type { Settings } from "../settings";
+import type { Faces } from "../faces";
 import type { Threads } from "../threads";
 import { type WorkspaceIntent, nameFrom } from "../intent";
 import { fetchHead } from "../review-head";
@@ -107,6 +108,14 @@ export interface WorkspaceDeps {
   readonly github: Github["Service"];
   readonly mux: Multiplexer["Service"];
   readonly threads: Threads["Service"];
+  /**
+   * Which agent this workspace's work lives in, written by the `claim` step.
+   *
+   * Recorded rather than left for the window to remember, because every send
+   * afterwards follows it — a review, a note, a task, a repair. A window can
+   * only ever say which panel it is *drawing*. See faces.ts.
+   */
+  readonly faces: Faces["Service"];
   readonly files: WorkspaceFiles;
   /** Turns what a person typed into a name. See the `name` step. */
   readonly intent: WorkspaceIntent["Service"];
@@ -760,15 +769,36 @@ export const createWorkspace = (deps: WorkspaceDeps): JobKind<CreateWorkspace> =
     name: "claim",
     run: (input, context) =>
       Effect.gen(function* () {
+        const workspace = yield* named(input);
         yield* threads
-          .attach(input.thread, { project: input.project, workspace: yield* named(input) })
+          .attach(input.thread, { project: input.project, workspace })
           .pipe(Effect.mapError(refused("could not claim the workspace")));
-        yield* context.log(`claimed by thread ${input.thread}`);
+        // ── the face, recorded with the claim ──────────────────────────────
+        //
+        // Here and not in a step of its own, because it is the same act: this
+        // is where the workspace stops being a directory and becomes a piece
+        // of work somebody owns. It is also where the sidebar first draws it,
+        // and a row drawn before its face is known is a row that would have to
+        // change under somebody's eyes.
+        //
+        // Absent means the terminal, which is what every job written before
+        // the field existed asked for by saying nothing — so a row is written
+        // either way rather than only for the chat. A workspace with no row is
+        // the *unrecorded* case, and a job that ran deliberately is not that.
+        yield* deps.faces
+          .set(input.project, workspace, input.face ?? "terminal")
+          .pipe(Effect.mapError(refused("could not record which agent holds the work")));
+        yield* context.log(`claimed by thread ${input.thread}, in the ${input.face ?? "terminal"}`);
       }),
     undo: (input) =>
       named(input).pipe(
         Effect.flatMap((workspace) =>
-          threads.detach(input.thread, { project: input.project, workspace }),
+          // Both, and the face second: a row naming a workspace that no thread
+          // holds is harmless, where a claim left behind is a workspace the
+          // sidebar still draws. Ordered so the visible one goes first.
+          threads
+            .detach(input.thread, { project: input.project, workspace })
+            .pipe(Effect.andThen(deps.faces.forget(input.project, workspace))),
         ),
         Effect.mapError(refused("could not release the workspace")),
         Effect.asVoid,

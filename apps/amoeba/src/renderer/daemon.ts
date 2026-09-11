@@ -529,6 +529,9 @@ export const readPullRequest = (
  * `prompt` is empty when there was nothing to repair, and nothing was sent.
  * Rejects with `NoAgent` when there is something to say and no agent to say it
  * to, and with `ReviewStartFailed` when the pull request cannot be read at all.
+ *
+ * Which of the workspace's two agents hears it is the daemon's to decide — it
+ * holds the record. See `faces.ts`.
  */
 export const repair = (project: string, number: number): Promise<Repaired> =>
   runtime.runPromise(
@@ -723,6 +726,37 @@ export const listBoard = (tags?: ReadonlyArray<string>): Promise<ReadonlyArray<T
 export const sendTask = (project: string, workspace: string, task: AgentTask): Promise<string> =>
   runtime.runPromise(
     Effect.flatMap(AwpClient, (rpc) => rpc.TaskSend({ project, workspace, task })),
+  );
+
+/**
+ * Which of a workspace's two agents holds its work.
+ *
+ * A call rather than something off a stream, because nothing changes it on its
+ * own: it is set when a thread is made and afterwards only by {@link swapFace},
+ * which is somebody pressing a menu item in this window. Asked when the address
+ * changes, which is rare.
+ *
+ * This replaced `rememberedFace`, which was the same answer kept in
+ * localStorage — and kept wrong, because a window can only know which panel it
+ * is drawing. Where the work *is* is a fact about the workspace.
+ */
+export const workspaceFace = (project: string, workspace: string): Promise<Face> =>
+  runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.WorkspaceFace({ project, workspace })));
+
+/**
+ * Move the work to the other agent, and answer with where it ended up.
+ *
+ * Swapping *into* the chat forks the terminal's conversation when the chat has
+ * none, so the agent that answers next knows what was already said. There is no
+ * reverse — see `WorkspaceSwap` in the contract, which argues why.
+ *
+ * Rejects with `ChatUnavailable` when the fork fails, and records nothing in
+ * that case: a workspace marked as a chat with its work still in the pty is the
+ * exact state the record exists to prevent.
+ */
+export const swapFace = (project: string, workspace: string, face: Face): Promise<Face> =>
+  runtime.runPromise(
+    Effect.flatMap(AwpClient, (rpc) => rpc.WorkspaceSwap({ project, workspace, face })),
   );
 
 // ── the chat ───────────────────────────────────────────────────────────────

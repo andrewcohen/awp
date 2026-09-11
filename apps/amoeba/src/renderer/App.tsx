@@ -15,14 +15,13 @@ import { Pane } from "./Pane";
 import { STYLE_GUIDE, addressFrom, addressOf, pathOf, placeAt, sessionAt } from "./address";
 import { useWorkspaceDir } from "./useWorkspaceDir";
 import { type Collapsed, type Columns, FOLD_MS, fitColumns } from "./columns";
+import type { Face } from "@awp-kit/protocol";
+import { onReconnect, said, swapFace, workspaceFace } from "./daemon";
 import {
   rememberCollapsed,
   rememberPlace,
   rememberVisits,
   rememberWidths,
-  type Face,
-  rememberFace,
-  rememberedFace,
   rememberedCollapsed,
   rememberedVisits,
   rememberedWidths,
@@ -248,7 +247,19 @@ function Window() {
   // Read per selection rather than held per workspace: the address changes far
   // more often than the preference does, and a map in state would be a second
   // copy of what localStorage already holds.
+  // ── which agent the open workspace's work is in ──────────────────────────
+  //
+  // The daemon's answer, not this window's. It was `localStorage` and a
+  // two-state toggle, which could only ever say which panel was being *drawn*
+  // — so a review went to the terminal while somebody watched the chat. The
+  // record is the truth and the column follows it.
+  //
+  // The terminal until the daemon says otherwise, which is what an unrecorded
+  // workspace is: every one made before the table exists has its work in the
+  // pty. See faces.ts, where that default is argued rather than assumed.
   const [face, setFace] = useState<Face>("terminal");
+  // A swap forks a conversation, so it is a round trip and the bar says so.
+  const [swapping, setSwapping] = useState(false);
   const columns = fitColumns(width, want, collapsed);
   // The same arithmetic with nothing folded: what each column is on its way to,
   // or on its way back from. `hold` needs it and `columns` cannot supply it —
@@ -391,11 +402,47 @@ function Window() {
   const openProject = here?.project;
   const openWorkspace = here?.workspace;
   useEffect(() => {
-    setFace(
-      openProject === undefined || openWorkspace === undefined
-        ? "terminal"
-        : rememberedFace(openProject, openWorkspace),
-    );
+    if (openProject === undefined || openWorkspace === undefined) {
+      setFace("terminal");
+      return;
+    }
+    let current = true;
+    const ask = () => {
+      void workspaceFace(openProject, openWorkspace)
+        .then((answer) => {
+          // The address may have moved on while this was in flight. Writing
+          // the old workspace's face over the new one is a column drawing the
+          // wrong agent, which is the one mistake this change exists to stop.
+          if (current) {
+            setFace(answer);
+          }
+          return answer;
+        })
+        .catch(() => {
+          // A daemon that will not answer is not a reason to guess `chat`: the
+          // terminal is the half that is always there.
+          if (current) {
+            setFace("terminal");
+          }
+        });
+    };
+    ask();
+    // ── asked again when the socket comes back ──────────────────────────────
+    //
+    // This is a *call*, and a call is asked once — so a face that changed while
+    // the daemon was away would never reach this window, and the column would
+    // go on drawing the agent it last heard about. The rule AGENTS.md records
+    // for the jobs feed applies harder here, because there is no stream at all
+    // to carry the change: a subscription answers what changes, a question
+    // answers what is, and anything that has only the question has to re-ask.
+    //
+    // A daemon restart is the ordinary case, not the rare one — this repo is
+    // developed by restarting it.
+    const stop = onReconnect(ask);
+    return () => {
+      current = false;
+      stop();
+    };
   }, [openProject, openWorkspace]);
 
   // ── moving to a piece of work puts the caret in it ──────────────────────
@@ -700,12 +747,26 @@ function Window() {
             connected={connected}
             collapsed={collapsed}
             face={here === undefined ? undefined : face}
+            swapping={swapping}
             onFace={(chosen) => {
               if (here === undefined) {
                 return;
               }
-              rememberFace(here.project, here.workspace, chosen);
-              setFace(chosen);
+              setSwapping(true);
+              // The reply is the update, which is the same rule threads follow
+              // and holds for the same reason: nothing else changes a face, so
+              // there is nothing to subscribe to. Set from the answer rather
+              // than optimistically — a swap into the chat forks, and a fork
+              // can be refused.
+              void swapFace(here.project, here.workspace, chosen)
+                .then((now) => {
+                  setFace(now);
+                  return now;
+                })
+                .catch((error: unknown) => {
+                  console.error("[amoeba] the work could not be moved:", said(error));
+                })
+                .finally(() => setSwapping(false));
             }}
             onFold={(which) => fold(which)()}
           />
