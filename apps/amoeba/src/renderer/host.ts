@@ -73,6 +73,9 @@ interface HostBridge {
   readonly setWebviewBounds: (id: number, rect: Rect) => void;
   readonly callWebview: (id: number, method: string, argument?: unknown) => void;
   readonly focusWindow?: (() => void) | undefined;
+  /** Where a dropped file is. Optional, so an older preload is "no path"
+   *  rather than a crash — see `dropped.ts`. */
+  readonly pathForFile?: ((file: File) => string) | undefined;
   readonly onWebviewEvent: (
     listener: (message: {
       readonly id: number;

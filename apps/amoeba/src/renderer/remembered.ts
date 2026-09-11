@@ -51,7 +51,6 @@ const SIDE_BY_SIDE = "amoeba.diff.split";
 const PAGE = "amoeba.page";
 const DRAFT = "amoeba.draft";
 const PANELS = "amoeba.panels";
-const LEFT = "amoeba.left";
 const VISITS = "amoeba.visits";
 
 /**
@@ -144,19 +143,6 @@ const asMap = (raw: string | undefined): Record<string, string> => {
   }
 };
 
-/**
- * Which tab the left column is on: the work, or the inbox.
- *
- * The work by default, and it stays the default no matter how the inbox is
- * used: the column's job is to say what is running in this window, and the
- * inbox is a list of what is happening elsewhere. A window that opened on the
- * inbox would answer a question nobody had asked yet.
- */
-export const rememberedLeft = (): string => (readStored(LEFT) === "inbox" ? "inbox" : "work");
-
-export const rememberLeft = (tab: string): void => {
-  writeStored(LEFT, tab === "inbox" ? "inbox" : "work");
-};
 // ── where the window was ───────────────────────────────────────────────────
 //
 // The address is the router's, and the history keeps it across a reload — a

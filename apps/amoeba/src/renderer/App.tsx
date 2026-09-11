@@ -6,6 +6,7 @@ import { Boundary } from "./Boundary";
 import { AppearanceToggle } from "./Appearance";
 import { AgentBar, TopBar } from "./Bars";
 import { Divider } from "./Divider";
+import { InboxDialog } from "./InboxDialog";
 import { LeftColumn } from "./LeftColumn";
 import { NewThread, type NewThreadRequest } from "./NewThread";
 import { Chat } from "./Chat";
@@ -462,6 +463,11 @@ function Window() {
   // workspace — so the form can read them once at mount instead of tracking a
   // selection that may move underneath it.
   const [newThread, setNewThread] = useState<NewThreadRequest | undefined>();
+  // The inbox, which is a modal rather than a panel — see `InboxDialog`. Held
+  // here and not in the left column: that column folds to nothing and goes
+  // `inert` with it, so an overlay it owned would be unreachable exactly when
+  // somebody had put the sidebar away.
+  const [inbox, setInbox] = useState(false);
 
   // ── why a job finishing re-reads the sessions ────────────────────────────
   //
@@ -561,6 +567,27 @@ function Window() {
     return () => window.removeEventListener("keydown", onKey, { capture: true });
   }, []);
 
+  // cmd+I: the inbox. Capture at `window` and `event.code`, for the two reasons
+  // cmd+N's note gives at length.
+  //
+  // A chord as well as a menu item, because the menu item is in a column that
+  // folds — and `menu.ts` claims nothing on I, so nothing takes this key before
+  // the page sees it. Toggles rather than only opening, unlike cmd+N and cmd+P:
+  // those two hold something somebody is part way through typing and pressing
+  // them again means "make sure", where this holds a list and pressing it again
+  // means "put it away".
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.code !== "KeyI" || !(event.metaKey || event.ctrlKey) || event.altKey) {
+        return;
+      }
+      event.preventDefault();
+      setInbox((was) => !was);
+    };
+    window.addEventListener("keydown", onKey, { capture: true });
+    return () => window.removeEventListener("keydown", onKey, { capture: true });
+  }, []);
+
   // The appearance theme rides the outermost element rather than <html>. The
   // variables it sets are inherited, so everything below sees them, and putting
   // them here keeps the override inside React's tree — where it can be reasoned
@@ -605,11 +632,6 @@ function Window() {
               <LeftColumn
                 sessions={sessions}
                 facts={facts}
-                // The jobs this window already streams, rather than a second
-                // subscription inside the panel: `JobChanges` is a request, so a
-                // second listener is a second feed over the same socket for the
-                // same records.
-                jobs={jobs}
                 selected={open?.name}
                 // Which row is marked, which is not the same question as
                 // which session is attached — see Row's `at`. A workspace
@@ -638,6 +660,7 @@ function Window() {
                   reloadSessions();
                 }}
                 failure={failure}
+                onInbox={() => setInbox(true)}
                 onNew={() =>
                   setNewThread({
                     project: open?.identity?.project,
@@ -793,6 +816,23 @@ function Window() {
 
       {/* Outside the columns, because it is the window's and not a column's.
           It renders nothing at all while shut — see NewThread.tsx. */}
+      {/* Beside the new-thread box rather than inside the column its menu item
+          is in — see the state above. The jobs are the ones this window already
+          streams: `JobChanges` is a request, so a second listener would be a
+          second feed over the same socket for the same records. */}
+      <InboxDialog
+        open={inbox}
+        jobs={jobs}
+        onClose={() => setInbox(false)}
+        onOpen={(project, workspace) => {
+          void navigate({ to: pathOf({ at: "workspace", project, workspace, kind: PRIMARY }) });
+        }}
+        onStarted={() => {
+          reloadThreads();
+          reloadSessions();
+        }}
+      />
+
       <NewThread
         request={newThread}
         projects={projects}

@@ -1,12 +1,13 @@
 import type { ChatConfigOption } from "@awp-kit/protocol";
 import * as stylex from "@stylexjs/stylex";
+import { ArrowDownIcon } from "@phosphor-icons/react/ArrowDown";
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { type Command, agentCommands, commandOf, completed } from "@awp-kit/protocol/commands";
 import { heldBack, toolTitleOf, turningAt } from "@awp-kit/protocol/tools";
-import { Composer } from "./Composer";
+import { Composer, SessionBar } from "./Composer";
 import { rememberDraft, rememberedDrafts } from "./remembered";
-import { type Arriving, STILL, heavy, jelly, useArriving, useSpring } from "./springs";
+import { type Arriving, STILL, heavy, jelly, useArriving, useSpring, useSquish } from "./springs";
 import { useTurning } from "./turning";
 import { Mcp } from "./Mcp";
 import {
@@ -40,7 +41,7 @@ import {
 } from "./daemon";
 import { type Spot, spotIn, withQuote } from "./quote";
 import { typeset } from "./typeset";
-import { colors, glaze, lift, text } from "./tokens.stylex";
+import { colors, glaze, lift, text, timing } from "./tokens.stylex";
 
 // The agent as a conversation rather than as a picture of one.
 //
@@ -234,6 +235,9 @@ const Panel = ({
   // The activity ledge carries the composer with it, so it moves like a
   // panel rather than like a row — see `heavy`.
   const ledgeSpring = useSpring(heavy);
+  // The press on the scroll-to-tail button. Still under reduced motion,
+  // which is what that hook answers with.
+  const squishing = useSquish();
 
   /**
    * Say something, and remember it before anybody echoes it back.
@@ -389,6 +393,17 @@ const Panel = ({
   const stuck = useRef(true);
 
   /**
+   * The same reading, as state, because something is drawn from it.
+   *
+   * A ref is right for `stuck` — nothing renders differently for it — and
+   * wrong here: the scroll-to-tail button appears and disappears on this, so
+   * it has to be a value React can see. The two are written together rather
+   * than derived from one another, because `stuck` deliberately survives
+   * content arriving and this does not have to.
+   */
+  const [away, setAway] = useState(false);
+
+  /**
    * The bottom, exactly.
    *
    * `scrollTop = scrollHeight` rather than `scrollIntoView` on a sentinel,
@@ -411,6 +426,38 @@ const Panel = ({
   }, [follow]);
 
   /**
+   * Go back to the tail, and stay there.
+   *
+   * `stuck` is set as well as the scroll moved: pressing this is asking to be
+   * where the conversation is, which is a standing request rather than one
+   * jump — the same thing sending a message means, and set the same way.
+   */
+  const catchUp = useCallback(() => {
+    stuck.current = true;
+    follow();
+    setAway(false);
+  }, [follow]);
+
+  /** How far the tail is out of view, in pixels. */
+  const behind = useCallback(
+    (column: HTMLElement) => column.scrollHeight - column.scrollTop - column.clientHeight,
+    [],
+  );
+
+  /**
+   * Whether to offer the way back, without touching `stuck`.
+   *
+   * Called where the *distance* can change for a reason that is not a scroll
+   * — the dock growing a row under a reader who is already away — which
+   * fires no scroll event and so would otherwise leave this stale.
+   */
+  const measureAway = useCallback(() => {
+    const column = scroll.current;
+    if (column === null) return;
+    setAway(behind(column) > AWAY);
+  }, [behind]);
+
+  /**
    * Whether the reader is still at the tail, written on their own scrolling.
    *
    * A programmatic scroll fires this too and lands at the bottom, so it stays
@@ -420,8 +467,14 @@ const Panel = ({
   const watch = useCallback(() => {
     const column = scroll.current;
     if (column === null) return;
-    stuck.current = column.scrollHeight - column.scrollTop - column.clientHeight <= LEASH;
-  }, []);
+    const distance = behind(column);
+    stuck.current = distance <= LEASH;
+    // Not `!stuck`: the two answer different questions and are deliberately
+    // far apart — see `AWAY`. Between them the reader is no longer followed
+    // and not yet far enough to be offered a way back, which is the ordinary
+    // state of somebody reading the message above the last one.
+    setAway(distance > AWAY);
+  }, [behind]);
 
   useEffect(() => {
     if (grown !== "0:0") followIfStuck();
@@ -450,7 +503,10 @@ const Panel = ({
     // Nothing to follow to before the first measurement: the padding is zero,
     // so the tail is already where the dock is about to be.
     if (under > 0) followIfStuck();
-  }, [under, followIfStuck]);
+    // A reader who is *not* being followed still had the distance under them
+    // change, and no scroll event says so.
+    measureAway();
+  }, [under, followIfStuck, measureAway]);
 
   useEffect(() => {
     // ── settled gestures only ──────────────────────────────────────────────
@@ -542,55 +598,61 @@ const Panel = ({
 
   return (
     <div {...stylex.props(styles.chat)} data-column-part="chat">
-      <div ref={scroll} {...stylex.props(styles.scroll, space.under(under))} onScroll={watch}>
-        {items.length === 0 && held.running === 0 ? (
-          // ── the empty state is where the fork belongs ────────────────────
-          //
-          // A chat with nothing in it, on a workspace whose agent has been
-          // running in the terminal all along, is exactly the moment somebody
-          // wants the conversation that is already happening. Offered here
-          // rather than in the bar because it is an answer to what is on
-          // screen; the bar would carry it on every conversation, including
-          // the ones it would overwrite.
-          <div {...stylex.props(styles.empty)}>
-            <p {...stylex.props(typeset.label, styles.nothing)}>nothing said yet</p>
-            <button
-              type="button"
-              data-nav-item
-              {...stylex.props(typeset.label, styles.option)}
-              title="copy the conversation the terminal is having and continue it here — the terminal's own is left alone"
-              disabled={forking}
-              onClick={onFork}
-            >
-              {forking ? "forking…" : "continue the terminal's conversation"}
-            </button>
-          </div>
-        ) : (
-          <Transcript
-            items={items}
-            project={project}
-            workspace={workspace}
-            live={held.running > 0 ? held.turn : undefined}
-          />
-        )}
+      {/* ── the stage: the transcript, and the one thing that floats over it ──
 
-        {held.stopped !== undefined && (
-          <p {...stylex.props(typeset.label, styles.stopped)}>the turn ended: {held.stopped}</p>
-        )}
-      </div>
+          The dock is `absolute` against *this* rather than against the column,
+          so "the bottom" for it is the top of the session bar below. That is
+          what stacks them without either measuring the other. */}
+      <div {...stylex.props(styles.stage)}>
+        <div ref={scroll} {...stylex.props(styles.scroll, space.under(under))} onScroll={watch}>
+          {items.length === 0 && held.running === 0 ? (
+            // ── the empty state is where the fork belongs ────────────────────
+            //
+            // A chat with nothing in it, on a workspace whose agent has been
+            // running in the terminal all along, is exactly the moment somebody
+            // wants the conversation that is already happening. Offered here
+            // rather than in the bar because it is an answer to what is on
+            // screen; the bar would carry it on every conversation, including
+            // the ones it would overwrite.
+            <div {...stylex.props(styles.empty)}>
+              <p {...stylex.props(typeset.label, styles.nothing)}>nothing said yet</p>
+              <button
+                type="button"
+                data-nav-item
+                {...stylex.props(typeset.label, styles.option)}
+                title="copy the conversation the terminal is having and continue it here — the terminal's own is left alone"
+                disabled={forking}
+                onClick={onFork}
+              >
+                {forking ? "forking…" : "continue the terminal's conversation"}
+              </button>
+            </div>
+          ) : (
+            <Transcript
+              items={items}
+              project={project}
+              workspace={workspace}
+              live={held.running > 0 ? held.turn : undefined}
+            />
+          )}
 
-      {/* Beside the highlight, not in the flow: `position: fixed` at the
+          {held.stopped !== undefined && (
+            <p {...stylex.props(typeset.label, styles.stopped)}>the turn ended: {held.stopped}</p>
+          )}
+        </div>
+
+        {/* Beside the highlight, not in the flow: `position: fixed` at the
           range's own rectangle. In the flow it would move the text it is
           about — which is the thing a selection cannot survive. */}
-      {spot !== undefined && <Quote spot={spot} onQuote={quote} />}
+        {spot !== undefined && <Quote spot={spot} onQuote={quote} />}
 
-      {/* `/mcp`. A dialog rather than a panel in the accessory strip: it is a
+        {/* `/mcp`. A dialog rather than a panel in the accessory strip: it is a
           question asked once, about this conversation, and the answer is read
           and dismissed. It also announces itself as an overlay, which is what
           stops the web panel's native view being drawn over the top of it. */}
-      {asking && <Mcp project={project} workspace={workspace} onClose={() => setAsking(false)} />}
+        {asking && <Mcp project={project} workspace={workspace} onClose={() => setAsking(false)} />}
 
-      {/* ── the dock ────────────────────────────────────────────────────────
+        {/* ── the dock ────────────────────────────────────────────────────────
 
           The activity ledge and the composer, over the transcript rather
           than under it. Positioned, so the last lines of the conversation
@@ -601,8 +663,8 @@ const Panel = ({
           It carries no fill of its own: the ledge and the composer are each
           their own pane of glass, so the composer looks the same drawn on
           its own in the style guide as it does here. */}
-      <div ref={dock} {...stylex.props(styles.dock)}>
-        {/* ── the activity is a ledge on the composer, not the tail of the
+        <div ref={dock} {...stylex.props(styles.dock)}>
+          {/* ── the activity is a ledge on the composer, not the tail of the
           transcript ────────────────────────────────────────────────────────
 
           It used to be the last thing in the scroller, which put a line that
@@ -622,69 +684,133 @@ const Panel = ({
           The strip's own arrival is a height spring, so the composer is
           moved once per turn rather than on every change of activity —
           which is the shifting this was reported for. */}
-        <AnimatePresence initial={false}>
-          {held.running > 0 && (
-            <motion.div
-              key="working"
-              {...stylex.props(styles.ledge)}
-              initial={{ height: 0, opacity: 0 }}
-              animate={{ height: "auto", opacity: 1 }}
-              exit={{ height: 0, opacity: 0 }}
-              transition={ledgeSpring}
-              onUpdate={followIfStuck}
-              onAnimationComplete={followIfStuck}
-            >
-              <Working doing={doing(items, held.turn)} />
-            </motion.div>
-          )}
-        </AnimatePresence>
+          <AnimatePresence initial={false}>
+            {(held.running > 0 || away) && (
+              <motion.div
+                key="ledge"
+                {...stylex.props(styles.ledge)}
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: "auto", opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                transition={ledgeSpring}
+                onUpdate={followIfStuck}
+                onAnimationComplete={followIfStuck}
+              >
+                {/* ── the row is shared now, so each half arrives on its own ──
 
-        {/* Everything below the transcript, and it is a component now — the
+                The strip used to exist exactly when a turn did, so the pill
+                could rely on the height spring for its entrance and carry no
+                animation of its own. It cannot any more: the button opens
+                this row while nothing is running, and a turn starting into a
+                row already on screen would put the pill there between two
+                frames. Nothing pops — so each of the two fades, and the row
+                itself still springs its height when it is the one arriving. */}
+                <AnimatePresence initial={false}>
+                  {held.running > 0 && (
+                    <motion.div
+                      key="working"
+                      {...stylex.props(styles.half)}
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      exit={{ opacity: 0 }}
+                      transition={ledgeSpring}
+                    >
+                      <Working doing={doing(items, held.turn)} />
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+
+                {/* ── the way back to the tail ─────────────────────────────────
+
+                On this row rather than floating over the transcript, because
+                the dock is already the one band that is furniture: a control
+                hovering in the middle of the column is a second thing over
+                the document, and this one belongs beside the other thing the
+                window says about a conversation in progress.
+
+                Which costs the pill the full width of the column while both
+                are up — it shrinks, being the only part of that row that
+                gives, and the elapsed count never clips. */}
+                <AnimatePresence initial={false}>
+                  {away && (
+                    <motion.button
+                      key="tail"
+                      type="button"
+                      data-nav-item
+                      aria-label="go to the latest"
+                      title="go to the latest"
+                      onClick={catchUp}
+                      {...stylex.props(styles.tail)}
+                      initial={{ opacity: 0, scale: 0.6 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      exit={{ opacity: 0, scale: 0.6 }}
+                      transition={jelly}
+                      whileTap={squishing}
+                    >
+                      <ArrowDownIcon size={13} weight="bold" aria-hidden />
+                    </motion.button>
+                  )}
+                </AnimatePresence>
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          {/* Everything below the transcript, and it is a component now — the
           style guide draws it, and a copy on that page would be a copy that
           drifts. What stayed here is what has a consequence: what a message
           does, what a command does, and what an option change tells the
           daemon. */}
-        <Composer
-          draft={draft}
-          onDraft={setDraft}
-          onSend={say}
-          // ── the same button stops the agent while it is working ──────────
-          //
-          // `ChatCancel` and nothing else: the turn ends the way every turn
-          // ends, on the update stream, so there is nothing to report here.
-          // An idle conversation ignores it, which is why the button is only
-          // a stop while `working`.
-          onStop={() => {
-            void chatCancel(project, workspace).catch(() => {
-              // The stream is where a conversation that cannot be had says
-              // so — the same channel every other failure in this panel uses.
-            });
-          }}
-          working={held.running > 0}
-          onCommand={run}
-          theirs={agentCommands(held.commands)}
-          config={config}
-          onSetOption={(option, value) => {
-            // Painted before the daemon answers, and corrected by the answer. A
-            // select that snaps back for a moment reads as a control that did
-            // not take.
-            setConfig((all) =>
-              all.map((one) => (one.id === option ? { ...one, currentValue: value } : one)),
-            );
-            void chatSet(project, workspace, option, value)
-              .then(setConfig)
-              .catch(() => setConfig(config));
-          }}
-          usage={
-            held.full === undefined
-              ? undefined
-              : { full: held.full, used: held.used, size: held.size }
-          }
-          onBox={(node) => {
-            box.current = node;
-          }}
-        />
+          <Composer
+            draft={draft}
+            onDraft={setDraft}
+            onSend={say}
+            // ── the same button stops the agent while it is working ──────────
+            //
+            // `ChatCancel` and nothing else: the turn ends the way every turn
+            // ends, on the update stream, so there is nothing to report here.
+            // An idle conversation ignores it, which is why the button is only
+            // a stop while `working`.
+            onStop={() => {
+              void chatCancel(project, workspace).catch(() => {
+                // The stream is where a conversation that cannot be had says
+                // so — the same channel every other failure in this panel uses.
+              });
+            }}
+            working={held.running > 0}
+            onCommand={run}
+            theirs={agentCommands(held.commands)}
+            onBox={(node) => {
+              box.current = node;
+            }}
+          />
+        </div>
       </div>
+
+      {/* ── the bottom, and it is a real one ─────────────────────────────────
+
+          Stacked under the stage rather than carried on the dock, so the
+          column has an edge: the transcript scrolls *up to* this, and its
+          scrollbar ends here instead of running on behind the composer and
+          the chips. Asked for in those words. See `SessionBar`. */}
+      <SessionBar
+        config={config}
+        onSetOption={(option, value) => {
+          // Painted before the daemon answers, and corrected by the answer. A
+          // select that snaps back for a moment reads as a control that did
+          // not take.
+          setConfig((all) =>
+            all.map((one) => (one.id === option ? { ...one, currentValue: value } : one)),
+          );
+          void chatSet(project, workspace, option, value)
+            .then(setConfig)
+            .catch(() => setConfig(config));
+        }}
+        usage={
+          held.full === undefined
+            ? undefined
+            : { full: held.full, used: held.used, size: held.size }
+        }
+      />
     </div>
   );
 };
@@ -869,6 +995,29 @@ const SETTLING = 220;
  * the very movement it exists to correct.
  */
 const LEASH = 120;
+
+/**
+ * How far from the bottom before the way back is offered, in pixels.
+ *
+ * Asked for at 500, and it has to be well clear of `LEASH` rather than equal
+ * to it — which is what the two were for an hour, and what that cost is worth
+ * writing down because nothing about the symptom points at a threshold.
+ *
+ * The button lives on the activity ledge, so `away` turning over opens and
+ * closes that row, which changes the dock's height, which changes the
+ * scroller's padding — and the row's own height spring calls `followIfStuck`
+ * on every frame of it. With the two numbers equal, scrolling *back down*
+ * crossed both at once: the row closed while the reader was inside the leash,
+ * and the closing animation pinned them to the bottom for its whole duration.
+ * Reported as "the scroll is getting stuck at bottom briefly when there is no
+ * turn active" — no turn, because the ledge that was opening and closing
+ * under them was the button's and not an agent's.
+ *
+ * So the rule is not the number: **this must exceed `LEASH` by more than the
+ * ledge is tall**, or the control's own arrival moves a reader who is still
+ * being followed. 500 against 120 is comfortable in a way 100 was not.
+ */
+const AWAY = 500;
 
 /**
  * One item of a transcript, and the only piece of this panel the style guide
@@ -1525,7 +1674,24 @@ const Answering = ({
  * rules — the trap this file's own notes record three times.
  */
 const space = stylex.create({
-  under: (px: number) => ({ paddingBottom: `${String(px)}px` }),
+  /**
+   * Room under the transcript for the card floating over it — and then some.
+   *
+   * `px` is the dock's measured height, which clears the card exactly: the
+   * last line of a conversation stops on its top edge, touching it. That read
+   * as the message being *behind* the composer, and it is — a card with a
+   * blur and a shadow needs the text to stop short of it, not at it.
+   *
+   * It used to get that slack by accident. The dock held the session bar as
+   * well, so this padding was the card's height plus a strip nothing was
+   * drawn over; the bar is the column's own bottom now, and the accident went
+   * with it.
+   *
+   * The clearance is `1.25rem` because that is the transcript's own gutter —
+   * the air it keeps at the top and on both sides. One measure, so the column
+   * has one margin rather than three numbers that nearly agree.
+   */
+  under: (px: number) => ({ paddingBottom: `calc(${String(px)}px + 1.25rem)` }),
 });
 
 const styles = stylex.create({
@@ -1542,6 +1708,20 @@ const styles = stylex.create({
     // flow; the dock is the one thing drawn *over* the transcript.
     position: "relative",
   },
+  /**
+   * The transcript, and the one thing drawn over it.
+   *
+   * The dock is absolutely positioned against this box rather than against
+   * the column, so its `bottom: 0` is the top of the session bar underneath —
+   * which is what stacks the two without either having to measure the other.
+   *
+   * It is also what gives the scrollbar an end. The scroller used to run the
+   * full height of the column with the whole dock standing on its padding, so
+   * the track carried on behind the composer and the chips and the thumb
+   * could never reach a visible bottom — reported as "the scrollbar goes off
+   * screen and is a little stuck at the bottom".
+   */
+  stage: { position: "relative", flex: 1, minHeight: 0, display: "flex", flexDirection: "column" },
   scroll: {
     flex: 1,
     minHeight: 0,
@@ -2010,6 +2190,55 @@ const styles = stylex.create({
     // words. See `working`.
     display: "flex",
     alignItems: "flex-start",
+    // The two halves of the row, and the gap is what stops the pill's last
+    // word touching the button when the sentence is a long one.
+    gap: "0.5rem",
+  },
+  /**
+   * The pill's side of the ledge, and the only side that gives.
+   *
+   * `minWidth: 0` is the half that matters: without it a flex item will not
+   * shrink below its content, so a long purpose would push the button off
+   * the end of the row instead of clipping — which is the same pair the
+   * window's no-horizontal-scrollbar rule is written about.
+   */
+  half: { flex: 1, minWidth: 0, display: "flex" },
+  /**
+   * The way back to the tail.
+   *
+   * Its own glass rather than the pill's, because it is a control and the
+   * pill is a readout: what it borrows from that row is the size and the
+   * radius, so the two read as one strip, and what it does not borrow is the
+   * ink — a button in `muted` beside muted words is a button nobody sees is
+   * a button.
+   *
+   * `margin-inline-start: auto` and not `justify-content: space-between` on
+   * the row: with only one of the two showing, `space-between` puts whichever
+   * it is on the left, and this button belongs on the right whether or not a
+   * turn is running.
+   */
+  tail: {
+    flexShrink: 0,
+    marginInlineStart: "auto",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    width: "1.6rem",
+    height: "1.6rem",
+    padding: 0,
+    borderStyle: "solid",
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: "999px",
+    backgroundColor: colors.glass,
+    backdropFilter: glaze.pane,
+    color: { default: colors.text, ":hover": colors.accent },
+    boxShadow: lift.low,
+    cursor: "pointer",
+    transitionProperty: "color, border-color, box-shadow",
+    transitionDuration: { default: timing.quick, "@media (prefers-reduced-motion: reduce)": "0s" },
+    transitionTimingFunction: timing.ease,
+    ":hover": { borderColor: colors.accent, boxShadow: lift.mid },
   },
   /**
    * The one-line window the activity rolls through.

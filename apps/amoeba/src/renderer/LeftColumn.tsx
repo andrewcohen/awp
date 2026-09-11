@@ -1,47 +1,63 @@
-import type { Job } from "@awp-kit/jobs";
 import type { SessionInfo, Thread } from "@awp-kit/protocol";
-import { Tabs } from "@base-ui/react/tabs";
+import { PlusIcon } from "@phosphor-icons/react/Plus";
+import { TrayIcon } from "@phosphor-icons/react/Tray";
 import * as stylex from "@stylexjs/stylex";
-import { motion } from "motion/react";
-import { pill } from "./springs";
-import { useState } from "react";
-import { Inbox } from "./Inbox";
+import type { ComponentType } from "react";
 import { Sidebar } from "./Sidebar";
-import { rememberLeft, rememberedLeft } from "./remembered";
 import { typeset } from "./typeset";
-import { colors } from "./tokens.stylex";
+import { colors, space, timing } from "./tokens.stylex";
 import type { Facts } from "./useFacts";
 
-// The left column: what is running here, or what is waiting elsewhere.
+// The left column: a short menu, a rule, and the threads.
 //
-// Two tabs, and the split between them is the split between the two kinds of
-// list awp holds:
+//   ⊕  new thread                    ⌘N
+//   ⊟  inbox
+//   ─────────────────────────────────────
+//   ▸ tabular exports
+//       rowan · agent
 //
-//   work    threads and their workspaces — this machine, these sessions
-//   inbox   open pull requests — GitHub, other people, other machines
+// ── this used to be two tabs, and the tabs were the wrong shape ───────────
 //
-// ── why the inbox is here and not in the accessory column ─────────────────
+// `work` and `inbox` sat beside each other as a pair of peers, which said the
+// column held two lists of the same kind. It does not: the threads *are* this
+// column — they fill it, they are what is selected, they are what the address
+// points at — and the inbox is a list of work happening elsewhere that somebody
+// opens on purpose. A tab strip made the second one cost the first its whole
+// column, and made the first one look like a mode.
 //
-// Because it is a list of work to *pick from*, and picking is what this column
-// is for. Every row in the work tab opens something; every row in the inbox
-// starts something and then opens it. The accessory column is about the thing
-// already on screen — the diff of this workspace, a page beside it — so an
-// inbox there would be the one panel that had nothing to do with the session in
-// the middle.
+// So the two acts are a menu and the threads are the column. The inbox opens
+// over the window instead — see `InboxDialog` for why that, rather than a panel
+// in the accessory strip.
 //
-// Base UI's Tabs rather than two buttons, the same choice the accessory column
-// made and for the same reasons: arrow keys between tabs, Home and End to the
-// ends, one tab stop for the strip rather than one per panel, and the
-// role/aria-selected/aria-controls wiring that makes a screen reader announce
-// this as a set of panels. None of that is visible and all of it is what gets
-// skipped when a tab strip is hand-rolled.
+// ── the dialog is App's, and the menu only asks for it ────────────────────
 //
-// **A hidden panel is unmounted**, which the inbox leans on: opening the tab
-// mounts it, and its hook asks the daemon then. Nothing polls, and nothing
-// fetches for a tab nobody is looking at.
+// It was held here, and a folded sidebar is what said that was wrong: this
+// whole column is `inert` and zero pixels wide while it is closed, so an
+// overlay owned by it is an overlay whose owner is not on screen — and the one
+// way to reach it went with the column. `NewThread` has always been App's for
+// the same reason, which is the shape to copy: a modal belongs to the window,
+// and the control that opens it belongs to whichever column has room for it.
+//
+// That is also where `⌘I` lives, beside `⌘N` — see App.tsx. A menu item is the
+// discoverable half and a chord is the half that still works with this column
+// folded away.
+//
+// **The `+ thread` button at the foot of the strip went with it.** It was the
+// only way to make a workspace from this window and it is now the first line of
+// the menu, which is where somebody looks for it — a second copy at the other
+// end of the same column is two controls for one act.
+//
+// ── nothing counts the inbox ──────────────────────────────────────────────
+//
+// A badge on `inbox` reading "3 to review" is the obvious next thing and is
+// deliberately absent: the count is a `gh` call per project, seconds each, and
+// putting it on a row that is always on screen means paying for it whether or
+// not anybody asked. The rows are fetched when the dialog mounts, which is the
+// promise `useInbox` was written around.
 
 const styles = stylex.create({
   column: { display: "flex", flexDirection: "column", height: "100%", minHeight: 0 },
+
   // ── this strip is NOT part of the window's header band ──────────────────
   //
   // The other two columns each begin with one, all `space.titlebar` tall so
@@ -50,141 +66,143 @@ const styles = stylex.create({
   // which holds the traffic lights and both fold controls, belongs to the
   // window rather than to this column, and never folds.
   //
-  // So these tabs sit *under* it and are deliberately shorter than a header.
-  // Matching `space.titlebar` here would stack two full-height bands in a
-  // 260px column and make the strip that is chrome for the window and the
-  // strip that switches this column's content look like the same thing.
-  //
-  // The border is not decoration: a control touching the thing it controls has
-  // no edge, which is the same note the panels' tab strip carries.
-  list: {
+  // So the menu sits *under* it and its rows are deliberately shorter than a
+  // header: two full-height bands stacked in a 260px column would make the
+  // strip that is chrome for the window and the menu that acts on it read as
+  // the same thing.
+  menu: {
+    display: "flex",
+    flexDirection: "column",
+    flexShrink: 0,
+    padding: `0.35rem 0.4rem`,
+  },
+  // The rule between the acts and the list. Not decoration: without it the
+  // first thread heading is one more row in the menu, and the menu's items are
+  // the two things in this column that do not open a workspace.
+  rule: {
+    flexShrink: 0,
+    height: 1,
+    marginInline: space.gutter,
+    backgroundColor: colors.border,
+  },
+
+  item: {
     display: "flex",
     alignItems: "center",
-    flexShrink: 0,
-    gap: "0.25rem",
-    padding: "0.35rem 0.5rem",
-    borderBottomWidth: 1,
-    borderBottomStyle: "solid",
-    borderBottomColor: colors.border,
-  },
-  tab: {
-    position: "relative",
-    padding: "0.2rem 0.55rem",
+    gap: "0.5rem",
+    width: "100%",
+    padding: "0.3rem 0.45rem",
     backgroundColor: "transparent",
     borderStyle: "none",
     borderRadius: "0.25rem",
     color: colors.muted,
     font: "inherit",
+    textAlign: "start",
     cursor: "pointer",
     transitionProperty: "background-color, color",
-    transitionDuration: "100ms",
-    ":hover": { color: colors.text },
-    // A tab is a control, not prose: without this a double-click to switch
-    // selects the word instead. Both spellings, because WebKit reports the
-    // unprefixed one as empty while honouring the prefixed one.
+    transitionDuration: { default: timing.quick, "@media (prefers-reduced-motion: reduce)": "0s" },
+    ":hover": { color: colors.text, backgroundColor: colors.surface },
+    // A menu row is a control, not prose: without this a double-click selects
+    // the word instead of pressing twice. Both spellings, because WebKit
+    // reports the unprefixed one as empty while honouring the prefixed one.
     userSelect: "none",
     WebkitUserSelect: "none",
   },
-  // The accent as the text and a fill it can be read on — one of the two places
-  // in the window the accent is spent, and it answers the same question the
-  // other does: this, here.
-  // The colour stays here; the fill is `fill`, which moves.
-  on: { color: colors.accent },
-  /** The travelling fill, behind the word. */
-  fill: {
-    position: "absolute",
-    insetBlock: 0,
-    insetInline: 0,
-    zIndex: 0,
-    borderRadius: "0.25rem",
-    backgroundColor: colors.raised,
-  },
-  word: { position: "relative", zIndex: 1 },
-  panel: { flex: 1, minHeight: 0, display: "flex", flexDirection: "column" },
+  // The icon keeps its box whether or not it is the same width as the other,
+  // so the words start on one edge — the same argument the tool rows' verb
+  // column makes.
+  icon: { flexShrink: 0, display: "flex", width: "1rem", justifyContent: "center" },
+  word: { flex: 1, minWidth: 0 },
+  // The chord, said once where the act is rather than only in a tooltip. Muted
+  // and small: it is a reminder for the second time somebody uses this, not a
+  // field anybody scans.
+  chord: { flexShrink: 0, color: colors.muted, opacity: 0.7 },
 });
+
+/** One row of the menu: an icon, a word, and — when there is one — its chord. */
+function Item({
+  icon: Icon,
+  word,
+  chord,
+  onPress,
+}: {
+  readonly icon: ComponentType<{ readonly size?: number; readonly "aria-hidden"?: boolean }>;
+  readonly word: string;
+  readonly chord?: string;
+  readonly onPress: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      // ctrl+j/ctrl+k step through these, which is the keyboard mandate: every
+      // control in this window is reachable without a pointer, and a list that
+      // marks nothing has nothing to step.
+      data-nav-item
+      title={chord === undefined ? word : `${word} (${chord})`}
+      onClick={onPress}
+      {...stylex.props(typeset.control, styles.item)}
+    >
+      <span {...stylex.props(styles.icon)}>
+        <Icon size={15} aria-hidden />
+      </span>
+      <span {...stylex.props(styles.word)}>{word}</span>
+      {chord !== undefined && <span {...stylex.props(typeset.label, styles.chord)}>{chord}</span>}
+    </button>
+  );
+}
 
 export function LeftColumn({
   sessions,
   facts,
-  jobs,
   threads,
   selected,
   at,
   onSelect,
   onNew,
+  onInbox,
   onThreadsChanged,
   onOpenWorkspace,
   failure,
 }: {
   readonly sessions: ReadonlyArray<SessionInfo>;
   readonly facts: Facts;
-  /** Every job the window knows about, for the inbox's row progress. */
-  readonly jobs: ReadonlyArray<Job>;
   readonly threads: ReadonlyArray<Thread>;
   readonly selected: string | undefined;
   /** The workspace the window is looking at, session or no session. */
   readonly at: { readonly project: string; readonly workspace: string } | undefined;
   readonly onSelect: (session: SessionInfo) => void;
   readonly onNew: () => void;
+  /** Open the inbox. The dialog itself is App's — see the note above. */
+  readonly onInbox: () => void;
   readonly onThreadsChanged: () => void;
   /** Go to a workspace's agent, named rather than handed as a session: an
    * inbox row knows the pair and not which session is running. */
   readonly onOpenWorkspace: (project: string, workspace: string) => void;
   readonly failure: string | undefined;
 }) {
-  // Controlled, because StyleX resolves its styles at render — `stylex.props(a,
-  // on && b)` — so which tab is selected has to be a value this component can
-  // read. Base UI still owns the keyboard and the aria wiring.
-  const [open, setOpen] = useState<string>(rememberedLeft);
-
   return (
-    <Tabs.Root
-      value={open}
-      onValueChange={(value) => {
-        const tab = String(value);
-        setOpen(tab);
-        rememberLeft(tab);
-      }}
-      {...stylex.props(styles.column)}
-    >
-      <Tabs.List {...stylex.props(styles.list)}>
-        {/* The fill travels between the two rather than blinking out of one
-            and into the other — see the same `layoutId` in `Accessory`. */}
-        {(["work", "inbox"] as const).map((tab) => (
-          <Tabs.Tab
-            key={tab}
-            value={tab}
-            {...stylex.props(typeset.control, styles.tab, open === tab && styles.on)}
-          >
-            {open === tab && (
-              <motion.span layoutId="left-tab" {...stylex.props(styles.fill)} transition={pill} />
-            )}
-            <span {...stylex.props(styles.word)}>{tab}</span>
-          </Tabs.Tab>
-        ))}
-      </Tabs.List>
+    <div {...stylex.props(styles.column)}>
+      <nav aria-label="actions" {...stylex.props(styles.menu)}>
+        <Item icon={PlusIcon} word="new thread" chord="⌘N" onPress={onNew} />
+        <Item icon={TrayIcon} word="inbox" chord="⌘I" onPress={onInbox} />
+      </nav>
 
-      <Tabs.Panel value="work" {...stylex.props(styles.panel)}>
-        <Sidebar
-          sessions={sessions}
-          facts={facts}
-          threads={threads}
-          selected={selected}
-          at={at}
-          onSelect={onSelect}
-          // The same callback the inbox opens a row with: both of them name a
-          // pair rather than a session, because neither knows — or needs to
-          // know — which of a workspace's sessions happens to be running.
-          onOpen={onOpenWorkspace}
-          onNew={onNew}
-          onThreadsChanged={onThreadsChanged}
-          failure={failure}
-        />
-      </Tabs.Panel>
+      <div {...stylex.props(styles.rule)} />
 
-      <Tabs.Panel value="inbox" {...stylex.props(styles.panel)}>
-        <Inbox jobs={jobs} onOpen={onOpenWorkspace} onStarted={onThreadsChanged} />
-      </Tabs.Panel>
-    </Tabs.Root>
+      <Sidebar
+        sessions={sessions}
+        facts={facts}
+        threads={threads}
+        selected={selected}
+        at={at}
+        onSelect={onSelect}
+        // The same callback the inbox opens a row with: both of them name a
+        // pair rather than a session, because neither knows — or needs to know
+        // — which of a workspace's sessions happens to be running.
+        onOpen={onOpenWorkspace}
+        onThreadsChanged={onThreadsChanged}
+        failure={failure}
+      />
+    </div>
   );
 }

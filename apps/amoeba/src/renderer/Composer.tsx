@@ -9,6 +9,7 @@ import { FOLD_MS } from "./columns";
 import { Chip } from "./Chip";
 import { type Command, completed, matching } from "@awp-kit/protocol/commands";
 import { growth, useGrow } from "./grow";
+import { acceptsFiles } from "./dropped";
 import { typeset } from "./typeset";
 import { colors, glaze, lift, timing } from "./tokens.stylex";
 
@@ -131,42 +132,30 @@ const styles = stylex.create({
     color: colors.muted,
   },
   /**
-   * The dock's lower pane, and a pane of glass.
+   * The thing that floats, and the root of this component.
    *
-   * ── translucent, because the transcript runs underneath ───────────────
+   * ── it was two elements, and one of them drew nothing ─────────────────
    *
-   * In `Chat` this is positioned over the scroller rather than beside it, so
-   * what a backdrop filter has to work on is the last few lines of the
-   * conversation sliding past. An opaque `page` fill here is what it had, and
-   * it is also what the filter would produce if nothing were behind it — the
-   * layout change and the glass are one thing, not two.
+   * There was an outer flex column around this holding the fill and the
+   * blur, and when both of those moved onto `box` it was left as a wrapper
+   * with a `display` and nothing else — an invisible rectangle in the tree
+   * that a person inspecting the composer had to step past to reach
+   * anything. Reported as exactly that.
    *
-   * The blur is a token for the same reason the fold duration is: the ledge
-   * above wears the same one, and two radii that disagree read as two
-   * materials rather than as one dock.
+   * It could go because the two never disagreed: the outer one was the whole
+   * dock's width and so is this, and its only child was this. What the merge
+   * keeps is the padding, which is the inset that makes the box read as a
+   * card rather than as a bar.
    *
-   * **No edge of its own.** It had a rule across the top, which is the second
-   * of two rectangles a few pixels apart — this one saying "a region begins
-   * here" and the card inside it saying "type in me". The outer claim is the
-   * one worth losing: a dock with no boundary is a pane the transcript fades
-   * into, and the card is then the only thing on screen with a shape, which
-   * is what makes it read as floating rather than as a footer.
+   * The inline padding is the transcript's own gutter, so what somebody
+   * types begins on the same edge as what they are reading.
    */
-  composer: {
+  card: {
     display: "flex",
     flexDirection: "column",
-    backgroundColor: colors.glass,
-    backdropFilter: glaze.pane,
+    paddingBlock: "0.55rem 0.6rem",
+    paddingInline: "1rem",
   },
-  /** The half that floats: inset from every edge, so it reads as a card. */
-  /**
-   * The half that floats.
-   *
-   * The inline padding is the transcript's own 1.25rem, so what somebody
-   * types begins on the same edge as what they are reading — which is what
-   * the removed rectangle used to break by a further 0.6rem.
-   */
-  card: { paddingBlock: "0.55rem 0.6rem", paddingInline: "1rem" },
   /**
    * What somebody types, and it is the one rectangle here.
    *
@@ -192,10 +181,20 @@ const styles = stylex.create({
     borderWidth: 1,
     borderColor: { default: colors.border, ":focus-within": colors.accent },
     borderRadius: "0.6rem",
-    // Opaque, and that is the point of it now: the dock around it is
-    // translucent, so a solid card is what separates the thing you type into
-    // from the conversation passing behind the glass.
-    backgroundColor: colors.surface,
+    // ── this is the pane of glass now, and it is the only one ────────────
+    //
+    // It went transparent for an hour on the argument that what sat behind it
+    // was the dock's own glass rather than the transcript — which stopped
+    // being true the moment the dock lost its fill and its filter. Left alone
+    // it would be a rounded outline with somebody's message scrolling through
+    // the words being typed into it.
+    //
+    // So the material is here instead: the same token the activity pill
+    // wears, on the one element in the dock that has to be read. The blur is
+    // what makes a transcript passing underneath legible as texture rather
+    // than as text, and the tint is what stops it being a window.
+    backgroundColor: colors.glass,
+    backdropFilter: glaze.pane,
     // ── depth is what "floating" is ───────────────────────────────────────
     //
     // `mid` at rest rather than `low`. With the dock's own edge gone there is
@@ -285,29 +284,40 @@ const styles = stylex.create({
   /** The glyph itself, so it can be swapped under the button. */
   icon: { display: "flex", alignItems: "center", justifyContent: "center" },
   /**
-   * The half that is pinned: flush to the bottom, edge to edge, under a rule.
+   * The bottom of the column: flush, edge to edge, under a rule.
    *
    * Full width rather than inset with the card, because these are the
    * session's facts rather than a control — a strip along the bottom of the
    * column is what a status line is, and inset they read as more of the
-   * composer. The rule above is what makes the card look like it is sitting
-   * on something.
+   * composer.
+   *
+   * `flexShrink: 0` is what makes it the bottom rather than the first thing a
+   * short window gives up: it is a sibling of the transcript now, and a flex
+   * child that may shrink in a column that is short is one that disappears
+   * before the thing above it does.
+   *
+   * Opaque, and that is new. It used to be a band on a pane of glass, where
+   * whatever the blur had softened showed through; it now sits on the column
+   * itself, and the transcript scrolls *to* it rather than under it — so it
+   * takes the page's own colour and the rule above it is the edge between the
+   * two.
    */
   settings: {
+    flexShrink: 0,
     display: "flex",
     alignItems: "center",
     gap: "0.35rem",
     paddingBlock: "0.4rem 0.5rem",
     paddingInline: "1.25rem",
+    backgroundColor: colors.page,
     borderTopStyle: "solid",
     borderTopWidth: 1,
-    // Faint, and now the only rule in the dock: it separates the two halves
-    // of one surface. The composer's own top border used to sit a few pixels
-    // above it and is gone — see `composer`.
+    // Faint: it separates two parts of one column rather than announcing a
+    // region. A full-strength rule here reads as a footer.
     borderTopColor: `color-mix(in oklab, ${colors.border} 55%, transparent)`,
-    // Wrapping rather than scrolling: this is inside the composer, and the
-    // window's rule is that nothing grows a sideways scrollbar. Four chips in
-    // a narrow agent column become two rows.
+    // Wrapping rather than scrolling — the window's rule is that nothing
+    // grows a sideways scrollbar. Four chips in a narrow agent column become
+    // two rows.
     flexWrap: "wrap",
   },
   spacer: { flex: 1 },
@@ -323,9 +333,6 @@ export const Composer = ({
   working,
   onCommand,
   theirs = [],
-  config,
-  onSetOption,
-  usage,
   onBox,
 }: {
   readonly draft: string;
@@ -365,21 +372,6 @@ export const Composer = ({
    * behind it.
    */
   readonly theirs?: ReadonlyArray<Command>;
-  readonly config: ReadonlyArray<ChatConfigOption>;
-  readonly onSetOption: (option: string, value: string) => void;
-  /**
-   * How full the context is, and in what.
-   *
-   * Absent until the adapter has said — which is the one case that draws
-   * nothing, because a window that has just opened genuinely does not know.
-   */
-  readonly usage?:
-    | {
-        readonly full: number;
-        readonly used?: number | undefined;
-        readonly size?: number | undefined;
-      }
-    | undefined;
   /**
    * Told what the textarea is, for a caller that has to put the caret in it.
    *
@@ -433,20 +425,8 @@ export const Composer = ({
   };
 
   return (
-    <div {...stylex.props(styles.composer)}>
-      {/* ── the half that floats ───────────────────────────────────────────
-
-        The composer is two things with different jobs, and drawing them as
-        one block said they were one thing. What somebody types is a control
-        — it takes the keyboard, it has a border that goes accent, and it is
-        the only part of this that acts. What is under it is a set of read-
-        outs about the session.
-
-        So the card is inset from every edge and lifted, and the strip below
-        is flush and pinned. Asked for as "split it in half and pin the
-        bottom controls and make the composer feel more floaty". */}
-      <div {...stylex.props(styles.card)}>
-        {/* ── the command menu ───────────────────────────────────────────────
+    <div {...stylex.props(styles.card)}>
+      {/* ── the command menu ───────────────────────────────────────────────
 
         Above the box rather than below it, because it is a list of things
         the *box* can become and the eye is already at the box. Shown only
@@ -458,128 +438,129 @@ export const Composer = ({
         there — so a component that moved focus would take the typing with
         it. What Base UI gives is roving focus and a portal, and neither is
         wanted here. */}
-        {commands.length > 0 && (
-          <div {...stylex.props(styles.menu)} role="listbox" aria-label="commands">
-            {commands.map((command, index) => (
-              <button
-                key={command.name}
-                type="button"
-                role="option"
-                aria-selected={index === at}
-                // The pointer is a second way in, and a press must not take
-                // focus off the box — `onMouseDown` with `preventDefault` is
-                // what keeps the caret where it was.
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => onCommand(command)}
-                // The list scrolls now, so the arrow keys can walk the
-                // highlight out of sight. `block: "nearest"` moves the menu by
-                // the least that brings the row back — anything more scrolls
-                // the column behind it as well.
-                ref={(node) => {
-                  if (node !== null && index === at) node.scrollIntoView({ block: "nearest" });
-                }}
-                {...stylex.props(styles.slash, index === at && styles.slashOn)}
-              >
-                <span {...stylex.props(typeset.address, styles.slashName)}>{command.name}</span>
-                {command.hint !== undefined && (
-                  <span {...stylex.props(typeset.address, styles.slashHint)}>{command.hint}</span>
-                )}
-                <span {...stylex.props(typeset.label, styles.slashSaid)}>{command.said}</span>
-                {/* ── the window's two are marked, not the agent's dozens ────
+      {commands.length > 0 && (
+        <div {...stylex.props(styles.menu)} role="listbox" aria-label="commands">
+          {commands.map((command, index) => (
+            <button
+              key={command.name}
+              type="button"
+              role="option"
+              aria-selected={index === at}
+              // The pointer is a second way in, and a press must not take
+              // focus off the box — `onMouseDown` with `preventDefault` is
+              // what keeps the caret where it was.
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => onCommand(command)}
+              // The list scrolls now, so the arrow keys can walk the
+              // highlight out of sight. `block: "nearest"` moves the menu by
+              // the least that brings the row back — anything more scrolls
+              // the column behind it as well.
+              ref={(node) => {
+                if (node !== null && index === at) node.scrollIntoView({ block: "nearest" });
+              }}
+              {...stylex.props(styles.slash, index === at && styles.slashOn)}
+            >
+              <span {...stylex.props(typeset.address, styles.slashName)}>{command.name}</span>
+              {command.hint !== undefined && (
+                <span {...stylex.props(typeset.address, styles.slashHint)}>{command.hint}</span>
+              )}
+              <span {...stylex.props(typeset.label, styles.slashSaid)}>{command.said}</span>
+              {/* ── the window's two are marked, not the agent's dozens ────
                   An agent on a real machine advertises twenty commands and
                   the window has two, so marking the majority is marking the
                   baseline — the same arithmetic as the inbox's leading icon
                   and the accent's four sites. What a person needs to know
                   here is which rows do NOT reach their agent. */}
-                {command.mine && (
-                  <span {...stylex.props(typeset.label, styles.slashMine)}>awp</span>
-                )}
-              </button>
-            ))}
-          </div>
-        )}
-        <div {...stylex.props(styles.box)}>
-          <div {...stylex.props(styles.line)}>
-            <textarea
-              ref={attach}
-              {...stylex.props(typeset.prose, styles.input, growth.eased(FOLD_MS))}
-              value={draft}
-              rows={1}
-              placeholder="say something, or / for a command"
-              onChange={(event) => {
-                onDraft(event.target.value);
-                // The list is re-filtered on every keystroke, so an index into
-                // the old one names the wrong row. Reset rather than clamped:
-                // the first match is what somebody narrowing a list means.
-                setPicked(0);
-              }}
-              onKeyDown={(event) => {
-                // ── the menu's keys, and only while it is open ─────────────
-                //
-                // Up and down rather than ctrl+j/k: those two are the window's
-                // column chords and are given up inside a textarea, which is
-                // where this caret is. Inside a list of two, the arrows are
-                // what a person will press.
-                if (commands.length > 0) {
-                  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
-                    event.preventDefault();
-                    const step = event.key === "ArrowDown" ? 1 : -1;
-                    setPicked((was) => (was + step + commands.length) % commands.length);
-                    return;
-                  }
-                  if (event.key === "Tab") {
-                    // Completion, not selection. Tab fills the box in and leaves
-                    // the next gesture — Return — to run it, so a mistyped
-                    // completion can still be edited or abandoned.
-                    event.preventDefault();
-                    const one = commands[at];
-                    if (one !== undefined) {
-                      onDraft(completed(one));
-                    }
-                    return;
-                  }
-                  if (event.key === "Enter" && !event.shiftKey) {
-                    event.preventDefault();
-                    const one = commands[at];
-                    if (one !== undefined) {
-                      onCommand(one);
-                    }
-                    return;
-                  }
-                  if (event.key === "Escape") {
-                    // The draft is what the menu is open on, so clearing it is
-                    // what closes the menu. `stopPropagation` because Escape is
-                    // a window-level gesture elsewhere and this one is answered.
-                    event.stopPropagation();
-                    onDraft("");
-                    return;
-                  }
+              {command.mine && <span {...stylex.props(typeset.label, styles.slashMine)}>awp</span>}
+            </button>
+          ))}
+        </div>
+      )}
+      <div {...stylex.props(styles.box)}>
+        <div {...stylex.props(styles.line)}>
+          <textarea
+            ref={attach}
+            {...stylex.props(typeset.prose, styles.input, growth.eased(FOLD_MS))}
+            value={draft}
+            rows={1}
+            placeholder="say something, or / for a command"
+            // Dropping a file writes its absolute path in at the caret. The
+            // renderer cannot find that path itself — see `dropped.ts`.
+            {...acceptsFiles(draft, onDraft)}
+            onChange={(event) => {
+              onDraft(event.target.value);
+              // The list is re-filtered on every keystroke, so an index into
+              // the old one names the wrong row. Reset rather than clamped:
+              // the first match is what somebody narrowing a list means.
+              setPicked(0);
+            }}
+            onKeyDown={(event) => {
+              // ── the menu's keys, and only while it is open ─────────────
+              //
+              // Up and down rather than ctrl+j/k: those two are the window's
+              // column chords and are given up inside a textarea, which is
+              // where this caret is. Inside a list of two, the arrows are
+              // what a person will press.
+              if (commands.length > 0) {
+                if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                  event.preventDefault();
+                  const step = event.key === "ArrowDown" ? 1 : -1;
+                  setPicked((was) => (was + step + commands.length) % commands.length);
+                  return;
                 }
-                // ── escape throws the draft away ──────────────────────────
-                //
-                // The same gesture the TUI's composer has, and it was here only
-                // while the slash menu was open — so the two faces disagreed
-                // about a key somebody presses by reflex: one abandoned the
-                // message, the other did nothing at all.
-                //
-                // Only while there is something to throw away. An empty
-                // composer lets Escape past, because it is a window-level
-                // gesture elsewhere — a dialog over this panel is what closes.
-                if (event.key === "Escape" && draft !== "") {
+                if (event.key === "Tab") {
+                  // Completion, not selection. Tab fills the box in and leaves
+                  // the next gesture — Return — to run it, so a mistyped
+                  // completion can still be edited or abandoned.
+                  event.preventDefault();
+                  const one = commands[at];
+                  if (one !== undefined) {
+                    onDraft(completed(one));
+                  }
+                  return;
+                }
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
+                  const one = commands[at];
+                  if (one !== undefined) {
+                    onCommand(one);
+                  }
+                  return;
+                }
+                if (event.key === "Escape") {
+                  // The draft is what the menu is open on, so clearing it is
+                  // what closes the menu. `stopPropagation` because Escape is
+                  // a window-level gesture elsewhere and this one is answered.
                   event.stopPropagation();
                   onDraft("");
                   return;
                 }
-                // The same rule the pane has: Return sends, shift+Return is a
-                // newline. A composer where Return inserts a line is one where
-                // every message needs a second gesture to leave.
-                if (event.key === "Enter" && !event.shiftKey) {
-                  event.preventDefault();
-                  onSend();
-                }
-              }}
-            />
-            {/* ── one control, and while the agent works it stops it ─────────
+              }
+              // ── escape throws the draft away ──────────────────────────
+              //
+              // The same gesture the TUI's composer has, and it was here only
+              // while the slash menu was open — so the two faces disagreed
+              // about a key somebody presses by reflex: one abandoned the
+              // message, the other did nothing at all.
+              //
+              // Only while there is something to throw away. An empty
+              // composer lets Escape past, because it is a window-level
+              // gesture elsewhere — a dialog over this panel is what closes.
+              if (event.key === "Escape" && draft !== "") {
+                event.stopPropagation();
+                onDraft("");
+                return;
+              }
+              // The same rule the pane has: Return sends, shift+Return is a
+              // newline. A composer where Return inserts a line is one where
+              // every message needs a second gesture to leave.
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                onSend();
+              }
+            }}
+          />
+          {/* ── one control, and while the agent works it stops it ─────────
               The props for this have been on the component unused, which is
               two of the repo's three red gates and, more to the point, a
               window with no way to interrupt an agent short of the
@@ -595,102 +576,138 @@ export const Composer = ({
               `AnimatePresence` with a shared spring, so the arrow and the
               square trade places by scale rather than by swapping glyphs
               between frames. */}
-            <button
-              type="button"
-              data-nav-item
-              aria-label={working ? "stop" : "send"}
-              title={
-                working
-                  ? "stop the agent (escape)"
-                  : draft.trim() === ""
-                    ? "say something first"
-                    : "send (return)"
-              }
-              {...stylex.props(
-                styles.send,
-                working && styles.stop,
-                !working && draft.trim() === "" && styles.shut,
-              )}
-              onClick={working ? onStop : onSend}
-              disabled={!working && draft.trim() === ""}
-            >
-              <AnimatePresence initial={false} mode="popLayout">
-                <motion.span
-                  key={working ? "stop" : "send"}
-                  {...stylex.props(styles.icon)}
-                  initial={{ scale: 0.4, opacity: 0 }}
-                  animate={{ scale: 1, opacity: 1 }}
-                  exit={{ scale: 0.4, opacity: 0 }}
-                  transition={jelly}
-                >
-                  {working ? (
-                    <StopIcon size={11} weight="fill" aria-hidden />
-                  ) : (
-                    <ArrowUpIcon size={13} weight="bold" aria-hidden />
-                  )}
-                </motion.span>
-              </AnimatePresence>
-            </button>
-          </div>
-          {/* ── the hint has to earn its line ────────────────────────────────
+          <button
+            type="button"
+            data-nav-item
+            aria-label={working ? "stop" : "send"}
+            title={
+              working
+                ? "stop the agent (escape)"
+                : draft.trim() === ""
+                  ? "say something first"
+                  : "send (return)"
+            }
+            {...stylex.props(
+              styles.send,
+              working && styles.stop,
+              !working && draft.trim() === "" && styles.shut,
+            )}
+            onClick={working ? onStop : onSend}
+            disabled={!working && draft.trim() === ""}
+          >
+            <AnimatePresence initial={false} mode="popLayout">
+              <motion.span
+                key={working ? "stop" : "send"}
+                {...stylex.props(styles.icon)}
+                initial={{ scale: 0.4, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0.4, opacity: 0 }}
+                transition={jelly}
+              >
+                {working ? (
+                  <StopIcon size={11} weight="fill" aria-hidden />
+                ) : (
+                  <ArrowUpIcon size={13} weight="bold" aria-hidden />
+                )}
+              </motion.span>
+            </AnimatePresence>
+          </button>
+        </div>
+        {/* ── the hint has to earn its line ────────────────────────────────
             Reported as "the composer is still 2 lines", and it was: the text
             was one line and a permanent hint row under it was the second. The
             box is now one line at rest with the send beside the text, and this
             appears only when there is something to say about the next
             keypress — which is exactly when somebody is about to press it. */}
-          {said !== "" && <span {...stylex.props(typeset.label, styles.hint)}>{said}</span>}
-        </div>
+        {said !== "" && <span {...stylex.props(typeset.label, styles.hint)}>{said}</span>}
       </div>
+    </div>
+  );
+};
 
-      {/* ── what this session is running as ──────────────────────────────
+/**
+ * What this session is running as — the bar along the bottom of the chat.
+ *
+ * ── it is the bottom, rather than the last thing on a floating dock ───────
+ *
+ * It used to be the second half of the composer, inside the same absolutely
+ * positioned dock, so the transcript scrolled underneath it and the column had
+ * no bottom edge of its own. Asked for as "the bottom status bar should be the
+ * bottom and then the rest of the chat container scrolls up to it — stack
+ * them, only the composer float", and every word of that is a correction:
+ *
+ *   before   one dock over the transcript holding the ledge, the card and
+ *            this — so the scroller ran the full height of the column, and
+ *            its scrollbar ran behind all three
+ *   after    the transcript and this are stacked, and the card floats over
+ *            the first of them
+ *
+ * Which also settles the scrollbar without a rule about scrollbars: the
+ * scroller's box now ends where this begins, so the track ends there too.
+ *
+ * Here rather than in the agent bar, because these are facts about the
+ * *session* and that bar is the window's own chrome. They read in the right
+ * order this way round as well: what you are about to say, and then who is
+ * about to answer it.
+ *
+ * One shape for all of them. The adapter answers `mode`, `model`, `effort`
+ * and `fast` as four selects with the same fields, so there is nothing
+ * bespoke per setting — and a fifth appearing upstream is a row that shows up
+ * rather than a thing to add here.
+ */
+export const SessionBar = ({
+  config,
+  onSetOption,
+  usage,
+}: {
+  readonly config: ReadonlyArray<ChatConfigOption>;
+  readonly onSetOption: (option: string, value: string) => void;
+  readonly usage?:
+    | {
+        readonly full: number;
+        readonly used?: number | undefined;
+        readonly size?: number | undefined;
+      }
+    | undefined;
+}) => {
+  // Nothing to say is drawn as nothing rather than as an empty bar: a window
+  // that has only just opened has no config and no reading, and a rule across
+  // the bottom of the column would be furniture announcing that.
+  if (config.length === 0 && usage === undefined) {
+    return null;
+  }
 
-        Under the composer rather than in the agent bar, because these are
-        facts about the *session* and the bar is the window's own chrome.
-        They also read in the right order down here: what you are about to
-        say, and then who is about to answer it.
+  return (
+    <div {...stylex.props(styles.settings)}>
+      {config.map((option) => (
+        <Chip
+          key={option.id}
+          id={`chat-${option.id}`}
+          label={nameOf(option)}
+          title={option.description ?? option.name}
+          value={option.currentValue}
+          onChange={(value) => onSetOption(option.id, value)}
+          options={option.values.map((value) => ({ value: value.value, label: value.name }))}
+          quiet
+        />
+      ))}
 
-        One shape for all of them. The adapter answers `mode`, `model`,
-        `effort` and `fast` as four selects with the same fields, so there
-        is nothing bespoke per setting — and a fifth appearing upstream is
-        a row that shows up rather than a thing to add here. */}
-      {(config.length > 0 || usage !== undefined) && (
-        <div {...stylex.props(styles.settings)}>
-          {config.map((option) => (
-            <Chip
-              key={option.id}
-              id={`chat-${option.id}`}
-              label={nameOf(option)}
-              title={option.description ?? option.name}
-              value={option.currentValue}
-              onChange={(value) => onSetOption(option.id, value)}
-              options={option.values.map((value) => ({ value: value.value, label: value.name }))}
-              quiet
-            />
-          ))}
+      <span {...stylex.props(styles.spacer)} />
 
-          <span {...stylex.props(styles.spacer)} />
-
-          {/* Whenever there is a reading. The tokens go on the hover rather
-            than in the row: `18,606 of 200,000` is the answer to "how much is
-            that", and it is four times the width of the answer to "how full
-            is it". */}
-          {usage !== undefined && (
-            <span
-              title={
-                usage.used === undefined || usage.size === undefined
-                  ? "how much of the context window this conversation has spent"
-                  : `${usage.used.toLocaleString()} of ${usage.size.toLocaleString()} tokens`
-              }
-              {...stylex.props(
-                typeset.label,
-                styles.full,
-                usage.full >= NEARLY_FULL && styles.warn,
-              )}
-            >
-              {Math.round(usage.full * 100)}% context
-            </span>
-          )}
-        </div>
+      {/* Whenever there is a reading. The tokens go on the hover rather than
+        in the row: `18,606 of 200,000` is the answer to "how much is that",
+        and it is four times the width of the answer to "how full is it". */}
+      {usage !== undefined && (
+        <span
+          title={
+            usage.used === undefined || usage.size === undefined
+              ? "how much of the context window this conversation has spent"
+              : `${usage.used.toLocaleString()} of ${usage.size.toLocaleString()} tokens`
+          }
+          {...stylex.props(typeset.label, styles.full, usage.full >= NEARLY_FULL && styles.warn)}
+        >
+          {Math.round(usage.full * 100)}% context
+        </span>
       )}
     </div>
   );

@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from "electron";
+import { contextBridge, ipcRenderer, webUtils } from "electron";
 import { CH, type Rect, type WebviewMethod } from "../channels";
 
 // The window's one bridge to the main process.
@@ -35,6 +35,20 @@ export interface HostBridge {
   readonly callWebview: (id: number, method: WebviewMethod, argument?: unknown) => void;
   /** Put the keyboard back in this window's web contents. See CH.focus. */
   readonly focusWindow: () => void;
+  /**
+   * Where a dropped file is, on disk.
+   *
+   * The renderer cannot answer this and has not been able to since Electron 32
+   * took `File.path` away: a `File` is a handle to bytes, and the path is a
+   * privilege the page does not have. `webUtils` is the replacement and it is
+   * only reachable from a preload, which is why a drag-and-drop feature needs
+   * a wire at all.
+   *
+   * Empty for anything that is not a real file on this machine — a drag from
+   * inside another web page, a clipboard image. The caller reads that as
+   * "nothing to insert" rather than as a failure.
+   */
+  readonly pathForFile: (file: File) => string;
   /** Every event from every view. Answers with the way to stop listening. */
   readonly onWebviewEvent: (
     listener: (message: {
@@ -51,6 +65,7 @@ const bridge: HostBridge = {
   setWebviewBounds: (id, rect) => ipcRenderer.send(CH.bounds, id, rect),
   callWebview: (id, method, argument) => ipcRenderer.send(CH.call, id, method, argument),
   focusWindow: () => ipcRenderer.send(CH.focus),
+  pathForFile: (file) => webUtils.getPathForFile(file),
   onWebviewEvent: (listener) => {
     const on = (
       _event: unknown,

@@ -14,6 +14,7 @@ import { Chip } from "./Chip";
 import { growth, useGrow } from "./grow";
 import { useOverlay } from "./overlays";
 import { type Face, rememberFaceDefault, rememberedFaceDefault } from "./remembered";
+import { acceptsFiles } from "./dropped";
 import { typeset } from "./typeset";
 import { colors, lift, text, timing } from "./tokens.stylex";
 
@@ -663,6 +664,9 @@ function Composer({
           rows={1}
           placeholder="what are you working on?"
           onChange={(event) => setTyped(event.target.value)}
+          // A brief is regularly about a file somebody is looking at. Dropping
+          // one writes its absolute path in — see `dropped.ts`.
+          {...acceptsFiles(typed, setTyped)}
           onKeyDown={(event) => {
             // Enter sends and shift+enter is a newline, which is the chat
             // convention this box is shaped like — and the same rule the pane

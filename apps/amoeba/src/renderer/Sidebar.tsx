@@ -2,7 +2,7 @@ import type { SessionInfo, Thread, WorkspaceFacts, WorkspaceStatus } from "@awp-
 import * as stylex from "@stylexjs/stylex";
 import { motion } from "motion/react";
 import { pill } from "./springs";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { ArchiveThread } from "./ArchiveThread";
 import { type Facts, factsKey } from "./useFacts";
 import { rememberLooseOpen, rememberedLooseOpen } from "./remembered";
@@ -86,11 +86,6 @@ const factsFor = (facts: Facts, workspace: Workspace): WorkspaceFacts | undefine
 
 const styles = stylex.create({
   column: { display: "flex", flexDirection: "column", height: "100%" },
-  // No padding at the bottom, and that is the sticky footing's doing rather
-  // than a spacing choice: a sticky child is offset from its container's
-  // *padding* box, so a gutter here would leave that much of the column below
-  // the button — with rows visibly scrolling through the gap. The footing
-  // carries the space instead, where it is opaque.
   list: {
     flex: 1,
     minHeight: 0,
@@ -101,7 +96,9 @@ const styles = stylex.create({
     // findable, rather than as a scrollbar, which reads as intentional. See the
     // keyboard-and-layout rules in AGENTS.md.
     overflowX: "hidden",
-    padding: `${space.row} 0 0`,
+    // A gutter at both ends now: the sticky footing used to carry the one at
+    // the bottom, and without it the last row sat flush against the window.
+    padding: `${space.row} 0`,
   },
   empty: { padding: `0.5rem ${space.gutter}`, color: colors.muted },
   failure: {
@@ -197,74 +194,6 @@ const styles = stylex.create({
     color: colors.muted,
     font: "inherit",
     fontSize: text.small,
-    cursor: "pointer",
-  },
-  // ── the new-thread button, and why it is sticky ─────────────────────────
-  //
-  // It has now been in three places, and the two it left are both instructive.
-  //
-  //   inside the list, after the groups   at y=1056 in a 760-tall window: the
-  //                                       entry point to the whole feature,
-  //                                       reachable only by scrolling past
-  //                                       everything it exists to create.
-  //   above the list, fixed               always there, and always the first
-  //                                       thing above a column whose point is
-  //                                       the list. It pushed the work down to
-  //                                       make room for the way to make more.
-  //
-  // Sticky is both at once: it sits at the *end* of the list, where a thing
-  // that appends belongs, and it never leaves the window. A short list shows it
-  // just under the last thread; a long one shows it pinned to the bottom edge
-  // with the rows passing behind.
-  //
-  // `bottom: 0` needs the scroll container to be the ancestor, which is why it
-  // is inside `list` rather than a sibling of it — and why it carries the base
-  // colour. Without an opaque background the rows scroll *through* the button
-  // rather than behind it, which is the one way sticky fails that looks like a
-  // paint bug.
-  //
-  // ── sticky has to *look* sticky, and that is not free ────────────────────
-  // The first version carried a rule above it always, and read as a fixed
-  // footer even though it was not one: measured at the bottom of the list it
-  // sat 8px under the last row, exactly where it belongs — and nobody could
-  // tell, because a permanent border and an opaque band are what chrome looks
-  // like. A sticky element that never changes is indistinguishable from a
-  // fixed one.
-  //
-  // So the rule appears only while it is actually stuck, which CSS cannot ask.
-  // The `stuck` style below is driven by a one-pixel sentinel *after* the
-  // footing: while that is on screen the list is scrolled to its end and the
-  // button is in the flow; the moment it leaves, the button is floating over
-  // rows and says so.
-  footing: {
-    position: "sticky",
-    insetBlockEnd: 0,
-    marginTop: "0.35rem",
-    padding: `0.35rem ${space.gutter} 0.5rem`,
-    backgroundColor: colors.base,
-    borderTopWidth: 1,
-    borderTopStyle: "solid",
-    // Transparent rather than absent, so that gaining the rule does not also
-    // move the button by a pixel.
-    borderTopColor: "transparent",
-    transitionProperty: "border-top-color",
-    transitionDuration: "120ms",
-  },
-  stuck: { borderTopColor: colors.border },
-  /** One pixel after the footing. See `footing`. */
-  sentinel: { height: 1 },
-  newThread: {
-    width: "100%",
-    padding: "0.25rem 0.45rem",
-    backgroundColor: "transparent",
-    borderWidth: 1,
-    borderStyle: "solid",
-    borderColor: colors.border,
-    borderRadius: "0.2rem",
-    color: colors.muted,
-    font: "inherit",
-    fontSize: text.small,
-    textAlign: "left",
     cursor: "pointer",
   },
   // The selected row: a fill *and* an edge, and the edge is the accent.
@@ -951,44 +880,6 @@ function Group({
   );
 }
 
-/**
- * Whether a bottom-sticky element is currently floating rather than in flow.
- *
- * Answered by watching a sentinel placed *after* it: while that pixel is on
- * screen the list is scrolled to its end and the element is exactly where it
- * would be without `position: sticky`; the moment it leaves, the element is
- * over content. CSS has no selector for this, and the alternative — comparing
- * scrollTop to scrollHeight on a scroll handler — asks the same question once
- * per frame instead of once per change.
- *
- * False until the observer has fired. The first paint of a short list is the
- * common case, and a rule that flashes on during mount is worse than one that
- * arrives a frame late.
- */
-const useStuck = (sentinel: { readonly current: HTMLElement | null }): boolean => {
-  const [stuck, setStuck] = useState(false);
-  useEffect(() => {
-    const element = sentinel.current;
-    if (element === null) {
-      return;
-    }
-    const observer = new IntersectionObserver(
-      (entries) => {
-        const entry = entries.at(-1);
-        if (entry !== undefined) {
-          setStuck(!entry.isIntersecting);
-        }
-      },
-      // The scroll container, not the viewport. A null root measures against
-      // the window, which this list is not the size of.
-      { root: element.parentElement },
-    );
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, [sentinel]);
-  return stuck;
-};
-
 export function Sidebar({
   sessions,
   facts,
@@ -997,7 +888,6 @@ export function Sidebar({
   at,
   onSelect,
   onOpen,
-  onNew,
   onThreadsChanged,
   failure,
 }: {
@@ -1012,7 +902,6 @@ export function Sidebar({
   /** Open a workspace that has no session. See Row's own. */
   readonly onOpen: (project: string, workspace: string) => void;
   /** Open the new-thread modal. The window owns it — see App.tsx. */
-  readonly onNew: () => void;
   /** A workspace changed threads, so the list App holds is out of date. */
   readonly onThreadsChanged: () => void;
   readonly failure: string | undefined;
@@ -1038,8 +927,6 @@ export function Sidebar({
     (workspace) => factsFor(facts, workspace)?.status,
     when,
   );
-  const sentinel = useRef<HTMLDivElement | null>(null);
-  const stuck = useStuck(sentinel);
   const [looseOpen, setLooseOpen] = useState(rememberedLooseOpen);
 
   // The two states of the column, chosen before the markup rather than inside
@@ -1087,30 +974,7 @@ export function Sidebar({
 
   return (
     <div {...stylex.props(styles.column)}>
-      <div {...stylex.props(styles.list)}>
-        {body}
-
-        {/* Last in the list and pinned to its bottom — see `footing`.
-
-            Never disabled. It used to be, because the project came from the
-            selected row and nothing selected meant nothing to create into; the
-            modal picks a project instead, so the button always has an answer. */}
-        {failure === undefined && (
-          <>
-            <div {...stylex.props(styles.footing, stuck && styles.stuck)}>
-              <button
-                type="button"
-                title="new thread (⌘N)"
-                onClick={onNew}
-                {...stylex.props(styles.newThread)}
-              >
-                + thread
-              </button>
-            </div>
-            <div ref={sentinel} aria-hidden {...stylex.props(styles.sentinel)} />
-          </>
-        )}
-      </div>
+      <div {...stylex.props(styles.list)}>{body}</div>
     </div>
   );
 }

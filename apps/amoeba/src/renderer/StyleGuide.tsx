@@ -12,7 +12,7 @@ import type { ChatConfigOption } from "@awp-kit/protocol";
 import { Transcript, Working } from "./Chat";
 import { Chip } from "./Chip";
 import { type Command, agentCommands } from "@awp-kit/protocol/commands";
-import { Composer } from "./Composer";
+import { Composer, SessionBar } from "./Composer";
 import type { Item } from "./conversation";
 import { AA_TEXT, channels, hexOf, ratio, verdict } from "./contrast";
 import { Markdown } from "./Markdown";
@@ -1220,6 +1220,13 @@ export function StyleGuide() {
                     working={stopping}
                     onCommand={(command) => setDraft(`${command.name} would run here`)}
                     theirs={THEIRS}
+                  />
+                  {/* Its own component and its own specimen, because it is its
+                      own element in the window now — the bar along the bottom
+                      of the chat, under the floating card rather than part of
+                      it. Drawn here so the page does not show a composer this
+                      window no longer has. */}
+                  <SessionBar
                     config={OPTIONS}
                     onSetOption={(option, value) => setDraft(`${option} → ${value}`)}
                     usage={{ full: 0.62, used: 124_000, size: 200_000 }}

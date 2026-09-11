@@ -2175,6 +2175,54 @@ reading the source:
   grep -oE "[;{]border:[^;}]*" apps/amoeba/dist/renderer/assets/*.css
 ```
 
+## A dropped file's path is the preload's to answer
+
+Dragging a file onto a text box writes its absolute path in. Two things about
+that are not obvious, and both are the reason it needed a wire rather than a
+handler.
+
+**`File.path` is gone.** Electron removed it in 32; a `File` in the renderer is
+a handle to bytes and the path is a privilege the page does not have.
+`webUtils.getPathForFile` is the replacement and it is reachable only from a
+preload — so `pathForFile` is on the host bridge, and in a plain browser it is
+simply absent. `droppedPaths` answers `[]` there, which every caller reads as
+"nothing to insert".
+
+**A drop nobody handles navigates the window.** Chromium's default for a file
+dropped on a page is to open it, which replaces the renderer with a picture of
+somebody's screenshot and leaves no way back but a reload. A drop target is one
+that _cancels_ `dragover`, so the cancel is what makes the feature safe as much
+as what makes it work — and `main.tsx` cancels both events at `window` for
+every pixel that is not a box, because the failure of forgetting one is not a
+drop that does nothing.
+
+```
+  a composer, the brief   acceptsFiles(value, onValue)   spliced in at the caret
+  the pane                the bytes go down the pty       as though typed
+  anywhere else           cancelled at `window`           and nothing happens
+```
+
+**The path goes in raw, spaces and all.** Quoting it when it contained
+whitespace was the first answer — the `sh` spelling, on the argument that the
+text is going to an agent that will `cat` it — and it was asked to come out
+again. That is the right call: what reads this is a person or a model, and
+`'/Users/…/Screen Shots/b.png'` in the middle of a sentence is punctuation
+from a language nobody here is writing.
+
+`spliced` is a function rather than a template literal at each site for the
+four ways a separator can be wrong: both ends of the text, and both sides
+already spaced.
+
+Driven in a real browser with the bridge stubbed, which is the only half a
+browser cannot supply:
+
+```
+  caret in the middle   "look at |this"
+  drop                  "look at /Users/…/shots/a.png this"   caret at 34
+  a name with spaces    "… /Users/…/Screen Shots/b b.png this"
+  a stray drop          prevented true · navigated false
+```
+
 ## The window is an app, not a page
 
 Two rules that hold everywhere in the renderer:
@@ -2615,6 +2663,64 @@ off the bottom — which is the usual way a flex column grows the scrollbar
 The footer says nothing when there is nothing to say. A status bar that always
 reads `0 running · 0 failed` teaches the eye to skip it, which costs exactly the
 one moment it exists for.
+
+## The left column is a menu and a list, not two tabs
+
+`work` and `inbox` used to sit beside each other as a pair of tabs, which said
+the column held two lists of the same kind. It does not: the threads **are**
+this column — they fill it, they are what is selected, they are what the
+address points at — and the inbox is a list of work happening elsewhere that
+somebody opens on purpose. A tab strip made the second one cost the first its
+whole column, and made the first one look like a mode.
+
+```
+  ⊕  new thread                    ⌘N
+  ⊟  inbox
+  ─────────────────────────────────────
+  ▸ tabular exports
+      rowan · agent
+```
+
+**The `+ thread` button at the foot of the strip went with it**, along with the
+sticky footing, its sentinel and the `IntersectionObserver` that told the two
+apart. It was the only way to make a workspace from this window and it is now
+the first line of the menu, which is where somebody looks for it — a second
+copy at the other end of the same column is two controls for one act.
+
+**The inbox opens over the window.** A pull request row carries a number, a
+title, a project, an author, a branch, a stack guide and up to three chips, and
+in 260px the title is what truncates — the one field that cannot be
+reconstructed from the others. The accessory column was the other candidate and
+is wrong for the reason the tabs' own comment gave: that column is about the
+thing already on screen, and the inbox is about everywhere else. So it is
+modal, bounded at 56rem rather than the whole window — a row's action sits at
+its right edge, and every rem past what the titles need is distance between the
+thing read and the thing pressed.
+
+**Nothing counts it.** A badge reading "3 to review" is the obvious next thing
+and is deliberately absent: the count is a `gh` call per project, seconds each,
+and a row that is always on screen would pay for it whether or not anybody
+asked. The rows are fetched when the dialog mounts, which is the promise
+`useInbox` was written around — and the atoms are what make a second open show
+the last answer at once.
+
+**Not remembered across launches**, unlike the tab it replaces. A tab is where
+the column was left standing; this is a window somebody opened, and one that
+came back by itself on launch would answer a question nobody had asked.
+
+**The dialog is App's, and a folded sidebar is what said so.** It was held in
+`LeftColumn` for a few minutes, which is wrong for a reason the fold makes
+plain: that column is `inert` and zero pixels wide while it is closed, so an
+overlay owned by it is an overlay whose owner is not on screen — and the one
+way to reach it went with the column. `NewThread` has always been App's, and
+that is the shape: **a modal belongs to the window, and the control that opens
+it belongs to whichever column has room for it.**
+
+`⌘I` lives beside `⌘N` for the same reason — the menu item is the discoverable
+half and the chord is the half that still works with the column folded away.
+It toggles, where `⌘N` and `⌘P` only open: those two hold something somebody is
+part way through typing, so pressing again means "make sure", and this holds a
+list, so pressing again means "put it away". Nothing in `menu.ts` claims I.
 
 ## Debug tools live in the accessory column
 
@@ -5489,6 +5595,97 @@ here before:
   border-top-color:color-mix(in oklab, …55%…)
   rgba(255, 255, 255, 0.68) · rgba(20, 21, 32, 0.62)
 ```
+
+### The dock stacks; only the composer floats
+
+The dock began as one absolutely positioned block over the transcript holding
+three things — the activity ledge, the composer card and the session's chips —
+and the scroller was the full height of the column with all three standing on
+its bottom padding. Two complaints came out of that, and they are one cause.
+
+```
+  before  ┌ chat ─────────────────┐   after  ┌ chat ─────────────┐
+          │ scroller (full height)│         │ stage  flex:1     │
+          │ ┌ dock ─ absolute ──┐ │         │   scroller        │
+          │ │ ⠹ activity        │ │         │   ┌ dock ───────┐ │ ← floats
+          │ │ say something…  ↑ │ │         │   │ ⠹ · box   ↑ │ │
+          │ │ Manual · 62%      │ │         │   └─────────────┘ │
+          │ └───────────────────┘ │         ├───────────────────┤
+          └───────────────────────┘         │ Manual · Opus · % │ ← the bottom
+                                            └───────────────────┘
+```
+
+**The scrollbar was the first tell** — "goes off screen and is a little stuck
+at the bottom". These are classic always-present scrollbars (`global.css`
+styles `::-webkit-scrollbar`, which is what turns off the overlay kind), so the
+track is the scroller's own height: it ran on behind the composer _and_ the
+chips, and the thumb could never reach a visible bottom. The fix is the
+stacking rather than a rule about scrollbars — the scroller's box now ends
+where the bar begins, so the track ends there too, and the floating card is
+inset 1rem against an 11px scrollbar, so the thumb runs in the gutter beside it.
+
+**The dock is `absolute` against a `stage`, not against the column.** That is
+what stacks the two without either measuring the other: `bottom: 0` for the
+dock _is_ the top of the bar. `SessionBar` is its own export for that — the
+style guide draws both, so the page still shows what the window has.
+
+**The clearance was an accident before, and had to be made deliberate.** The
+scroller's bottom padding is the dock's measured height, which clears the card
+_exactly_ — the last line stops on its top edge. That read as the message being
+behind the composer, and it is; a card with a blur and a shadow needs text to
+stop short of it. It used to get the slack from the chips, which were inside
+the dock and had nothing drawn over them. `calc(<dock>px + 1.25rem)` now, the
+transcript's own gutter, so the column has one margin rather than three numbers
+that nearly agree.
+
+**The glass ended up on the input, not around it.** Three asks in a row — the
+outer card transparent, then its blur off too, then "the composer text input
+can keep the blur and bg" — and together they say where a material belongs: on
+the thing somebody reads and types into, not on the region around it. A
+full-width pane of glass is a surface, and a surface with a control on it is a
+footer.
+
+That left the outer element with a `display` and nothing else, at exactly its
+only child's width — an invisible rectangle anyone inspecting the composer had
+to step past, and reported as one. Merging it into the card is what removed it.
+**A `return` may hold one node, not a comment and a node:** the JSX comment
+above that wrapper became a second root the moment its parent went, and `tsc`
+reports that as a missing `)` on the line _after_ it.
+
+### Two thresholds, and they must not be one
+
+`⌄` appears on the ledge's right when the reader is a long way from the tail.
+The interesting part is the pair of numbers behind it.
+
+```
+  LEASH  120   still being followed — content arriving takes you with it
+  AWAY   500   far enough to be offered a way back
+```
+
+They were briefly **one** number, deliberately: with `AWAY` below `LEASH` there
+is a band where the reader is far enough to be offered the button and near
+enough to still be followed, so an arriving message takes them to the bottom
+and the button leaves on its own. That reasoning is right and the repair was
+wrong, because the button lives on the ledge — so `away` turning over opens and
+closes that row, which changes the dock's height, which changes the scroller's
+padding, and the row's height spring calls `followIfStuck` on **every frame**.
+
+With the two equal, scrolling back down crossed both at once: the row closed
+while the reader was inside the leash, and the closing animation pinned them to
+the bottom for its whole duration. Reported as "the scroll is getting stuck at
+bottom briefly when there is no turn active" — no turn, because the ledge
+moving under them was the button's and not an agent's.
+
+So the rule is not the number: **`AWAY` must exceed `LEASH` by more than the
+ledge is tall**, or the control's own arrival moves a reader who is still being
+followed. Checked in both directions for chatter — crossing 500 upward opens
+the row and pushes the distance to ~540, downward closes it and drops to ~460,
+monotone away from the threshold either way.
+
+`away` is state where `stuck` is a ref, and that asymmetry is the point: one is
+drawn and the other is only consulted. They are written together on a scroll
+and never derived from one another — `stuck` deliberately survives content
+arriving, which is the whole of why it is not recomputed then.
 
 ### The caret was on the wrong row, and it looked random
 

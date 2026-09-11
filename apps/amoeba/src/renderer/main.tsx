@@ -38,6 +38,25 @@ if (place !== undefined && (globalThis.location.hash === "" || globalThis.locati
   globalThis.location.hash = place;
 }
 
+// ── a drop that lands nowhere must not navigate the window ────────────────
+//
+// Chromium's default for a file dropped on a page is to open it — which here
+// means replacing the whole renderer with a picture of somebody's screenshot,
+// with no way back but a reload and nothing on screen saying what happened.
+// The boxes that *do* take a drop cancel it themselves; this is every other
+// pixel of the window, and it is a guard rather than a feature.
+//
+// On `window` in the bubble phase, so it is the last thing to see the event.
+// The boxes that take a drop have already acted by then and `preventDefault`
+// costs nothing said twice — which is why they are not asked to stop
+// propagation as well: a drop this never sees is a drop a box would have to
+// remember to suppress.
+for (const name of ["dragover", "drop"] as const) {
+  globalThis.addEventListener(name, (event) => {
+    event.preventDefault();
+  });
+}
+
 const root = document.getElementById("root");
 if (root === null) {
   throw new Error("no #root — index.html and main.tsx disagree");

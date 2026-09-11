@@ -14,6 +14,7 @@ import {
 import * as stylex from "@stylexjs/stylex";
 import { useEffect, useRef, useState } from "react";
 import { type Attachment, attach, resize, write } from "./daemon";
+import { droppedPaths } from "./dropped";
 import { currentColorScheme } from "./theme";
 import { colors, space } from "./tokens.stylex";
 
@@ -184,5 +185,33 @@ export function Pane({
     return <pre {...stylex.props(styles.failure)}>{failure}</pre>;
   }
 
-  return <div ref={container} {...stylex.props(styles.backdrop(paletteFor(scheme).base))} />;
+  return (
+    <div
+      ref={container}
+      // ── a file dropped on a terminal is its path ────────────────────────
+      //
+      // What Terminal.app and every emulator on this machine do, and what the
+      // window has to do itself: the emulator draws on a canvas and knows
+      // nothing about a drag, and without the cancel below Chromium navigates
+      // the whole window to the dropped file — which replaces the renderer
+      // with a picture of somebody's screenshot.
+      //
+      // Typed rather than inserted, because there is no box to insert into:
+      // the bytes go down the same wire a keystroke does, so whatever is at
+      // the prompt receives them exactly as though they had been typed.
+      onDragOver={(event) => {
+        event.preventDefault();
+      }}
+      onDrop={(event) => {
+        event.preventDefault();
+        const paths = droppedPaths(event.dataTransfer);
+        if (session === undefined || paths.length === 0) {
+          return;
+        }
+        write(session, `${paths.join(" ")} `);
+        focusPane();
+      }}
+      {...stylex.props(styles.backdrop(paletteFor(scheme).base))}
+    />
+  );
 }
