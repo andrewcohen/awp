@@ -1,4 +1,4 @@
-import { BrowserWindow, Menu } from "electron";
+import { BrowserWindow, Menu, app } from "electron";
 import type { MenuItemConstructorOptions } from "electron";
 
 // The Edit menu, which is not a menu.
@@ -85,7 +85,12 @@ const acting = (window: BrowserWindow): BrowserWindow | undefined => {
 export const installMenu = (window: BrowserWindow): void => {
   const template: Array<MenuItemConstructorOptions> = [
     {
-      label: "amoeba",
+      // `app.name` rather than the word, which is `productName` out of the
+      // app's own package.json. macOS draws this item from the running
+      // application either way — a literal here is a second answer that can
+      // disagree with the bundle's, and the one that drifts is the copy
+      // nobody looks at.
+      label: app.name,
       submenu: [
         { role: "about" },
         { type: "separator" },

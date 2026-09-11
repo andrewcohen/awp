@@ -153,7 +153,11 @@ const styles = stylex.create({
   card: {
     display: "flex",
     flexDirection: "column",
-    paddingBlock: "0.55rem 0.6rem",
+    // The leading number is half the gap between the activity ledge and this
+    // box — the other half is the pill's own bottom margin, and halving one
+    // without the other halves nothing much. It is also the dock's top inset
+    // with no ledge up, which is the same distance and wants to agree.
+    paddingBlock: "0.275rem 0.6rem",
     paddingInline: "1rem",
   },
   /**
@@ -272,15 +276,6 @@ const styles = stylex.create({
   },
   /** Present and plainly unavailable, rather than gone. */
   shut: { backgroundColor: colors.border, color: colors.muted, cursor: "default" },
-  /**
-   * The same button, stopping instead of sending.
-   *
-   * `warn` and not the accent: stopping is not the ordinary act, and the
-   * two states have to be told apart at a glance by somebody whose eyes
-   * are on the transcript. It also keeps the accent's count honest — see
-   * AGENTS.md on where the accent is spent.
-   */
-  stop: { backgroundColor: colors.warn, color: colors.base },
   /** The glyph itself, so it can be swapped under the button. */
   icon: { display: "flex", alignItems: "center", justifyContent: "center" },
   /**
@@ -575,7 +570,17 @@ export const Composer = ({
 
               `AnimatePresence` with a shared spring, so the arrow and the
               square trade places by scale rather than by swapping glyphs
-              between frames. */}
+              between frames.
+
+              **The glyph carries the distinction, and the colour does not.**
+              The stop was `warn`, on the argument that stopping is not the
+              ordinary act and the two states have to be told apart by
+              somebody whose eyes are on the transcript. The button stays the
+              accent through both — a red circle appearing where the send
+              was reads as something having gone wrong, which is not what an
+              interruption somebody asked for is. An arrow and a square are
+              already two silhouettes, and they are the thing the eye lands
+              on at this size. */}
           <button
             type="button"
             data-nav-item
@@ -587,11 +592,7 @@ export const Composer = ({
                   ? "say something first"
                   : "send (return)"
             }
-            {...stylex.props(
-              styles.send,
-              working && styles.stop,
-              !working && draft.trim() === "" && styles.shut,
-            )}
+            {...stylex.props(styles.send, !working && draft.trim() === "" && styles.shut)}
             onClick={working ? onStop : onSend}
             disabled={!working && draft.trim() === ""}
           >

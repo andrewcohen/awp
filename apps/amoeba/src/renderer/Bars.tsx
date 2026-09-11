@@ -83,6 +83,11 @@ const styles = stylex.create({
   /** The two faces, as one segmented control rather than two buttons. */
   faces: {
     display: "flex",
+    // Never squashed to make room for a name. With the title free to shrink,
+    // flexbox would otherwise take it out of both in proportion to their base
+    // sizes — and a bar that narrows its controls to fit a title has lost the
+    // thing it was for. Same argument as the counts.
+    flexShrink: 0,
     borderStyle: "solid",
     borderWidth: 1,
     borderColor: colors.border,
@@ -208,12 +213,26 @@ const styles = stylex.create({
     whiteSpace: "nowrap",
   },
   // The header's two halves, as one line that can be clipped from the right.
-  // `minWidth: 0` with the `flex`, or a long title pushes the counts off the
+  // `minWidth: 0` with the shrink, or a long title pushes the counts off the
   // bar rather than being ellipsised — the pair AGENTS.md names.
+  //
+  // ── and it grows by nothing, which is the half that was wrong ────────────
+  //
+  // This was `flex: 1`, and so is the spacer that follows it. Two items with
+  // `flex-basis: 0` share *all* the free space equally, so the title was given
+  // exactly half the bar however long the bar was, and ellipsised inside it
+  // while the other half sat empty:
+  //
+  //   flex: 1        awp/experimental rewrite fro…          (half the row)
+  //   flex: 0 1 auto awp/experimental rewrite from a clean slate
+  //
+  // A title is content and the spacer is the thing that takes what is left, so
+  // only one of the two may grow. Shrink stays: a title longer than the row is
+  // still the one field here that is allowed to be clipped.
   named: {
     display: "flex",
     alignItems: "baseline",
-    flex: 1,
+    flex: "0 1 auto",
     minWidth: 0,
     // No gap. The slash is the separator, and space either side of it would
     // make it a third thing on the line rather than the join between two.

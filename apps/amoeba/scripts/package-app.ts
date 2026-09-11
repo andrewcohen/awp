@@ -35,6 +35,15 @@ const out = join(app, "build");
 
 const manifest = await Bun.file(join(app, "package.json")).json();
 
+// The name macOS shows, and the one place it is written. `name` stays the
+// lowercase package identifier — npm's rules are not Finder's.
+const product: string = manifest.productName;
+
+// Built from `assets/icon.svg` by `scripts/build-icon.ts`, and passed without
+// its extension: packager appends the one the platform wants, so the same line
+// is right when this ever produces something other than a `.app`.
+const icon = join(app, "assets", "icon");
+
 await rm(stage, { recursive: true, force: true });
 await mkdir(stage, { recursive: true });
 await cp(dist, stage, { recursive: true });
@@ -43,7 +52,7 @@ await writeFile(
   `${JSON.stringify(
     {
       name: "amoeba",
-      productName: "amoeba",
+      productName: product,
       version: manifest.version,
       description: "agent work platform",
       main: "electron/main.js",
@@ -59,8 +68,9 @@ await writeFile(
 const made = await packager({
   dir: stage,
   out,
-  name: "amoeba",
+  name: product,
   appBundleId: "dev.awp.amoeba",
+  icon,
   appVersion: manifest.version,
   overwrite: true,
   // Nothing is signed. Signing is a decision about distribution and needs an

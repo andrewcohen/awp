@@ -8,6 +8,7 @@
     "dev:renderer": "vite",
     "build:renderer": "vite build",
     "build:electron": "bun run scripts/build-electron.ts",
+    "build:icon": "bun run scripts/build-icon.ts",
     "dev": "bun run build:electron && AMOEBA_DEV_SERVER=http://127.0.0.1:5273 electron .",
     "build": "vite build && bun run build:electron",
     "start": "bun run build && electron .",
@@ -48,5 +49,6 @@
     "babel-plugin-react-compiler": "1.0.0",
     "electron": "44.0.0",
     "vite": "8.2.2"
-  }
+  },
+  "productName": "Amoeba"
 }

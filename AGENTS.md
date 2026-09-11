@@ -5710,8 +5710,14 @@ with no way to interrupt an agent short of the terminal. One button rather
 than two: an empty draft's disabled send is exactly the moment a stop is
 wanted, and the arrow and the square trade places on a spring.
 
-`warn` and not the accent, so the two states are told apart by somebody
-whose eyes are on the transcript — and so the accent's count stays honest.
+**The glyph is what tells the two apart, not the colour.** It was `warn`
+first, on the argument that stopping is not the ordinary act and the states
+have to be distinguishable by somebody whose eyes are on the transcript. That
+is the wrong sentence for the colour to be saying: a red circle appearing
+where the send was reads as _something has gone wrong_, and an interruption
+somebody asked for is not that. The button is the accent through both, and an
+arrow against a square is already two silhouettes — which is what the eye
+lands on at 1.6rem, before any hue.
 
 ### The row that is running has to look like it
 

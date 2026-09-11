@@ -854,7 +854,7 @@ export const Working = ({ doing }: { readonly doing?: string | undefined }) => {
   // `thinking` is the honest word for a turn with no call in flight, which
   // is a real and common state: the model is composing, and the row that
   // said `working` said nothing the spinner did not.
-  const latest = doing === undefined || doing === "" ? "thinking" : doing;
+  const latest = doing === undefined || doing === "" ? THINKING : doing;
   /**
    * What is actually drawn, which is the latest activity once it has held
    * still for a moment.
@@ -875,7 +875,27 @@ export const Working = ({ doing }: { readonly doing?: string | undefined }) => {
   const [say, setSay] = useState(latest);
   useEffect(() => {
     if (say === latest) return;
-    const settle = setTimeout(() => setSay(latest), SETTLING);
+    // ── an absence has to hold for longer than a change does ───────────────
+    //
+    // Reported as the width still moving more than it should, and the debounce
+    // above was not what was wrong: measured in a browser, the pill holds one
+    // width across thirty frames, so neither the turning mark nor the clock
+    // moves it. What moves it is `doing` itself, between two calls.
+    //
+    // A turn is calls with gaps in it — one finishes, the model composes, the
+    // next starts — and every gap is an activity of its own. So a run of work
+    // read:
+    //
+    //   read a file ── thinking ── Check the types ── thinking ── grep …
+    //     wide           narrow         wide            narrow     wide
+    //
+    // Two width changes per call rather than one, and the narrow one says
+    // nothing: `thinking` between two calls is not a reading, it is the space
+    // between two readings. Held for {@link QUIET} it only ever appears when
+    // the agent has genuinely stopped to compose, which is the one time it is
+    // worth saying — and the mark keeps turning throughout, so the line is
+    // never claiming to be still.
+    const settle = setTimeout(() => setSay(latest), latest === THINKING ? QUIET : SETTLING);
     return () => clearTimeout(settle);
   }, [latest, say]);
   // The pill is as wide as its words, and the words change every few seconds.
@@ -985,6 +1005,21 @@ const WORTH_SAYING = 10;
  * a movement takes, and this is how long to wait before starting one.
  */
 const SETTLING = 220;
+
+/** What the line says when a turn has no call in flight. */
+const THINKING = "thinking";
+
+/**
+ * How long a turn has to go quiet before the line says so, in ms.
+ *
+ * Longer than {@link SETTLING}, and deliberately: a change between two
+ * activities is something happening, where this is something *not* happening,
+ * and the gap between two tool calls is the ordinary shape of a turn rather
+ * than a state anybody wants reported. Long enough to swallow the pause
+ * between one call and the next, short enough that a model composing for a
+ * while is not left claiming to be reading a file.
+ */
+const QUIET = 900;
 
 /**
  * How far from the bottom still counts as reading the tail, in pixels.
@@ -2150,8 +2185,13 @@ const styles = stylex.create({
     maxWidth: "100%",
     // Close to the composer: this is a label *about* the box below it, and a
     // gap the size of the transcript's own makes it read as the last row of
-    // the conversation instead.
-    margin: "0.1rem 0 0.3rem",
+    // the conversation instead. Halved once already, on exactly that reading —
+    // and the gap is two numbers, not one: this margin and the card's own top
+    // padding, which is the other half of what is between them.
+    //
+    //   before  0.3rem + 0.55rem = 0.85rem   13.6px
+    //   after   0.15rem + 0.275rem           6.8px
+    margin: "0.1rem 0 0.15rem",
     padding: "0.3rem 0.7rem",
     // Fully round, so it reads as a marker on the page rather than as a small
     // panel — every other rounded thing in this window is a control.

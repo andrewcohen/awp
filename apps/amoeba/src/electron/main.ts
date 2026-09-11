@@ -18,8 +18,9 @@
 // is a child of the window cannot outlive it, and the whole point of zmx owning
 // the sessions is that closing a window is not the same as ending the work.
 
+import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { BrowserWindow, app, shell } from "electron";
+import { BrowserWindow, app, nativeImage, shell } from "electron";
 import { installMenu } from "./menu";
 import { RENDERER_URL, declareScheme, serveRenderer } from "./protocol";
 import { forgetWindow, installWebviews } from "./webviews";
@@ -44,9 +45,50 @@ const rendererUrl = (): string => {
 // Declared before `app.ready`, which is the only moment Electron accepts it.
 declareScheme();
 
+/**
+ * The dock icon, in development only.
+ *
+ * A packaged app takes its icon from the bundle and this would be a second
+ * answer to a question already settled — `packager` is handed the same art,
+ * out of the same SVG. `bun run dev` has a bundle of its own now too, cloned
+ * by `scripts/dev-bundle.ts`, because the dock's *name* has no runtime call
+ * and the icon may as well come from the same place as the name.
+ *
+ * What is left is a bare `electron .`, which runs Electron's own bundle and
+ * shows its atom on somebody else's application's behalf. That is the one
+ * caller this still answers for.
+ *
+ * PNG rather than the `.icns`: `nativeImage` reads PNG and JPEG, and an
+ * `.icns` handed to it comes back empty rather than failing — which would be
+ * a dock icon silently unchanged, the shape of failure AGENTS.md keeps
+ * recording. `isEmpty()` is the reader, so a missing file says so.
+ */
+const dressTheDock = (): void => {
+  if (app.isPackaged || app.dock === undefined) {
+    return;
+  }
+  // `dist/electron/` → the app directory, where `assets/` is. Only true in
+  // development, which is the only place this runs.
+  const png = resolve(here, "..", "..", "assets", "icon.png");
+  if (!existsSync(png)) {
+    console.error(`[amoeba] no dock icon at ${png} — run \`bun run build:icon\``);
+    return;
+  }
+  const image = nativeImage.createFromPath(png);
+  if (image.isEmpty()) {
+    console.error(`[amoeba] the dock icon at ${png} did not decode`);
+    return;
+  }
+  app.dock.setIcon(image);
+};
+
 const create = (): BrowserWindow => {
   const window = new BrowserWindow({
-    title: "amoeba",
+    // What the Window menu and the app switcher say. `hiddenInset` keeps a
+    // real title bar — see below — so this is a standard window with a title
+    // nobody sees drawn, which is exactly what a tiling window manager picks
+    // windows out by.
+    title: app.name,
     x: 100,
     y: 100,
     width: 1200,
@@ -243,6 +285,7 @@ if (!app.requestSingleInstanceLock()) {
   });
 
   void app.whenReady().then(() => {
+    dressTheDock();
     // `dist/electron/main.js` sits beside the renderer's own output.
     serveRenderer(resolve(here, "..", "renderer"));
     installWebviews(join(here, "preload-guest.cjs"));
