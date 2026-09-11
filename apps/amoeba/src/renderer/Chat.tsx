@@ -1284,10 +1284,20 @@ const Tool = ({
           type="button"
           data-nav-item
           disabled={!holds}
-          // The whole of it, for the one that was clipped. A tooltip costs no
-          // pixels until it is asked for, which is the trade every address in
-          // this window makes.
-          title={item.title}
+          // ── no tooltip ────────────────────────────────────────────────────
+          //
+          // It carried the whole title — for a Bash call that is the command
+          // in full, heredoc and all. The trade every other address in this
+          // window makes is that a tooltip costs no pixels until it is asked
+          // for, and here it is not asked for: the pointer crosses these rows
+          // on its way to the composer, so forty lines of somebody's script
+          // appeared over the transcript on the way past. Reported as "remove
+          // the tool use hover tooltip that has the full tool log its
+          // distracting".
+          //
+          // Nothing is lost that cannot be reached: a row with anything held
+          // back is a disclosure, and pressing it shows the command in full
+          // under the title — deliberately, not incidentally. See `holds`.
           onClick={() => setOpen((was) => !was)}
           {...stylex.props(styles.command)}
         >
@@ -1920,6 +1930,18 @@ const styles = stylex.create({
     // a 976px cell, which is the full-width bar this was meant to stop being.
     // `align-self` is the property that actually answers it.
     alignSelf: "flex-start",
+    // ── a ceiling, and the words give ────────────────────────────────────
+    //
+    // A purpose is a sentence the agent wrote, and some of them are long: at
+    // its natural width the pill grew into a bar again, which is the thing it
+    // stopped being. 420px is about as much as is read at a glance on this
+    // strip, and past it the activity clips — `rolling` is already a one-line
+    // window with `overflow: hidden`, and `doing` already ends in an ellipsis.
+    //
+    // `min()` because the cap must not beat the column: the agent panel floors
+    // at a few hundred pixels, and a fixed 420 there is a pill wider than the
+    // thing holding it.
+    maxWidth: "min(420px, 100%)",
     // Close to the composer: this is a label *about* the box below it, and a
     // gap the size of the transcript's own makes it read as the last row of
     // the conversation instead.
@@ -1976,6 +1998,11 @@ const styles = stylex.create({
     display: "inline-flex",
     alignItems: "center",
     height: "1.25em",
+    // The one part that gives when the pill is at its ceiling. `minWidth: 0`
+    // is the half that matters: a flex item will not shrink below its content
+    // without it, so the sentence would push the elapsed count out instead of
+    // clipping.
+    flexShrink: 1,
     minWidth: 0,
     overflow: "hidden",
   },
@@ -2016,7 +2043,9 @@ const styles = stylex.create({
   /** The turning frame, in the accent, leading the line. */
   turningWord: { color: colors.accent, fontFamily: text.mono },
   /** How long the turn has been going. Tabular, so it does not jitter. */
-  since: { fontVariantNumeric: "tabular-nums", opacity: 0.75 },
+  // Never clipped: it is four characters, and a half-drawn duration is worse
+  // than none. The activity is what gives — see `rolling`.
+  since: { flexShrink: 0, fontVariantNumeric: "tabular-nums", opacity: 0.75 },
   stopped: { color: colors.muted },
   /** The command in full, when the row showed one line of it. */
   whole: {

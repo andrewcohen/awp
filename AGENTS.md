@@ -5380,13 +5380,41 @@ one change, not a style on top of an existing one.
   ┌──────────────────────────────┐
   │ transcript                   │   the scroller, full height
   │ ~~~ the tail, blurred ~~~~~~ │   ← runs UNDER the dock
-  │ ⠹  Check the types     2m14s │   ledge    ┐
+  │ ⟨ ⠹ Check the types  2m14s ⟩ │   pill     ┐
   │ ┌──────────────────────────┐ │            │ the dock: absolute,
   │ │ say something…        ↑  │ │   card     │ inset-inline 0, bottom 0
   │ └──────────────────────────┘ │            │
   │  Manual  Opus  62% context   │   strip    ┘
   └──────────────────────────────┘
 ```
+
+**The activity is a pill, not a band.** It was the full width of the column,
+which drew a second horizontal register above the composer and made the dock
+two stacked slabs — and what the line actually is is one short sentence about
+what is happening right now. So the strip is only the clipping box the height
+spring needs, and the glass is on the words.
+
+`inline-flex` is **not** what makes it hug: a flex item's display is
+blockified, so inside the strip — and inside the style guide's own specimen
+cell — it becomes `flex` and stretches. Measured at 939px in a 976px cell,
+which is the bar it was meant to stop being. `align-self: flex-start` is the
+property that answers it.
+
+**And it has a ceiling**, because a purpose is a sentence the agent wrote and
+some of them are long:
+
+```
+  short   270px                    at its own width
+  long    420px, ellipsised        max-width: min(420px, 100%)
+                                              └─ the cap must not beat the
+                                                 column, which floors at a
+                                                 few hundred pixels
+```
+
+The activity is the one part that gives — `flex-shrink` with `minWidth: 0`,
+without which a flex item will not shrink below its content and the elapsed
+count is what gets pushed out instead. The count itself never clips: it is
+four characters, and half a duration is worse than none.
 
 **The scroller's bottom padding is the dock's measured height**, through a
 `ResizeObserver` rather than a constant. The dock is one to four rows tall
