@@ -5259,9 +5259,9 @@ a glow, and a glow reads as a state rather than as height.
                       the keys at mount enters still, because Base UI
                       unmounts a hidden tab and a glance at the diff would
                       otherwise spring forty rows
-  the running call    a turning braille mark, the same frames the TUI turns,
-                      plus a slow band of light across the row — the mark is
-                      one cell and cannot catch an eye reading three rows up
+  the running call    a turning braille mark, the same frames the TUI turns.
+                      It had a band of light across the row too — removed,
+                      see below
   the working line    what the agent is doing this second, rolling as it
                       changes, and an elapsed count past ten seconds. A
                       still word is the same picture as a dead adapter
@@ -5400,21 +5400,37 @@ cell — it becomes `flex` and stretches. Measured at 939px in a 976px cell,
 which is the bar it was meant to stop being. `align-self: flex-start` is the
 property that answers it.
 
-**And it has a ceiling**, because a purpose is a sentence the agent wrote and
-some of them are long:
-
-```
-  short   270px                    at its own width
-  long    420px, ellipsised        max-width: min(420px, 100%)
-                                              └─ the cap must not beat the
-                                                 column, which floors at a
-                                                 few hundred pixels
-```
+**It carried a 420px ceiling for a while, and the ceiling came off.** Clipping
+a long purpose to keep the pill short costs the half of the sentence that says
+what the agent is doing, on the one line whose whole job is to say it. The cap
+is the column — `max-width: 100%` — and a sentence that will not fit there
+still clips.
 
 The activity is the one part that gives — `flex-shrink` with `minWidth: 0`,
 without which a flex item will not shrink below its content and the elapsed
 count is what gets pushed out instead. The count itself never clips: it is
 four characters, and half a duration is worse than none.
+
+**The width is animated, and the activity is debounced.** Those are one
+finding from two directions. `read a file` and `Find who provides the worker
+pool` are a hundred pixels apart, so a snapped width is an edge jumping beside
+the composer every time the agent moves on — `layout="size"` on a spring, and
+**size** rather than a full `layout` because the pill sits in a dock anchored
+to the bottom of the column, where a layout animation would also animate the
+position it is already being held at.
+
+And an agent reading six files answers six calls inside a second:
+
+```
+  before   read a ─ Find who ─ Check ─ grep ─ read b ─ Write    six springs
+  after    ·······················  Write                       one, at the end
+           └─ 220ms of stillness
+```
+
+Trailing, so a burst paints once with whatever is still going. The cost is
+deliberate and is the other half of it: a call that finishes inside `SETTLING`
+is never drawn at all, and a reading nobody could have read is not worth the
+movement.
 
 **The scroller's bottom padding is the dock's measured height**, through a
 `ResizeObserver` rather than a constant. The dock is one to four rows tall
@@ -5517,15 +5533,12 @@ fold needed the turn counter the TUI's already had — `Conversation.turn`, and
 transcript is handed, and a style guide that passes nothing sits perfectly
 still, which is what a transcript of finished work should do.
 
-What the window draws now, and each of the three says something different:
+What the window draws now, and each says something the other cannot:
 
 ```
   the mark    the same braille the TUI turns — TURNING, in the contract
               package, because a spinning notch in one face and a braille dot
               in the other is two vocabularies for one state
-  the row     a slow band of light across it, 2.4s. The mark is one cell and
-              cannot catch an eye reading three rows up, which is the
-              ordinary case while an agent works
   the caret   a block at the tail of the answer arriving. A paragraph that
               has stopped mid-sentence and one still growing are otherwise
               the same picture
@@ -5538,21 +5551,30 @@ timers and a dozen renders — and it does not run at all under
 mandate read strictly: reduced motion means none, and a still mark is a state
 rather than a slower animation.
 
-**A background, not `background-clip: text`.** StyleX drops what it does not
-understand in silence, and a dropped `background-clip` beside a
-`color: transparent` is an invisible row. This way a dropped rule is a row
-that does not sweep. Verified in the served sheet rather than the source,
-which is the rule for anything StyleX:
-
-```
-  @keyframes …{from{background-position:180% 0;}to{background-position:-80% 0;}}
-  @keyframes …{0%, 49%{opacity:1;}50%, 100%{opacity:0;}}
-  prefers-reduced-motion: reduce){… animation-duration:0s
-```
-
 The accent is spent here for the fifth time, and it earns it on the same
 rule as the other four: at most one row in a transcript is running, so it
 marks a deviation rather than a baseline.
+
+**The row's band of light was removed, and it is worth saying why it was
+wrong rather than merely disliked.** It was a gradient moving under text
+somebody is trying to read, forever, in the one column they are reading —
+and the argument for it (a mark is one cell and cannot catch an eye three
+rows up) is an argument for interrupting a reader who is not looking for the
+interruption.
+
+It was also wrong about _which_ rows. The fold's `turning` is about the
+**turn**, not about the call, so a run of finished calls under a live turn
+swept too. Reported in two messages — "stop the background shimmer if the
+tool is not running", then "actually just remove that" — and the second is
+the better fix: the condition was never the whole of what was wrong.
+
+What the removal is checked by is the served sheet, which is the rule for
+anything StyleX. The keyframes are gone from it:
+
+```
+  before   @keyframes …{from{background-position:180% 0;}to{…-80% 0;}}
+  after    0 matches
+```
 
 ### A call the turn ended underneath never resolves itself
 

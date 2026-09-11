@@ -728,12 +728,54 @@ export const Working = ({ doing }: { readonly doing?: string | undefined }) => {
   // `thinking` is the honest word for a turn with no call in flight, which
   // is a real and common state: the model is composing, and the row that
   // said `working` said nothing the spinner did not.
-  const say = doing === undefined || doing === "" ? "thinking" : doing;
+  const latest = doing === undefined || doing === "" ? "thinking" : doing;
+  /**
+   * What is actually drawn, which is the latest activity once it has held
+   * still for a moment.
+   *
+   * ── a burst of calls is not four readings ────────────────────────────────
+   *
+   * An agent reading six files answers six tool calls inside a second, and
+   * each one is a different sentence of a different length — so the pill rolled
+   * six times and sprang to six widths in the time it takes to read one of
+   * them. None of those was legible, and the movement is what made the line
+   * hard to ignore rather than easy to glance at.
+   *
+   * Trailing, so a burst paints once, at the end, with the activity that is
+   * still going. The cost is deliberate and is the other half of the feature:
+   * a call that finishes inside {@link SETTLING} is never drawn at all, and a
+   * reading nobody could have read is a reading not worth the movement.
+   */
+  const [say, setSay] = useState(latest);
+  useEffect(() => {
+    if (say === latest) return;
+    const settle = setTimeout(() => setSay(latest), SETTLING);
+    return () => clearTimeout(settle);
+  }, [latest, say]);
+  // The pill is as wide as its words, and the words change every few seconds.
+  // See `styles.working` for why that has to be animated rather than jumped.
+  const settling = useSpring();
 
   return (
     // No entrance of its own: the ledge it sits on animates its height, and
     // two animations on one thing is the fight `springs.ts` exists to stop.
-    <p {...stylex.props(styles.working)}>
+    <motion.p
+      {...stylex.props(styles.working)}
+      // ── the width is animated, because it is the thing that changes ──────
+      //
+      // `read a file` and `Find who provides the worker pool` are a hundred
+      // pixels apart, and the pill sizes to whichever it is holding. Snapped,
+      // that is an edge jumping left and right beside the composer every time
+      // the agent moves on — the same restlessness the ledge was pinned to
+      // stop, arriving on the other axis.
+      //
+      // `layout="size"` and not `layout`: this sits in a dock anchored to the
+      // bottom of the column, so a full layout animation would also animate
+      // the position it is already being held at. Size is the only thing that
+      // legitimately moves.
+      layout="size"
+      transition={settling}
+    >
       <span {...stylex.props(styles.turningWord)} aria-hidden="true">
         {turningAt(turning)}
       </span>
@@ -770,7 +812,7 @@ export const Working = ({ doing }: { readonly doing?: string | undefined }) => {
       {seconds >= WORTH_SAYING && (
         <span {...stylex.props(typeset.label, styles.since)}>{took(seconds)}</span>
       )}
-    </p>
+    </motion.p>
   );
 };
 
@@ -807,6 +849,16 @@ const doing = (items: ReadonlyArray<Item>, turn: number): string | undefined => 
  * that has been going for minutes.
  */
 const WORTH_SAYING = 10;
+
+/**
+ * How long an activity has to hold still before the line draws it, in ms.
+ *
+ * Long enough to swallow a burst — six `Read`s answered inside a second —
+ * and short enough that a call somebody is waiting on appears to arrive at
+ * once. It is deliberately not one of the `timing` tokens: those are how long
+ * a movement takes, and this is how long to wait before starting one.
+ */
+const SETTLING = 220;
 
 /**
  * How far from the bottom still counts as reading the tail, in pixels.
@@ -1258,7 +1310,20 @@ const Tool = ({
   return (
     <motion.div
       {...arriving}
-      {...stylex.props(styles.item, styles.ran, turning !== undefined && styles.sweeping)}
+      // ── no sweep ──────────────────────────────────────────────────────
+      //
+      // The running row used to carry a slow band of light across itself, on
+      // the argument that a turning mark is one cell and cannot catch an eye
+      // reading three rows up. What it does in practice is move a gradient
+      // under text somebody is trying to read, forever, in the one column
+      // they are reading — and it kept going on rows whose call had long
+      // since stopped, because the fold's `turning` is about the turn rather
+      // than about the call. Both complaints, in order: stop it when the
+      // tool is not running, then "actually just remove that".
+      //
+      // The mark still turns, which is the reading that was asked for and
+      // the one the TUI agrees with.
+      {...stylex.props(styles.item, styles.ran)}
     >
       {/* ── the running mark turns, and only the running one ──────────────
           `…` is what a call in flight had, and three dots are also what a
@@ -1729,42 +1794,6 @@ const styles = stylex.create({
    */
   turning: { color: colors.accent },
   /**
-   * The row that is running, sweeping.
-   *
-   * ── the mark is one cell, and a transcript is a page ──────────────────
-   *
-   * A turning glyph says a call is live to somebody already looking at it.
-   * What it cannot do is catch an eye that is reading three rows further
-   * up, which is the ordinary case while an agent works — so the row it is
-   * on carries a slow band of light across itself.
-   *
-   * A background rather than the text: `background-clip: text` would make
-   * the words themselves the gradient, and StyleX drops declarations it
-   * does not understand **in silence** — a dropped `background-clip` with
-   * `color: transparent` beside it is an invisible row. This way a dropped
-   * rule is a row that simply does not sweep.
-   *
-   * 2.4s, which is slower than everything else here on purpose: this is
-   * the one animation in the window that repeats forever, and anything
-   * quicker reads as urgency about a `Read` that will be over in 200ms.
-   */
-  sweeping: {
-    backgroundImage: `linear-gradient(90deg, transparent 0%, ${"color-mix(in oklab, currentColor 7%, transparent)"} 50%, transparent 100%)`,
-    backgroundSize: "220% 100%",
-    backgroundRepeat: "no-repeat",
-    animationName: stylex.keyframes({
-      from: { backgroundPosition: "180% 0" },
-      to: { backgroundPosition: "-80% 0" },
-    }),
-    animationDuration: { default: "2.4s", "@media (prefers-reduced-motion: reduce)": "0s" },
-    animationTimingFunction: "linear",
-    animationIterationCount: {
-      default: "infinite",
-      "@media (prefers-reduced-motion: reduce)": "1",
-    },
-    borderRadius: "0.3rem",
-  },
-  /**
    * The caret at the tail of an answer still arriving.
    *
    * The transcript already moves while text streams, so this is not there
@@ -1930,18 +1959,15 @@ const styles = stylex.create({
     // a 976px cell, which is the full-width bar this was meant to stop being.
     // `align-self` is the property that actually answers it.
     alignSelf: "flex-start",
-    // ── a ceiling, and the words give ────────────────────────────────────
+    // ── as wide as its words, and never wider than the column ────────────
     //
-    // A purpose is a sentence the agent wrote, and some of them are long: at
-    // its natural width the pill grew into a bar again, which is the thing it
-    // stopped being. 420px is about as much as is read at a glance on this
-    // strip, and past it the activity clips — `rolling` is already a one-line
-    // window with `overflow: hidden`, and `doing` already ends in an ellipsis.
-    //
-    // `min()` because the cap must not beat the column: the agent panel floors
-    // at a few hundred pixels, and a fixed 420 there is a pill wider than the
-    // thing holding it.
-    maxWidth: "min(420px, 100%)",
+    // It carried a 420px ceiling for a while, which clipped a long purpose to
+    // keep the pill short. What that cost is the half of the sentence that
+    // says what the agent is doing, on the one line whose whole job is to say
+    // it — so the cap is the column, and a sentence that will not fit there
+    // still clips: `rolling` is a one-line window with `overflow: hidden` and
+    // `doing` ends in an ellipsis.
+    maxWidth: "100%",
     // Close to the composer: this is a label *about* the box below it, and a
     // gap the size of the transcript's own makes it read as the last row of
     // the conversation instead.

@@ -1165,7 +1165,7 @@ export function StyleGuide() {
                     items={FIXTURE}
                     project="thicket"
                     workspace="no-such-workspace"
-                    // The live turn, so the running row turns and sweeps
+                    // The live turn, so the running row's mark turns
                     // here as well. This page is the only place those two
                     // states can be looked at on purpose: a real agent is
                     // in them exactly when nobody is comparing hues.
