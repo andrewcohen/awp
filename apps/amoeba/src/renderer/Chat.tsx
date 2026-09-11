@@ -1953,7 +1953,15 @@ const styles = stylex.create({
     gap: "0.1rem",
     padding: "0.3rem 0.45rem",
     backgroundColor: colors.page,
-    borderRadius: "0.5rem",
+    // Square where the rule is, rounded everywhere else. A radius on the start
+    // corners curves the 2px rule itself at both ends, which reads as a tab
+    // rather than as a margin line — and the rule is the thing saying "these
+    // rows are one object". Straight, it is a spine; curved, it is decoration
+    // on a card that already has a fill doing that job.
+    borderStartStartRadius: 0,
+    borderEndStartRadius: 0,
+    borderStartEndRadius: "0.5rem",
+    borderEndEndRadius: "0.5rem",
     borderInlineStartWidth: 2,
     borderInlineStartStyle: "solid",
     borderInlineStartColor: colors.border,
