@@ -80,18 +80,18 @@ const styles = stylex.create({
   // content instead of pushing the bottom bar off the window — which is the
   // usual way a flex column grows a scrollbar it was told not to have.
   columns: { display: "flex", flex: 1, minHeight: 0 },
-  // Whatever is under the corner strip starts below it, and only that.
+  // The sidebar starts below the corner strip, and it is the only column that
+  // does — which is the whole of "let the panes go all the way to the top".
   //
-  // The sidebar, ordinarily — which is the whole of "let the panes go all the
-  // way to the top", since the agent and the panels then begin at zero. But
-  // the strip never folds and the sidebar does, so once the sidebar is away
-  // the strip is sitting over the *agent*, and the inset has to move with it:
-  //
-  //   open     strip 0..260   sidebar inset      agent at y=0
-  //   folded   strip 0..152   agent inset        nothing behind the lights
-  //
-  // Measured both ways; without the second case the terminal's first two lines
-  // are behind two buttons and the traffic lights.
+  // **Folded, the agent does not inherit this.** The strip never folds, so
+  // once the sidebar is away it is sitting over the agent instead, and the
+  // obvious repair is to move the inset with it. That was wrong, and visibly:
+  // this column is the full width of the window where the strip is 152px of
+  // it, so a block inset bought 40px of empty band across everything right of
+  // the lights, left the strip's bottom border stopping in mid air, and put
+  // the agent's header a header's height below the panels' tab strip beside
+  // it. The agent header clears the strip *sideways* instead — see
+  // `clearingStrip` in Bars.tsx, where the two are the same height and meet.
   //
   // Padding rather than a spacer element, so the column's scroll container is
   // still the column.
@@ -686,15 +686,7 @@ function Window() {
           onToggle={fold("sidebar")}
         />
 
-        <main
-          data-column="agent"
-          {...stylex.props(
-            styles.column,
-            styles.agent,
-            styles.stacked,
-            collapsed.sidebar && styles.underStrip,
-          )}
-        >
+        <main data-column="agent" {...stylex.props(styles.column, styles.agent, styles.stacked)}>
           <AgentBar
             jobs={jobs}
             session={open}

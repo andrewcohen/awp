@@ -2,7 +2,7 @@ import type { Job } from "@awp-kit/jobs";
 import type { SessionInfo, WorkspaceFacts } from "@awp-kit/protocol";
 import { SidebarSimpleIcon } from "@phosphor-icons/react/SidebarSimple";
 import * as stylex from "@stylexjs/stylex";
-import type { Collapsed } from "./columns";
+import { FOLD_MS, type Collapsed } from "./columns";
 import type { Face } from "./remembered";
 import { typeset } from "./typeset";
 import { colors, space, text } from "./tokens.stylex";
@@ -238,6 +238,41 @@ const styles = stylex.create({
     borderBottomStyle: "solid",
     borderBottomColor: colors.border,
   },
+  // ── and how it gets out of the corner strip's way when the sidebar folds ──
+  //
+  // The strip never folds, so once the sidebar is away it is sitting over this
+  // column instead. The first answer was to push the whole column *down* by
+  // the strip's height, which is right for the sidebar and wrong here: this
+  // column is the full width of the window and the strip is 152px of it, so it
+  // bought 40px of empty band across everything to the right of the lights —
+  // with the strip's bottom border stopping in mid air at 152px, and this
+  // header no longer level with the panels' tab strip beside it.
+  //
+  //   before  ┌──────┬───────────────────────┐   after  ┌──────┬────────────┐
+  //           │ ▣▣   │                       │          │ ▣▣   │ awp/… │tabs│
+  //           ├──────┴───────────────────────┤          ├──────┴────────────┤
+  //           │ awp/experimental rewrite…    │          │ the agent          │
+  //
+  // The two are the same height, so the strip is simply this header's left
+  // corner: the header keeps the top of the window, pads its contents past the
+  // strip, and the two bottom borders meet as one rule across the window.
+  //
+  // A dynamic style, because both numbers are plain constants — an identifier
+  // inside `stylex.create` must come from a `.stylex.ts` file, which is the
+  // build error AGENTS.md records three times.
+  clearingStrip: (ms: number) => ({
+    paddingInlineStart: `calc(${STRIP_FLOOR} + 0.6rem)`,
+    // It moves with the fold rather than jumping at the start of it. Only
+    // `collapsed` changes this padding — a divider drag does not — so unlike
+    // the columns' own `flex-basis` there is nothing here for a permanent
+    // transition to lag.
+    transitionProperty: "padding-inline-start",
+    transitionTimingFunction: "cubic-bezier(0.32, 0.72, 0, 1)",
+    transitionDuration: {
+      default: `${ms}ms`,
+      "@media (prefers-reduced-motion: reduce)": "0s",
+    },
+  }),
 
   bottom: {
     height: "1.6rem",
@@ -482,7 +517,13 @@ export function AgentBar({
   const counted = tally(jobs);
 
   return (
-    <header {...stylex.props(styles.bar, styles.agentBar)}>
+    <header
+      {...stylex.props(
+        styles.bar,
+        styles.agentBar,
+        collapsed.sidebar && styles.clearingStrip(FOLD_MS),
+      )}
+    >
       {/* ── where the work is, then what it is ───────────────────────────
 
           `<project>/<title>`, and nothing else. It was `displayName · project
