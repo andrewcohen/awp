@@ -342,6 +342,12 @@ const handlers = AwpRpcs.toLayer({
   ChatCancel: () => Effect.void,
   ChatFork: () => Effect.succeed("forked-1"),
   ChatFresh: () => Effect.succeed("fresh-1"),
+  // The face is a record the daemon keeps, so both of these are answers rather
+  // than echoes. `WorkspaceFace` says the terminal for a workspace nothing has
+  // recorded, which is the default the store argues for; the swap answers with
+  // what it settled on, which is what it was asked for whenever it succeeds.
+  WorkspaceFace: () => Effect.succeed("terminal" as const),
+  WorkspaceSwap: ({ face }) => Effect.succeed(face),
   McpStatus: (payload) =>
     Effect.succeed({
       name: "awp",

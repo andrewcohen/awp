@@ -1403,6 +1403,21 @@ export class Chat extends Context.Service<
     readonly statuses: () => Stream.Stream<ReadonlyMap<string, WorkspaceStatus>>;
 
     /**
+     * Whether this workspace's chat already has a conversation of its own.
+     *
+     * The stored pointer, not the adapter: `RcMap` releases a conversation two
+     * minutes after the last window closes, so "is one running" answers no for
+     * every chat nobody is looking at — which is nearly all of them, and the
+     * opposite of what a caller asking this wants to know.
+     *
+     * Asked by the swap, and the answer decides whether it forks. A workspace
+     * being moved into the chat for the first time should arrive holding what
+     * the terminal has already been told; one that has been here before should
+     * find what it left, which a fork would overwrite.
+     */
+    readonly held: (project: string, workspace: string) => Effect.Effect<boolean, ChatError>;
+
+    /**
      * Fork the terminal's conversation in this workspace and make it the
      * chat's, answering the new session id.
      */
@@ -1751,6 +1766,12 @@ export const make = Effect.gen(function* () {
      * The window then re-subscribes and finds this same adapter still held,
      * which is why the fork is not made twice.
      */
+    held: (project: string, workspace: string) =>
+      attempt("read the chat session", () => readSession.all(project, workspace)).pipe(
+        Effect.map((rows) => rows.length > 0),
+        Effect.mapError((error) => new ChatError({ reason: error.reason, cause: error.cause })),
+      ),
+
     openTerminal: (project: string, workspace: string) =>
       Effect.gen(function* () {
         const key = keyOf(project, workspace);

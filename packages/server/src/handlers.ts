@@ -39,6 +39,7 @@ import { homedir } from "node:os";
 import { basename } from "node:path";
 import { Clock, Effect, FileSystem, Option, Path, Schema, Stream } from "effect";
 import { Chat } from "./chat";
+import { Faces } from "./faces";
 import { InboxFeed } from "./inbox-feed";
 import { type Repairable, looksMine, repairPrompt } from "./repair";
 import { authored, reviewRequested, reviewRerequested } from "./github-parse";
@@ -408,6 +409,7 @@ export const layer = AwpRpcs.toLayer(
     const config = yield* Settings;
     const jj = yield* Jj;
     const chat = yield* Chat;
+    const faces = yield* Faces;
     const tasks = yield* Tasks;
     const pages = yield* Pages;
     // Taken once, here, rather than per request. A handler's return value has
@@ -449,6 +451,77 @@ export const layer = AwpRpcs.toLayer(
      * which would produce a revset jj cannot find and a failure one backoff
      * later inside the job.
      */
+    /**
+     * Say something to a workspace's agent, on the face somebody is looking at.
+     *
+     * ── one rule, because there are four callers ─────────────────────────────
+     *
+     * `ReviewSend`, `NoteSend`, `TaskSend` and `PullRequestRepair` all compose
+     * a prompt and hand it to an agent, and all four used to hand it to the
+     * pty unconditionally.
+     *
+     * **The face is read here, not passed in.** It was a payload field for an
+     * afternoon, filled by the window from its own `localStorage` — which put
+     * the decision back in the place that could not make it correctly: the
+     * window knows which panel it is *drawing*, and where the work is is a
+     * different question with a different answer. Now it is a row, and the
+     * only thing that writes one is the create job or somebody swapping. A workspace created on the chat face has a briefed
+     * conversation *and* a terminal sitting idle at a shell prompt — see the
+     * `session` step, which is started for both faces on purpose — so those
+     * sends went to the one of the two that had never been told anything:
+     *
+     *   the chat      briefed, mid-work, and the panel somebody is watching
+     *   the terminal  a bare prompt. The review lands as a shell command,
+     *                 which is `zsh: command not found` and a lost review
+     *
+     * A second copy of this decision per caller is the copy that drifts, which
+     * is why it is a function and not four branches.
+     *
+     * **`send` and not `brief`.** `brief` holds the conversation open until
+     * the turn has ended, which is right for a job with no window and wrong
+     * here: all four of these are a button somebody pressed, and a call that
+     * waited up to twenty minutes would be a control that never came back. The
+     * hazard `brief` exists for — `RcMap` releasing the conversation two
+     * minutes after its last reference — does not arise, because the face
+     * being `chat` is exactly the statement that the chat panel is mounted in
+     * the agent column and subscribed. These four are all accessory-column
+     * controls, and that column's tabs do not unmount this one.
+     *
+     * **The key is minted here**, unlike every other `send`. `ChatSend.key` is
+     * the client's name for a message it has already painted from the
+     * keypress, so a fold ignores the echo of a row it is holding; nothing
+     * painted this one, so the echo is what draws it. A fresh id is what makes
+     * that happen, and it is what puts the review in the transcript rather
+     * than having it arrive invisibly.
+     *
+     * The terminal path is unchanged, including the order: the session is
+     * resolved *before* the caller marks anything, so a workspace whose agent
+     * has ended refuses rather than eating the drafts.
+     */
+    const tell = (
+      project: string,
+      workspace: string,
+      prompt: string,
+    ): Effect.Effect<void, NoAgent> =>
+      Effect.flatMap(faces.face(project, workspace).pipe(Effect.orDie), (face) =>
+        face === "chat"
+          ? chat.send(project, workspace, prompt, `awp-${crypto.randomUUID()}`).pipe(
+              // `ChatError` is a sentence — no adapter installed, no `claude` on
+              // the PATH — and `NoAgent` carries one now so it survives the trip.
+              // Flattened to the tag it would reach the window as the word
+              // "NoAgent", which is the failure `said` was written for.
+              Effect.mapError((error) => new NoAgent({ project, workspace, reason: error.reason })),
+            )
+          : Effect.gen(function* () {
+              const name = sessionName(project, workspace, AGENT);
+              const found = yield* mux.lookup(name).pipe(Effect.orDie);
+              if (found === undefined || found.ended) {
+                return yield* Effect.fail(new NoAgent({ project, workspace }));
+              }
+              yield* mux.send(name, prompt).pipe(Effect.orDie);
+            }),
+      );
+
     /** The thread holding this workspace, if any does. */
     const threadOwning = (workspace: string | undefined, project: string) =>
       workspace === undefined
@@ -1557,12 +1630,13 @@ export const layer = AwpRpcs.toLayer(
             return yield* Effect.fail(new NoAgent({ project, workspace: `#${String(number)}` }));
           }
 
-          const name = sessionName(project, member.workspace, AGENT);
-          const session = yield* mux.lookup(name).pipe(Effect.orDie);
-          if (session === undefined || session.ended) {
-            return yield* Effect.fail(new NoAgent({ project, workspace: member.workspace }));
-          }
-          yield* mux.send(name, prompt).pipe(Effect.orDie);
+          // The face arrives from the window, keyed by the workspace the window
+          // is *looking at* — and the workspace resolved here is the thread's
+          // member for this project, which is the same one in every ordinary
+          // case. A thread holding two checkouts in one repository could put
+          // them out of step; there is no second preference to consult, and
+          // guessing one would be worse than following the person's own view.
+          yield* tell(project, member.workspace, prompt);
           return { prompt, mine, workspace: member.workspace };
         }),
 
@@ -2187,16 +2261,6 @@ export const layer = AwpRpcs.toLayer(
 
       ReviewSend: ({ project, workspace }) =>
         Effect.gen(function* () {
-          // The session is resolved *before* anything is marked. A workspace
-          // whose agent has ended has nothing to type into, and marking first
-          // would lose the drafts to a delivery that never happened — the
-          // failure this orders itself to avoid.
-          const name = sessionName(project, workspace, AGENT);
-          const found = yield* mux.lookup(name).pipe(Effect.orDie);
-          if (found === undefined || found.ended) {
-            return yield* Effect.fail(new NoAgent({ project, workspace }));
-          }
-
           const drafts = yield* reviews.list(project, workspace).pipe(Effect.orDie);
           const unsent = drafts.filter((comment) => comment.sentAt === undefined);
           if (unsent.length === 0) {
@@ -2207,7 +2271,13 @@ export const layer = AwpRpcs.toLayer(
           }
 
           const prompt = reviewPrompt(unsent);
-          yield* mux.send(name, prompt).pipe(Effect.orDie);
+          // Delivery is what `tell` decides, and the refusal comes back up
+          // from it — so the lookup that used to happen before the drafts were
+          // read now happens here instead. The ordering guarantee is unchanged
+          // and is the reason this is not one line further down: nothing is
+          // marked until the send has actually succeeded, so a workspace with
+          // nobody to tell keeps its drafts.
+          yield* tell(project, workspace, prompt);
 
           // Marked only after the send succeeded. The other order is the one
           // that silently eats a review when zmx is not there.
@@ -2226,32 +2296,68 @@ export const layer = AwpRpcs.toLayer(
       // to tell" is a refusal rather than a send into nothing.
       TaskSend: ({ project, workspace, task }) =>
         Effect.gen(function* () {
-          const name = sessionName(project, workspace, AGENT);
-          const found = yield* mux.lookup(name).pipe(Effect.orDie);
-          if (found === undefined || found.ended) {
-            return yield* Effect.fail(new NoAgent({ project, workspace }));
-          }
-
           const prompt = taskPrompt(task);
-          yield* mux.send(name, prompt).pipe(Effect.orDie);
+          yield* tell(project, workspace, prompt);
           return prompt;
         }),
 
       NoteSend: ({ project, workspace, note }) =>
         Effect.gen(function* () {
-          // Same order as ReviewSend, for a weaker version of the same reason:
-          // nothing here is marked, so a failed send loses only the composer's
+          // Nothing here is marked, so a failed send loses only the composer's
           // contents — but it loses those to a person who is still looking at
-          // the element, and "it went nowhere" has to be sayable.
-          const name = sessionName(project, workspace, AGENT);
-          const found = yield* mux.lookup(name).pipe(Effect.orDie);
-          if (found === undefined || found.ended) {
-            return yield* Effect.fail(new NoAgent({ project, workspace }));
-          }
-
+          // the element, and "it went nowhere" has to be sayable. `tell` is
+          // what says it.
           const prompt = notePrompt(note);
-          yield* mux.send(name, prompt).pipe(Effect.orDie);
+          yield* tell(project, workspace, prompt);
           return prompt;
+        }),
+
+      // Which agent holds this workspace's work. A question, and a cheap one —
+      // one row by primary key — so the window asks it when the address
+      // changes rather than subscribing to something that emits once a week.
+      WorkspaceFace: ({ project, workspace }) => faces.face(project, workspace).pipe(Effect.orDie),
+
+      /**
+       * Move the work to the other agent.
+       *
+       * ── the fork is the half that makes it a *swap* ─────────────────────
+       *
+       * Recording the face alone would be a rename: the terminal would still
+       * hold the conversation, and the chat somebody had just swapped into
+       * would greet them with `nothing said yet` over work that plainly
+       * exists. So swapping *to the chat* forks the terminal's conversation
+       * into it first — which is the act the empty chat's own button offers,
+       * promoted to the thing it always was.
+       *
+       * Only when the chat has nothing. A conversation already here is
+       * somebody's, and forking over it is how you lose an afternoon — the
+       * fork replaces which session the workspace's chat *is*.
+       *
+       * There is no reverse. A pty runs an interactive `claude` and there is
+       * no way to replay a transcript into one; the terminal has been running
+       * the whole time, so swapping back is only ever a change of address.
+       * Pretending otherwise — starting a fresh agent and calling it a move —
+       * would be worse than saying so.
+       *
+       * A failed fork does not record the face, and that ordering is the
+       * whole of the guarantee: the alternative leaves a workspace marked as
+       * a chat with its work still in the pty, which is exactly the state the
+       * record exists to make impossible.
+       */
+      WorkspaceSwap: ({ project, workspace, face }) =>
+        Effect.gen(function* () {
+          if (face === "chat") {
+            const already = yield* chat
+              .held(project, workspace)
+              .pipe(Effect.mapError((error) => new ChatUnavailable({ reason: error.reason })));
+            if (!already) {
+              yield* chat
+                .openTerminal(project, workspace)
+                .pipe(Effect.mapError((error) => new ChatUnavailable({ reason: error.reason })));
+            }
+          }
+          yield* faces.set(project, workspace, face).pipe(Effect.orDie);
+          return face;
         }),
     };
   }),

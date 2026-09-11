@@ -1,4 +1,3 @@
-import type { Face as ProtocolFace } from "@awp-kit/protocol";
 import { type Collapsed, type Columns, bothOpen } from "./columns";
 
 // What the window was looking at, across a reload.
@@ -393,61 +392,16 @@ export const rememberPanel = (thread: string | undefined, panel: string): void =
   writeStored(PANELS, JSON.stringify({ ...asMap(readStored(PANELS)), [thread]: panel }));
 };
 
-// ── which face the agent column wears ──────────────────────────────────────
+// ── the face used to live here, and it was the wrong home ─────────────────
 //
-// A workspace has one agent and two ways to look at it: the terminal it is
-// running in, and the conversation it is having. Both exist at once — the
-// create job starts a zmx session whatever this says — so this chooses a view
-// and never a capability, which is exactly what makes it an escape hatch. A
-// chat that misbehaves is one flip away from the pty that was there all along.
+// `awp.face` and `awp.face.default` recorded which of a workspace's two agents
+// the column drew. That was fine while it decided only what was on screen, and
+// wrong the moment anything was *sent*: a window can say which panel it is
+// drawing and cannot say which agent holds the work. Those came apart exactly
+// when it mattered — a review typed into the idle shell beside a briefed chat.
 //
-// localStorage for the reason everything else here is: it is a property of the
-// window, not of the work. Two windows on one machine may reasonably watch the
-// same workspace two different ways.
-
-/**
- * The two faces, re-exported rather than redeclared.
- *
- * It was a type of its own here while the choice was a window preference and
- * nothing else. It is on the wire now — the `brief` step has to know which
- * face to deliver to — so a second declaration of the same two words is a
- * second place to add a third face and forget the first.
- */
-export type Face = ProtocolFace;
-
-const FACE = "awp.face";
-const FACE_DEFAULT = "awp.face.default";
-
-const asFace = (raw: string | undefined): Face | undefined =>
-  raw === "chat" ? "chat" : raw === "terminal" ? "terminal" : undefined;
-
-/**
- * What a workspace made from now on should open as.
- *
- * The new-thread modal writes this, and it has to be a default rather than a
- * choice recorded against the workspace: the workspace does not have a name
- * yet when the modal closes — the model invents one, one step into the job —
- * so there is nothing to key a per-workspace preference by.
- *
- * The terminal, until told otherwise. The chat is the newer of the two and the
- * one that can be wrong in ways nobody has seen yet.
- */
-export const rememberedFaceDefault = (): Face => asFace(readStored(FACE_DEFAULT)) ?? "terminal";
-
-export const rememberFaceDefault = (face: Face): void => {
-  writeStored(FACE_DEFAULT, face);
-};
-
-/** How this particular workspace is being looked at, falling back to the default. */
-export const rememberedFace = (project: string, workspace: string): Face =>
-  asFace(asMap(readStored(FACE))[`${project}/${workspace}`]) ?? rememberedFaceDefault();
-
-export const rememberFace = (project: string, workspace: string, face: Face): void => {
-  writeStored(
-    FACE,
-    JSON.stringify({ ...asMap(readStored(FACE)), [`${project}/${workspace}`]: face }),
-  );
-};
+// It is a row in the daemon now, set when a thread is made and changed only by
+// an explicit swap. See `faces.ts` and `workspaceFace` in daemon.ts.
 
 // ── which threads this window has been in, newest first ────────────────────
 //

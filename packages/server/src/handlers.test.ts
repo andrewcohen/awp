@@ -6,6 +6,7 @@ import { layer as dbLayer } from "@awp-kit/store";
 import {
   AwpRpcs,
   type CommentSide,
+  type Face,
   type ReviewComment,
   type WorkspaceFacts,
   type WorkspaceStatus,
@@ -17,6 +18,7 @@ import { RpcTest } from "effect/unstable/rpc";
 import { afterAll, describe, expect, it } from "vitest";
 import * as attachment from "./attachment";
 import { Chat } from "./chat";
+import { Faces } from "./faces";
 import { Github, GithubError, type Remark } from "./github";
 import type { PullRequest } from "./github-parse";
 import { layer as inboxLayer, migrations as inboxMigrations } from "./inbox-feed";
@@ -89,7 +91,10 @@ const fakeMux = (fakes: Fakes) =>
       fakes.zmx?.start.push(options);
       return Effect.void;
     },
-    send: () => Effect.void,
+    send: (_name: string, text: string) => {
+      fakes.told?.pty.push(text);
+      return Effect.void;
+    },
     kill: () => Effect.void,
     setLabels: (name: string, labels: Record<string, string>) => {
       fakes.zmx?.labels.push({ name, labels });
@@ -187,7 +192,28 @@ interface Fakes {
   readonly remarks?: ReadonlyArray<Remark> | undefined;
   /** Somewhere for the fake multiplexer to write down what it was handed. */
   readonly zmx?: { readonly start: unknown[]; readonly labels: unknown[] } | undefined;
+  /**
+   * Where a prompt actually went.
+   *
+   * The four calls that hand something to an agent — a review, a note, a task,
+   * a repair — pick between the pty and the conversation on the `face` they
+   * are given, and both deliveries succeed. So nothing about a reply says
+   * which one ran, and the only assertion available is on what each fake was
+   * told. A test that checked the return value would pass on both branches,
+   * which is the whole failure this routing exists to fix: the prompt went
+   * somewhere, and it was the wrong somewhere.
+   */
+  readonly told?:
+    | { readonly pty: string[]; readonly chat: string[]; readonly forked: string[] }
+    | undefined;
+  /** Which agent each workspace's work is in, keyed `project/workspace`. */
+  readonly faces?: Record<string, Face> | undefined;
+  /** The workspace's chat already holds a conversation, so a swap must not fork. */
+  readonly chatHeld?: boolean | undefined;
 }
+
+/** A fresh pair of ears for the two faces. See `Fakes.told`. */
+const told = () => ({ pty: [] as string[], chat: [] as string[], forked: [] as string[] });
 
 /** A pull request as `gh` would have answered, with the dull fields filled. */
 export const pr = (over: Partial<PullRequest>): PullRequest => ({
@@ -247,21 +273,51 @@ const run = <A>(body: (rpc: Client) => Effect.Effect<A, unknown, Scope.Scope>, f
         // `chat.test.ts` against the update parsing, and end to end by
         // `probe:chat` — a fake here would only assert that the handler
         // forwards three arguments, which is what reading it says.
+        //
+        // `send` is the exception and records, because the four calls that
+        // deliver a prompt choose between this and the pty and both succeed.
+        // See `Fakes.told`.
         Layer.provide(
           Layer.succeed(Chat)({
             open: () => Effect.succeed(Stream.empty),
-            send: () => Effect.succeed("prompt" as const),
+            send: (_project: string, _workspace: string, text: string) => {
+              fakes.told?.chat.push(text);
+              return Effect.succeed("prompt" as const);
+            },
             // The composer's stop button reaches this. A fake that does not
             // answer it is a fake the type says is incomplete, which is what
             // this one is for.
             cancel: () => Effect.void,
             brief: () => Effect.void,
-            openTerminal: () => Effect.succeed("forked-1"),
+            // Whether the workspace's chat already has a conversation, which
+            // is what decides whether a swap forks. Driven by the test, since
+            // both answers are a different act.
+            held: () => Effect.succeed(fakes.chatHeld === true),
+            openTerminal: () => {
+              fakes.told?.forked.push("forked");
+              return Effect.succeed("forked-1");
+            },
             fresh: () => Effect.succeed("fresh-1"),
             statuses: () => Stream.empty,
             answer: () => Effect.void,
             config: () => Effect.succeed([]),
             set: () => Effect.succeed([]),
+          }),
+        ),
+        // The face store, in memory. A real one would need the test database
+        // and a migration run per case; what every test here asks of it is
+        // "which agent", which is one value.
+        Layer.provide(
+          Layer.succeed(Faces)({
+            face: (project: string, workspace: string) =>
+              Effect.succeed(fakes.faces?.[`${project}/${workspace}`] ?? "terminal"),
+            set: (project: string, workspace: string, face: Face) => {
+              if (fakes.faces !== undefined) {
+                fakes.faces[`${project}/${workspace}`] = face;
+              }
+              return Effect.void;
+            },
+            forget: () => Effect.void,
           }),
         ),
         Layer.provide(
@@ -1632,6 +1688,176 @@ describe("NoteSend", () => {
     );
 
     expect(Result.isFailure(outcome)).toBe(true);
+  });
+});
+
+// ── which of a workspace's two agents a prompt reaches ─────────────────────
+//
+// A workspace has both: the create job starts a zmx session whichever face was
+// chosen, deliberately, so a chat-face workspace has a briefed conversation and
+// a terminal idling at a shell prompt. Everything that hands an agent something
+// used to hand it to the pty — which on that workspace is the half that has
+// never been told anything, and what a review typed into a bare shell produces
+// is `command not found` and a review nobody ever reads.
+//
+// The face is a row in the daemon, not a field on the call. A window can only
+// say which panel it is *drawing*; where the work is is a fact about the
+// workspace. So these drive `fakes.faces` and never the payload.
+//
+// Both deliveries succeed, so the reply is the same either way and the only
+// thing that can be asserted on is which fake was told. See `Fakes.told`.
+describe("which face a prompt is delivered to", () => {
+  const note = {
+    url: "https://example.test/pricing",
+    selector: "#save",
+    label: "button#save",
+    text: "Save",
+    body: "this is unreachable at 400px",
+  };
+
+  it("types into the terminal when the record says so", async () => {
+    const heard = told();
+    await run((rpc) => rpc.NoteSend({ project: "awp", workspace: "other", note }), {
+      told: heard,
+      faces: { "awp/other": "terminal" },
+    });
+
+    expect(heard.pty).toHaveLength(1);
+    expect(heard.chat).toHaveLength(0);
+  });
+
+  it("says it to the chat when the record says so", async () => {
+    const heard = told();
+    await run((rpc) => rpc.NoteSend({ project: "awp", workspace: "other", note }), {
+      told: heard,
+      faces: { "awp/other": "chat" },
+    });
+
+    expect(heard.chat).toHaveLength(1);
+    expect(heard.chat[0]).toContain("selector: #save");
+    expect(heard.pty).toHaveLength(0);
+  });
+
+  it("is the terminal when nothing has been recorded", async () => {
+    // Every workspace made before the table exists is in this state, and its
+    // work really is in the pty — reading them as chat would point every send
+    // at a conversation that has never said anything.
+    const heard = told();
+    await run((rpc) => rpc.NoteSend({ project: "awp", workspace: "other", note }), { told: heard });
+
+    expect(heard.pty).toHaveLength(1);
+    expect(heard.chat).toHaveLength(0);
+  });
+
+  it("does not need a live session for the chat face", async () => {
+    // The refusal elsewhere is the *terminal's*: an ended zmx session is
+    // nowhere to type. A conversation is not a pty and has no such state — the
+    // adapter is acquired on demand — so the same workspace that refuses a
+    // terminal send accepts a chat one. Getting this wrong would make the chat
+    // face refuse exactly the workspaces it exists to keep reachable.
+    const heard = told();
+    await run((rpc) => rpc.NoteSend({ project: "awp", workspace: "finished", note }), {
+      told: heard,
+      faces: { "awp/finished": "chat" },
+    });
+
+    expect(heard.chat).toHaveLength(1);
+  });
+
+  it("sends a review to the chat, and marks it sent", async () => {
+    // The other order is what this is really about: nothing is marked until the
+    // send has succeeded, and that guarantee had to survive the delivery moving
+    // behind a branch.
+    const heard = told();
+    const outcome = await run(
+      (rpc) =>
+        Effect.gen(function* () {
+          yield* rpc.ReviewAdd({
+            project: "awp",
+            workspace: "other",
+            revision: "vtknsnwv",
+            path: "src/router.ts",
+            side: "additions",
+            line: 42,
+            endLine: 42,
+            body: "this branch never runs",
+          });
+          yield* rpc.ReviewSend({ project: "awp", workspace: "other" });
+          return yield* rpc.ReviewList({ project: "awp", workspace: "other" });
+        }),
+      { told: heard, faces: { "awp/other": "chat" } },
+    );
+
+    expect(heard.chat).toHaveLength(1);
+    expect(heard.pty).toHaveLength(0);
+    expect(outcome[0]?.sentAt).toBeDefined();
+  });
+});
+
+// ── moving the work from one agent to the other ────────────────────────────
+//
+// The swap is what makes the record a thing a person can change, and the fork
+// is what makes it a *move* rather than a rename: recording the face alone
+// would leave the conversation in the terminal, so the chat somebody had just
+// swapped into would say `nothing said yet` over work that plainly exists.
+describe("WorkspaceSwap", () => {
+  it("forks the terminal's conversation when the chat has none", async () => {
+    const heard = told();
+    const faces: Record<string, Face> = {};
+    const now = await run(
+      (rpc) => rpc.WorkspaceSwap({ project: "awp", workspace: "other", face: "chat" }),
+      { told: heard, faces },
+    );
+
+    expect(now).toBe("chat");
+    expect(heard.forked).toHaveLength(1);
+    expect(faces["awp/other"]).toBe("chat");
+  });
+
+  it("leaves a conversation that is already here alone", async () => {
+    // A fork replaces which session the workspace's chat *is*, so forking over
+    // an existing one is how an afternoon goes missing.
+    const heard = told();
+    const faces: Record<string, Face> = {};
+    await run((rpc) => rpc.WorkspaceSwap({ project: "awp", workspace: "other", face: "chat" }), {
+      told: heard,
+      faces,
+      chatHeld: true,
+    });
+
+    expect(heard.forked).toHaveLength(0);
+    expect(faces["awp/other"]).toBe("chat");
+  });
+
+  it("moves back without forking anything", async () => {
+    // There is no reverse fork and there cannot be: a pty runs an interactive
+    // claude and nothing replays a transcript into one. The terminal has been
+    // running the whole time, so this direction is only a change of address.
+    const heard = told();
+    const faces: Record<string, Face> = { "awp/other": "chat" };
+    const now = await run(
+      (rpc) => rpc.WorkspaceSwap({ project: "awp", workspace: "other", face: "terminal" }),
+      { told: heard, faces },
+    );
+
+    expect(now).toBe("terminal");
+    expect(heard.forked).toHaveLength(0);
+    expect(faces["awp/other"]).toBe("terminal");
+  });
+
+  it("reports what is recorded, and the terminal for what is not", async () => {
+    const answers = await run(
+      (rpc) =>
+        Effect.gen(function* () {
+          const before = yield* rpc.WorkspaceFace({ project: "awp", workspace: "other" });
+          const elsewhere = yield* rpc.WorkspaceFace({ project: "awp", workspace: "unheard-of" });
+          return { before, elsewhere };
+        }),
+      { faces: { "awp/other": "chat" } },
+    );
+
+    expect(answers.before).toBe("chat");
+    expect(answers.elsewhere).toBe("terminal");
   });
 });
 

@@ -37,6 +37,7 @@ import { layer as pagesLayer } from "./pages";
 import { Projects, layer as projectsLayer, migrations as projectMigrations } from "./projects";
 import * as workspaceState from "./workspace-state";
 import { migrations as reviewMigrations, layer as reviewsLayer } from "./reviews";
+import { Faces, migrations as faceMigrations, layer as facesLayer } from "./faces";
 import { migrations as threadMigrations, layer as threadsLayer } from "./threads";
 import { migrations as taskMigrations, layer as tasksLayer } from "./tasks";
 import * as zmx from "./zmx";
@@ -132,6 +133,7 @@ export const db = Layer.orDie(
     ...inboxMigrations,
     ...chatMigrations,
     ...taskMigrations,
+    ...faceMigrations,
   ]),
 );
 
@@ -164,6 +166,10 @@ export const jobs = Layer.unwrap(
       jj: yield* Jj,
       mux: yield* Multiplexer,
       threads: yield* Threads,
+      // Which agent this workspace's work lives in, written by the `claim`
+      // step. Recorded rather than left to the window, because every send
+      // afterwards follows it — see faces.ts.
+      faces: yield* Faces,
       files: yield* FileSystem.FileSystem,
       intent: yield* WorkspaceIntent,
       settings: yield* Settings,
@@ -201,6 +207,8 @@ export const jobs = Layer.unwrap(
 ).pipe(Layer.provide(Layer.orDie(layerSqlite)));
 
 export const threads = threadsLayer;
+
+export const faces = facesLayer;
 
 export const tasks = tasksLayer;
 
@@ -240,7 +248,12 @@ export const layer = RpcServer.layer(AwpRpcs).pipe(
   // chatLayer)` under `jobs` would build a second Chat. Merging leaves it in
   // the output, where `jobs` finds the one already made.
   Layer.provide(jobs.pipe(Layer.provideMerge(chatLayer))),
-  Layer.provide(threads),
+  // Merged rather than provided one after the other, and not for tidiness:
+  // `pipe` takes at most twenty arguments and this stack had reached it. Two
+  // stores that are both read by the handlers *and* by the create job's steps
+  // are the natural pair to fold together — the `claim` step writes a thread
+  // membership and a face in the same breath.
+  Layer.provide(Layer.merge(threads, faces)),
   Layer.provide(tasks),
   Layer.provide(reviews),
   Layer.provide(projects),
