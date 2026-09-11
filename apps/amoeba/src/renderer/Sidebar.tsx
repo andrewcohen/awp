@@ -118,7 +118,16 @@ const styles = stylex.create({
     position: "relative",
     padding: `${space.row} ${space.gutter}`,
     marginBottom: "0.3rem",
-    borderRadius: "0.35rem",
+    // Rounded where the accent edge is, square where the column ends. The band
+    // runs into the divider rather than stopping short of it in a curve — a
+    // rounded trailing corner reads as a card floating in the strip, where
+    // what this is is a row *of* the strip. On the selected row it is also the
+    // difference between the fill agreeing with the 2px edge and arguing with
+    // it.
+    borderStartStartRadius: "0.35rem",
+    borderEndStartRadius: "0.35rem",
+    borderStartEndRadius: 0,
+    borderEndEndRadius: 0,
     // A strip of rows that does nothing under the pointer reads as a
     // listing rather than as a set of things to open. Cheap, and it is the
     // only feedback this column gives before a click.
@@ -256,6 +265,43 @@ const styles = stylex.create({
     cursor: "pointer",
   },
   titleShut: { color: colors.muted, cursor: "default", opacity: 0.55 },
+  /**
+   * The whole band is the target, not just line one.
+   *
+   * A row is two lines and the name is the top one, so two thirds of a row
+   * somebody is aiming at did nothing — and line two is where the slug, the
+   * phase and the project are, which is the half a person reads to decide
+   * *which* row they want. Pointing at the thing you just read and having it
+   * not respond is the shape of a control that looks broken.
+   *
+   * An empty `::after` over the row rather than a click handler on the row's
+   * `div`, because the button is what carries the semantics: the role, the
+   * disabled state, the tooltip, and `data-nav-item`, which is what ctrl+j
+   * and ctrl+k step through. A div with an `onClick` has none of those and
+   * would have to restate all four.
+   *
+   * It positions against `row`, which is already `relative` for the accent
+   * edge — so the target is exactly the band that lights up on hover.
+   *
+   * What it costs: the `title` on line two's pull request number and phase.
+   * The overlay is above them, so the row's own tooltip — the address — is
+   * what a hover reports now. Both facts are still drawn; it is the second
+   * reading of them that goes.
+   *
+   * Not applied to a shut row. A disabled button swallows the press rather
+   * than passing it on, so an overlay there would be a dead sheet over the
+   * one row that has chips underneath worth reaching.
+   */
+  stretch: {
+    "::after": {
+      content: '""',
+      position: "absolute",
+      insetBlockStart: 0,
+      insetBlockEnd: 0,
+      insetInlineStart: 0,
+      insetInlineEnd: 0,
+    },
+  },
   // Line one is the name and the menu beside it. The name's button still takes
   // the width it can, so most of the row is still one target.
   titleRow: { display: "flex", alignItems: "baseline", gap: "0.25rem" },
@@ -368,7 +414,10 @@ const styles = stylex.create({
     whiteSpace: "nowrap",
   },
   kindOn: { color: colors.text },
-  kindPick: { cursor: "pointer" },
+  // Above the row's stretched target — see `stretch`. Only the chips that are
+  // *buttons* are raised: a lone kind is a span saying what is running, and
+  // raising that would punch a hole in the row for a word nobody presses.
+  kindPick: { position: "relative", zIndex: 1, cursor: "pointer" },
   reason: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
 });
 
@@ -609,7 +658,12 @@ function Row({
               onOpen(pair.project, pair.workspace);
             }
           }}
-          {...stylex.props(typeset.heading, styles.title, shut && styles.titleShut)}
+          {...stylex.props(
+            typeset.heading,
+            styles.title,
+            !shut && styles.stretch,
+            shut && styles.titleShut,
+          )}
         >
           <Dot live={live} status={facts?.status} unread={facts?.unread === true} />
           <span {...stylex.props(styles.label)}>{shown}</span>

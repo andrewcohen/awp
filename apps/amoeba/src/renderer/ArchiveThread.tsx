@@ -43,6 +43,12 @@ import { colors, lift, text, timing } from "./tokens.stylex";
 const styles = stylex.create({
   trigger: {
     flexShrink: 0,
+    // Above the row's stretched target — see `stretch` in Sidebar.tsx, whose
+    // `::after` covers the whole band. Without this the one control on the row
+    // that is not "open it" would be under a transparent sheet, and pressing ⋯
+    // would open the workspace instead of the menu.
+    position: "relative",
+    zIndex: 1,
     padding: "0 0.25rem",
     backgroundColor: "transparent",
     borderStyle: "none",
