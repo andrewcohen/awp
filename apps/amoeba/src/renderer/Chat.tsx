@@ -2,7 +2,7 @@ import type { ChatConfigOption } from "@awp-kit/protocol";
 import * as stylex from "@stylexjs/stylex";
 import { ArrowDownIcon } from "@phosphor-icons/react/ArrowDown";
 import { AnimatePresence, motion } from "motion/react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { type Command, agentCommands, commandOf, completed } from "@awp-kit/protocol/commands";
 import { heldBack, toolTitleOf, turningAt } from "@awp-kit/protocol/tools";
 import { Composer, SessionBar } from "./Composer";
@@ -28,6 +28,7 @@ import {
   waiting,
 } from "./conversation";
 import { Patch } from "./Fence";
+import { linkify } from "./linkify";
 import { Markdown } from "./Markdown";
 import {
   chatAnswer,
@@ -1297,11 +1298,38 @@ const Message = ({
 
           Your own message is drawn as text on purpose. It is exactly what you
           typed, and rendering it would mean a message containing `# ` silently
-          becoming a heading — which is a window editing what somebody said. */}
+          becoming a heading — which is a window editing what somebody said.
+
+          What that decision took with it was the links, in the one place a
+          person pastes urls most — `remark-gfm` autolinks them for the agent's
+          half and nothing did for yours. `linkify` is the narrow version of the
+          same want: it adds no styling, drops no characters and reorders
+          nothing, so there is no input for which it changes what the message
+          says. Which is exactly what could not be promised about markdown. */}
       {item.role === "agent" ? (
         <Markdown reading>{item.text}</Markdown>
       ) : (
-        <p {...stylex.props(typeset.prose, styles.words, styles.reading)}>{item.text}</p>
+        <p {...stylex.props(typeset.prose, styles.words, styles.reading)}>
+          {linkify(item.text).map((piece, at) =>
+            piece.href === undefined ? (
+              // eslint-disable-next-line react/no-array-index-key -- the pieces
+              // are a pure function of the text and have no identity of their
+              // own; two runs of the same characters are genuinely the same row.
+              <Fragment key={at}>{piece.text}</Fragment>
+            ) : (
+              <a
+                // eslint-disable-next-line react/no-array-index-key -- as above.
+                key={at}
+                href={piece.href}
+                target="_blank"
+                rel="noreferrer"
+                {...stylex.props(styles.link)}
+              >
+                {piece.text}
+              </a>
+            ),
+          )}
+        </p>
       )}
       {/* ── where the ANSWER has got to, and only the answer ──────────────
           A paragraph that has stopped growing and one still growing are the
@@ -2386,6 +2414,15 @@ const styles = stylex.create({
   boundaryWhy: { color: colors.muted, opacity: 0.85 },
   /** The turning frame, in the accent, leading the line. */
   turningWord: { color: colors.accent, fontFamily: text.mono },
+  /**
+   * A url inside your own message.
+   *
+   * The same pair `Markdown.tsx` uses for an anchor, so a link reads the same
+   * whichever half of the transcript it is in — the alternative is one colour
+   * for the agent's links and another for yours, which is a distinction
+   * nobody is drawing on purpose.
+   */
+  link: { color: colors.ready, textDecorationLine: "underline" },
   /** How long the turn has been going. Tabular, so it does not jitter. */
   // Never clipped: it is four characters, and a half-drawn duration is worse
   // than none. The activity is what gives — see `rolling`.

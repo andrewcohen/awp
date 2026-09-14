@@ -538,6 +538,25 @@ export const Composer = ({
               // about a key somebody presses by reflex: one abandoned the
               // message, the other did nothing at all.
               //
+              // ── and while the agent is working it stops it ──────────────
+              //
+              // The note on the send button below has claimed this for as
+              // long as it has existed — "Escape does it too, that is the
+              // terminal's habit and the TUI already answers to it" — and
+              // nothing implemented it. A comment is not a reader.
+              //
+              // Stopping wins over clearing, and the order is the whole of
+              // the rule. Somebody typing the next message while an answer
+              // runs away from them presses Escape to stop the *agent*;
+              // throwing their half-written message away instead is the one
+              // outcome they cannot undo, where the stop costs a turn that
+              // was already going wrong. So the draft survives, and a second
+              // press — now that nothing is running — clears it.
+              if (event.key === "Escape" && working) {
+                event.stopPropagation();
+                onStop();
+                return;
+              }
               // Only while there is something to throw away. An empty
               // composer lets Escape past, because it is a window-level
               // gesture elsewhere — a dialog over this panel is what closes.
