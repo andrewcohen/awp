@@ -385,8 +385,12 @@ const Panel = ({
     // answers it or does not. A row that narrates every success is a row
     // whose one useful line — a refusal — arrives somewhere the eye has
     // already learned to skip.
+    //
+    // One exception, and it is the same argument the other way: a message
+    // *held* because a compaction is running looks exactly like one that was
+    // sent and ignored, for as long as the compaction takes.
     chatSend(place.project, place.workspace, message, key).then(
-      () => setNotice(""),
+      (how) => setNotice(how === "queued" ? "held until compacting finishes" : ""),
       (error: unknown) => setNotice(said(error)),
     );
   };

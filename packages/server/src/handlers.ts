@@ -34,6 +34,7 @@ import {
   type WorkspaceFacts,
   type WorkspaceStatus,
   type Task,
+  type Thread,
 } from "@awp-kit/protocol";
 import { homedir } from "node:os";
 import { basename } from "node:path";
@@ -68,6 +69,18 @@ import { make as taskFeedOf } from "./task-feed";
  * because on the wire it is simply the order to draw them in — which source
  * counted it is already said by `source`.
  */
+/**
+ * The threads a window draws: everything the store holds, less what was put
+ * away.
+ *
+ * Its own function because both `ThreadList` and `ThreadChanges` answer with
+ * it, and a rule with two copies is the rule that drifts. The store keeps
+ * archived threads on purpose — a restore and the archive job both have to see
+ * one — so the filtering belongs on this side of the wire.
+ */
+const unarchived = (all: ReadonlyArray<Thread>): ReadonlyArray<Thread> =>
+  all.filter((thread) => thread.archivedAt === undefined);
+
 const onTheWire = (task: StoredTask): Task => ({
   id: task.id,
   subject: task.subject,
@@ -1441,7 +1454,7 @@ export const layer = AwpRpcs.toLayer(
           // have.
           const settings = yield* config.read();
           const prefix = settings.bookmarkPrefix;
-          const items = yield* Effect.forEach(answer.items, (item) =>
+          const named = yield* Effect.forEach(answer.items, (item) =>
             Effect.gen(function* () {
               if (item.thread !== undefined || item.workspace !== undefined) {
                 return item;
@@ -1470,7 +1483,100 @@ export const layer = AwpRpcs.toLayer(
             }),
           );
 
-          return { ...answer, items };
+          // ── and the branch is not always named after the workspace ─────────
+          //
+          // The pass above maps `andrew/<x>` back to a workspace called `<x>`,
+          // which is exactly what awp names a bookmark at creation and is not
+          // what a branch is called by the time a pull request exists. Found on
+          // a real one:
+          //
+          //   PR #623 head   71be83bb  andrew/retry-v3-fastest-origin
+          //   the workspace  71be83bb  andrew/lantern-retry-v3-fastest
+          //
+          // The same commit under two bookmarks — the workspace's own, and the
+          // one somebody set to describe the change before opening the PR. A
+          // name comparison cannot see that and a commit comparison cannot
+          // miss it.
+          //
+          // **`~ ::trunk()` is what makes this safe, and without it the whole
+          // idea is wrong.** Every merged commit is an ancestor of every
+          // workspace, so `head & ::@` alone would adopt every pull request
+          // that has ever landed into whichever checkout was asked first. What
+          // identifies ownership is the head being among the commits this
+          // checkout has made *on top of* trunk. A repository where `trunk()`
+          // does not resolve links nothing, which is the right way to fail:
+          // a missing link is a row somebody can still press.
+          //
+          // One jj call per candidate checkout rather than per pull request —
+          // see `unclaimed`.
+          const adopted = new Map<string, { thread: string; workspace: string }>();
+          const waiting = new Map<string, Array<{ number: number; headOid: string }>>();
+          for (const one of answer.unclaimed) {
+            waiting.set(one.project, [
+              ...(waiting.get(one.project) ?? []),
+              { number: one.number, headOid: one.headOid },
+            ]);
+          }
+          for (const [project, wanted] of waiting) {
+            const candidates = held
+              .filter((thread) => thread.archivedAt === undefined)
+              .flatMap((thread) =>
+                thread.members
+                  .filter((member) => member.project === project)
+                  .map((member) => ({ thread: thread.id, workspace: member.workspace })),
+              )
+              // A stable order, so two checkouts stacked on one another adopt
+              // the same way round on every read rather than alternating.
+              .toSorted((a, b) => a.workspace.localeCompare(b.workspace));
+            for (const candidate of candidates) {
+              const left = wanted.filter((pr) => !adopted.has(`${project}:${pr.number}`));
+              if (left.length === 0) {
+                break;
+              }
+              const revset = `(${left.map((pr) => `present(${pr.headOid})`).join(" | ")}) & ::@ ~ ::trunk()`;
+              const inside = yield* jj
+                .revisions({
+                  dir: workspacePath(project, candidate.workspace),
+                  revset,
+                  limit: left.length,
+                })
+                .pipe(Effect.orElseSucceed(() => []));
+              for (const revision of inside) {
+                // jj answers with whatever length it prints; GitHub's oid is
+                // forty characters. Compared both ways rather than trimmed to
+                // a guess at the shorter one.
+                const pr = left.find(
+                  (one) =>
+                    one.headOid.startsWith(revision.commitId) ||
+                    revision.commitId.startsWith(one.headOid),
+                );
+                if (pr === undefined) {
+                  continue;
+                }
+                yield* threads
+                  .link(candidate.thread, { project, number: pr.number })
+                  .pipe(Effect.ignore);
+                adopted.set(`${project}:${pr.number}`, {
+                  thread: candidate.thread,
+                  workspace: candidate.workspace,
+                });
+              }
+            }
+          }
+
+          const items =
+            adopted.size === 0
+              ? named
+              : named.map((item) => {
+                  const mine = adopted.get(`${item.project}:${item.number}`);
+                  return mine === undefined || item.thread !== undefined
+                    ? item
+                    : { ...item, thread: mine.thread, workspace: mine.workspace };
+                });
+
+          // Rebuilt rather than spread: `unclaimed` is how the feed talks to
+          // this pass and is not on the wire.
+          return { items, sources: answer.sources, viewer: answer.viewer };
         }),
 
       /**
@@ -1959,11 +2065,13 @@ export const layer = AwpRpcs.toLayer(
       // Filtered here rather than in the store, because the store is also what
       // `restore` and the archive job read, and both of those have to be able
       // to see a thread that has been put away.
-      ThreadList: () =>
-        threads.list().pipe(
-          Effect.map((all) => all.filter((thread) => thread.archivedAt === undefined)),
-          Effect.orDie,
-        ),
+      ThreadList: () => threads.list().pipe(Effect.map(unarchived), Effect.orDie),
+
+      // The same filter as the call above, through the same function: a stream
+      // and a list that disagree about what a thread list holds would put an
+      // archived thread back in the sidebar the moment anything else changed,
+      // which is a bug nobody would think to look for in a feed.
+      ThreadChanges: () => Stream.map(threads.changes(), unarchived),
 
       /**
        * The work a checkout is part of, asked from the checkout. See

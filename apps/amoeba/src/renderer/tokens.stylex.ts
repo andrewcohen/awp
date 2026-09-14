@@ -504,3 +504,42 @@ export const lift = stylex.defineVars({
       "0 8px 16px rgba(24, 24, 37, 0.10), 0 24px 56px rgba(24, 24, 37, 0.12)",
   },
 });
+
+/**
+ * What is in front of what, named rather than guessed at per file.
+ *
+ * ── the fault this replaces ───────────────────────────────────────────────
+ *
+ * Every portalled surface in the window picked its own number, and two of them
+ * disagreed in the one direction that matters: three dialogs sat at 30 and the
+ * `Chip` select they contain sat at 10. So choosing a project inside the
+ * add-a-project dialog opened a menu **underneath the dialog** — present in the
+ * DOM, four options, not one pixel painted and nothing clickable. Reported as
+ * "cant change project or anything", which is exactly what it is.
+ *
+ * `NewThread` had the same chip and worked, which is what made it look like a
+ * bug in the dialog rather than in the ordering: its popup sets no z-index at
+ * all, so the chip's 10 wins on portal order. Working by accident is why the
+ * next dialog written did not.
+ *
+ * ── the rule, which a single scale cannot express by itself ───────────────
+ *
+ * A popup outranks every surface it can be opened from. A select can be opened
+ * from inside a dialog and a dialog can be opened from inside a menu, so the
+ * order is fixed by what opens what:
+ *
+ *   menu   <   modal   <   popup
+ *   ⋯ on a row  a dialog    a select, wherever it was opened
+ *
+ * Only the portalled surfaces are named here. A `zIndex: 1` lifting a control
+ * over its own row is a different question — it orders siblings inside one
+ * stacking context, and it has no opinion about any of these.
+ */
+export const layer = stylex.defineVars({
+  /** A menu or a context menu, over the columns and under a dialog. */
+  menu: "20",
+  /** A dialog and the backdrop it dims the window with. */
+  modal: "30",
+  /** A select's list — above a dialog, because a dialog is where it opens. */
+  popup: "40",
+});

@@ -3,7 +3,7 @@ import { Menu } from "@base-ui/react/menu";
 import * as stylex from "@stylexjs/stylex";
 import type { ReactNode } from "react";
 import { typeset } from "./typeset";
-import { colors, lift, text } from "./tokens.stylex";
+import { colors, layer, lift, text } from "./tokens.stylex";
 
 // A row's menu, reachable two ways.
 //
@@ -56,7 +56,7 @@ const styles = stylex.create({
     ":focus-visible": { opacity: 1 },
   },
   shown: { opacity: 1 },
-  positioner: { zIndex: 20 },
+  positioner: { zIndex: layer.menu },
   menu: {
     // Portalled, so the family is stated rather than inherited.
     minWidth: "10rem",

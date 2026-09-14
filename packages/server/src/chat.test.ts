@@ -1,4 +1,4 @@
-import { Effect, Exit, Ref } from "effect";
+import { Effect, Exit, Ref, Scope } from "effect";
 import { describe, expect, it } from "vitest";
 import {
   MODE,
@@ -9,6 +9,7 @@ import {
   permissionOf,
   settledWhen,
   updateOf,
+  oneAtATime,
 } from "./chat";
 
 // The shapes here are not invented: they are the updates a real turn produced,
@@ -707,5 +708,147 @@ describe("a call the turn ended underneath", () => {
 
   it("ignores everything that is not a tool call", () => {
     expect(hanging([{ kind: "message", role: "agent", text: "hello" } as never])).toEqual([]);
+  });
+});
+
+// ── holding the adapter open for the turn, whoever is watching ──────────────
+//
+// The failure this is the guard for was measured on this repository's own
+// conversation: `idleTimeToLive` releases a conversation two minutes after its
+// last reference, releasing kills the adapter, and the window's reference is
+// the chat panel's subscription — which Base UI drops the moment somebody
+// switches the accessory column to the diff. Seven turns died that way in one
+// afternoon, each with `stop_reason: tool_use` and a tool result that came back
+// to a process that no longer existed.
+//
+// What is testable without an adapter is the wiring, and both ways it can be
+// wrong are invisible in use: a fiber in the caller's scope is killed when the
+// reply is sent, and a second hold per conversation is a reference nothing
+// gives back.
+/** A scope that behaves like the daemon's: outlives every request in it. */
+const withScope = <A>(use: (scope: Scope.Scope) => Effect.Effect<A>) =>
+  Effect.gen(function* () {
+    const scope = yield* Scope.make();
+    const answer = yield* use(scope);
+    yield* Scope.close(scope, Exit.void);
+    return answer;
+  });
+
+describe("one at a time, per conversation", () => {
+  it("outlives the scope of whoever asked for it", async () => {
+    // `forkScoped` here rather than `forkIn` is the mistake that reads as
+    // working: the hold is taken and then interrupted a millisecond later,
+    // when the request that sent the message answers.
+    const ran = await Effect.runPromise(
+      withScope((scope) =>
+        Effect.gen(function* () {
+          const done = yield* Ref.make(false);
+          const hold = oneAtATime(scope);
+          // A request's own scope, closed the moment it answers.
+          yield* Effect.scoped(hold("one", Effect.sleep("40 millis")));
+          yield* Effect.forkIn(
+            Effect.andThen(Effect.sleep("40 millis"), Ref.set(done, true)),
+            scope,
+          );
+          yield* Effect.sleep("120 millis");
+          return yield* Ref.get(done);
+        }),
+      ),
+    );
+    expect(ran).toBe(true);
+  });
+
+  it("takes one hold per key, however many times it is asked", async () => {
+    const held = await Effect.runPromise(
+      withScope((scope) =>
+        Effect.gen(function* () {
+          const taken = yield* Ref.make(0);
+          const hold = oneAtATime(scope);
+          const work = Effect.andThen(
+            Ref.update(taken, (was) => was + 1),
+            Effect.sleep("80 millis"),
+          );
+          // A message, then a steer, then another steer — one turn.
+          yield* hold("one", work);
+          yield* hold("one", work);
+          yield* hold("one", work);
+          yield* Effect.sleep("20 millis");
+          return yield* Ref.get(taken);
+        }),
+      ),
+    );
+    expect(held).toBe(1);
+  });
+
+  it("keeps the keys apart", async () => {
+    const held = await Effect.runPromise(
+      withScope((scope) =>
+        Effect.gen(function* () {
+          const taken = yield* Ref.make(0);
+          const hold = oneAtATime(scope);
+          const work = Effect.andThen(
+            Ref.update(taken, (was) => was + 1),
+            Effect.sleep("80 millis"),
+          );
+          yield* hold("one", work);
+          yield* hold("another", work);
+          yield* Effect.sleep("20 millis");
+          return yield* Ref.get(taken);
+        }),
+      ),
+    );
+    expect(held).toBe(2);
+  });
+
+  it("lets the next turn hold again once the last one ended", async () => {
+    const held = await Effect.runPromise(
+      withScope((scope) =>
+        Effect.gen(function* () {
+          const taken = yield* Ref.make(0);
+          const hold = oneAtATime(scope);
+          yield* hold(
+            "one",
+            Ref.update(taken, (was) => was + 1),
+          );
+          yield* Effect.sleep("40 millis");
+          yield* hold(
+            "one",
+            Ref.update(taken, (was) => was + 1),
+          );
+          yield* Effect.sleep("40 millis");
+          return yield* Ref.get(taken);
+        }),
+      ),
+    );
+    expect(held).toBe(2);
+  });
+
+  it("frees the key when the work fails, rather than wedging it", async () => {
+    // A key left set by a failure is a conversation that can never be held
+    // open again — which fails in the direction nobody would look, because
+    // everything goes on working until an adapter is quietly shot.
+    const held = await Effect.runPromise(
+      withScope((scope) =>
+        Effect.gen(function* () {
+          const taken = yield* Ref.make(0);
+          const hold = oneAtATime(scope);
+          yield* hold(
+            "one",
+            Effect.andThen(
+              Ref.update(taken, (was) => was + 1),
+              Effect.fail("no"),
+            ),
+          );
+          yield* Effect.sleep("40 millis");
+          yield* hold(
+            "one",
+            Ref.update(taken, (was) => was + 1),
+          );
+          yield* Effect.sleep("40 millis");
+          return yield* Ref.get(taken);
+        }),
+      ),
+    );
+    expect(held).toBe(2);
   });
 });

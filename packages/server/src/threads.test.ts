@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Db, layer as dbLayer } from "@awp-kit/store";
-import { Effect, Layer } from "effect";
+import { Effect, Fiber, Layer, Option, Stream } from "effect";
 import { afterAll, describe, expect, test } from "vitest";
 import { Threads, layer, migrations, threadId } from "./threads";
 
@@ -323,5 +323,114 @@ describe("restore", () => {
     );
     expect(seen.did).toBe(false);
     expect(seen.all[0]?.title).toBe("what a person called it");
+  });
+});
+
+// ── the feed ───────────────────────────────────────────────────────────────
+//
+// Why this exists is on the service: the window is not the only writer, so a
+// client that only hears its own replies is a client that is right about its
+// own edits and silent about a job's. Each test subscribes before it writes,
+// because nothing is replayed.
+
+describe("changes", () => {
+  test("a write reaches somebody who is not the caller", async () => {
+    const heard = await on(file(), (threads) =>
+      Effect.gen(function* () {
+        const listening = yield* Effect.forkChild(Stream.runHead(threads.changes()));
+        // The fork has to reach its subscribe before the publish, and
+        // `runHead` yields on its way there — the same one yield `pages.test`
+        // relies on, and a sleep would be a slower way to say it.
+        yield* Effect.yieldNow;
+        yield* threads.create("tabular exports");
+        return Option.getOrUndefined(yield* Fiber.join(listening));
+      }),
+    );
+    expect(heard?.map((one) => one.title)).toEqual(["tabular exports"]);
+  });
+
+  test("carries the whole list, not the thread that changed", async () => {
+    // The shape `WorkspaceFactsChanges` has, and for the same reason: a client
+    // replaces what it holds rather than folding, so there is nothing that can
+    // drift out of step with the answer `ThreadList` gives.
+    const heard = await on(file(), (threads) =>
+      Effect.gen(function* () {
+        yield* threads.create("the older one");
+        const listening = yield* Effect.forkChild(Stream.runHead(threads.changes()));
+        yield* Effect.yieldNow;
+        yield* threads.create("the newer one");
+        return Option.getOrUndefined(yield* Fiber.join(listening));
+      }),
+    );
+    // As a set: two threads made in the same millisecond are ordered by their
+    // ids, which are random, so asserting on the order here would be asserting
+    // on `Math.random`. What this test is about is that both are in it.
+    expect(heard?.map((one) => one.title).toSorted()).toEqual(["the newer one", "the older one"]);
+  });
+
+  test("a claim made by something that is not a person is still a change", async () => {
+    // The case this was built for. `attach` is the create job's second-to-last
+    // step, minutes after the reply the window acted on, and it used to reach
+    // the sidebar only because something else noticed a job had moved.
+    const heard = await on(file(), (threads) =>
+      Effect.gen(function* () {
+        const made = yield* threads.create("tabular exports");
+        const listening = yield* Effect.forkChild(Stream.runHead(threads.changes()));
+        yield* Effect.yieldNow;
+        yield* threads.attach(made.id, pair("thicket", "lantern"));
+        return Option.getOrUndefined(yield* Fiber.join(listening));
+      }),
+    );
+    expect(heard?.[0]?.members).toEqual([pair("thicket", "lantern")]);
+  });
+
+  test("a thread that went away is said by the list it is missing from", async () => {
+    // The change with no record to send, which is the whole argument for the
+    // list over a per-record feed.
+    const heard = await on(file(), (threads) =>
+      Effect.gen(function* () {
+        const going = yield* threads.create("a mistake");
+        yield* threads.create("the real work");
+        const listening = yield* Effect.forkChild(Stream.runHead(threads.changes()));
+        yield* Effect.yieldNow;
+        yield* threads.deleteIfEmpty(going.id);
+        return Option.getOrUndefined(yield* Fiber.join(listening));
+      }),
+    );
+    expect(heard?.map((one) => one.title)).toEqual(["the real work"]);
+  });
+
+  test("says nothing when nothing changed", async () => {
+    // `deleteIfEmpty` on a thread holding a workspace leaves it alone, and a
+    // snapshot identical to the last one is a re-render every client pays for
+    // and nobody asked for.
+    const quiet = await on(file(), (threads) =>
+      Effect.gen(function* () {
+        const made = yield* threads.create("tabular exports");
+        yield* threads.attach(made.id, pair("thicket", "lantern"));
+        const listening = yield* Effect.forkChild(
+          Stream.runHead(threads.changes()).pipe(Effect.timeoutOption("50 millis")),
+        );
+        yield* Effect.yieldNow;
+        yield* threads.deleteIfEmpty(made.id);
+        return yield* Fiber.join(listening);
+      }),
+    );
+    // Timed out rather than interrupted: a check that cannot fail reads as a
+    // pass, and an interrupt would have proved only that the test stopped.
+    expect(Option.isNone(quiet)).toBe(true);
+  });
+
+  test("a listener that joins afterwards hears nothing", async () => {
+    // A subscription answers what changes and a question answers what is, so
+    // this is the property that makes `ThreadList` still necessary — and the
+    // reason `useThreads` asks again on every reconnect.
+    const quiet = await on(file(), (threads) =>
+      Effect.gen(function* () {
+        yield* threads.create("said before anybody was listening");
+        return yield* Stream.runHead(threads.changes()).pipe(Effect.timeoutOption("50 millis"));
+      }),
+    );
+    expect(Option.isNone(quiet)).toBe(true);
   });
 });

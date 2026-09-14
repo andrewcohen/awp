@@ -23,6 +23,7 @@ import {
   groupByThread,
   groupByWorkspace,
   openable,
+  prIn,
 } from "./workspaces";
 
 /**
@@ -599,6 +600,30 @@ function Row({
   // goes below; anything else names itself and the project goes below.
   const other = workspace.foreign ? "elsewhere" : (workspace.otherIdent ?? "");
 
+  /**
+   * Which pull request this row is about, from either thing that knows.
+   *
+   * ── two sources, and only one of them used to be read here ───────────────
+   *
+   * `facts.pr` is the agent's own hooks writing what it is working on into
+   * `~/.awp/workspace-state.json` — so it exists for a checkout something has
+   * reported on, and for no other. awp's own record is the thread's link,
+   * which is written when a review is started and, since the adoption pass,
+   * whenever the inbox recognises a pull request opened from a checkout.
+   *
+   * Only the first was drawn, and AGENTS.md argued a third copy of the number
+   * would be duplication — true while every linked thread was a *review*
+   * thread, whose title already begins `#2418`. It stopped being true the
+   * moment a thread named after the work could hold a link: reported as the
+   * link not showing at all, on a thread the daemon had linked minutes
+   * earlier. The number was on the record, in the window, and drawn nowhere.
+   *
+   * The hook's reading wins when both are there. It is about the checkout as
+   * it stands; the link is about the work, and the two only disagree while
+   * somebody is doing something the record has not caught up with.
+   */
+  const pr = facts?.pr ?? prIn(thread, pair?.project)?.number;
+
   // ── the label takes line one, and the slug moves down ────────────────────
   //
   // `effect-ts-tabular-export-timemachine` is a slug because it has to be a
@@ -749,9 +774,9 @@ function Row({
                 reason the two-line layout exists at all: a number and a phase
                 cannot truncate usefully, so they take their space and the slug
                 above takes what is left. */}
-            {facts?.pr !== undefined && (
-              <span {...stylex.props(styles.pr)} title={`pull request #${facts.pr}`}>
-                {`#${facts.pr}`}
+            {pr !== undefined && (
+              <span {...stylex.props(styles.pr)} title={`pull request #${pr}`}>
+                {`#${pr}`}
               </span>
             )}
             {facts?.phase !== undefined && (

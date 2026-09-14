@@ -6,7 +6,7 @@ import { type ReactNode, useState } from "react";
 import { reclaimWorkspace, said } from "./daemon";
 import { type Items, menuDanger, menuItem } from "./menus";
 import { typeset } from "./typeset";
-import { colors, lift, text, timing } from "./tokens.stylex";
+import { colors, layer, lift, text, timing } from "./tokens.stylex";
 
 // Taking one checkout back, and leaving the thread alone.
 //
@@ -56,7 +56,7 @@ const styles = stylex.create({
     top: "50%",
     left: "50%",
     transform: "translate(-50%, -50%)",
-    zIndex: 30,
+    zIndex: layer.modal,
     display: "flex",
     flexDirection: "column",
     gap: "0.75rem",

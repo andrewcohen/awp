@@ -335,7 +335,7 @@ function Window() {
   // Threads live here rather than in the sidebar, because the sidebar is no
   // longer the only thing that changes them: cmd+N starts one from anywhere in
   // the window. Two owners of the same list is two lists.
-  const { threads, reload: reloadThreads } = useThreads();
+  const { threads } = useThreads();
   const { projects, reload: reloadProjects } = useProjects();
   const facts = useFacts();
 
@@ -529,21 +529,25 @@ function Window() {
   //
   // Keyed on where every job has got to — which ones, what state, how far —
   // and not on which have stopped. A create job makes the session at its third
-  // step and the thread claim at its fourth, and on a chat-face create it then
-  // sits in `brief` for the whole of the agent's first turn: keyed on
-  // completion, the sidebar drew "nothing yet" over a thread whose workspace
-  // was on disk with a briefed agent running in it. See refresh.ts.
+  // step, and on a chat-face create it then sits in `brief` for the whole of
+  // the agent's first turn: keyed on completion, the sidebar drew "nothing yet"
+  // over a workspace that was on disk with a briefed agent running in it. See
+  // refresh.ts.
   //
   // And the jobs this reads have to be current for any of it to fire, which is
   // why `useJobs` now re-lists on reconnect — the feed carries changes from
   // the moment of subscribe, so a job that finished during an outage arrives
   // nowhere. See the note there.
+  //
+  // The threads used to be re-read here too, and are not: they have a feed of
+  // their own now, so the claim at the job's fourth step arrives without
+  // anything having to notice that a job moved. The sessions have no such
+  // stream, which is the whole of what is left of this.
   const progress = progressKey(jobs);
   useEffect(() => {
     reloadSessions();
-    reloadThreads();
-    // `reloadSessions` and `reloadThreads` are stable — see the note in
-    // useSessions on why `load` lives outside the component.
+    // `reloadSessions` is stable — see the note in useSessions on why `load`
+    // lives outside the component.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [progress]);
 
@@ -698,14 +702,12 @@ function Window() {
                   });
                 }}
                 threads={threads}
-                onThreadsChanged={() => {
-                  reloadThreads();
-                  // And the sessions, because starting a review makes one. The
-                  // job is what actually creates it, so this is the optimistic
-                  // half; the `finished` effect above is what catches up when
-                  // the job lands.
-                  reloadSessions();
-                }}
+                // The sessions, because starting a review from a row makes
+                // one. The threads are not re-read: whatever the menu just did
+                // went through the daemon's store, which publishes. The job is
+                // what actually creates the session, so this is the optimistic
+                // half and the `progress` effect above is what catches up.
+                onThreadsChanged={reloadSessions}
                 failure={failure}
                 onInbox={() => setInbox(true)}
                 onNew={() =>
@@ -880,10 +882,10 @@ function Window() {
         onOpen={(project, workspace) => {
           void navigate({ to: pathOf({ at: "workspace", project, workspace, kind: PRIMARY }) });
         }}
-        onStarted={() => {
-          reloadThreads();
-          reloadSessions();
-        }}
+        // The sessions only. A review makes a thread and a workspace, and the
+        // thread half arrives on its own feed now — this is the optimistic
+        // half of the session, which the `progress` effect above catches up.
+        onStarted={reloadSessions}
       />
 
       <NewThread
@@ -891,7 +893,6 @@ function Window() {
         projects={projects}
         onProjects={reloadProjects}
         onClose={() => setNewThread(undefined)}
-        onStarted={reloadThreads}
       />
 
       {/* cmd+P. Mounted only while open, unlike NewThread — it holds a query

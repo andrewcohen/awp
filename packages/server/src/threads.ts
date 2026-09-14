@@ -1,6 +1,6 @@
 import { type Thread, type ThreadMember, ThreadNotFound, type ThreadPr } from "@awp-kit/protocol";
 import { Db, type Migration, attempt } from "@awp-kit/store";
-import { Context, Data, Effect, Layer } from "effect";
+import { Context, Data, Effect, Layer, PubSub, Stream } from "effect";
 
 // Where threads are kept, and the rules about what may be in them.
 //
@@ -106,6 +106,28 @@ export class Threads extends Context.Service<
   {
     /** Every thread, newest first. Archived ones included — the caller filters. */
     readonly list: () => Effect.Effect<ReadonlyArray<Thread>, ThreadStoreError>;
+
+    /**
+     * Every thread again, each time any of them changes.
+     *
+     * Here rather than beside the handlers, because the handlers are not the
+     * only writer: a job step claims a workspace, the inbox join adopts a pull
+     * request, an agent's own tool renames a thread. A feed fed by the calls a
+     * window happens to make is a feed that is right about the window's own
+     * edits and silent about everything else — which is the state three
+     * separate re-read workarounds in the renderer existed to paper over.
+     *
+     * The whole list each time, for the reason `WorkspaceFactsChanges` sends
+     * the whole table: it is a few kilobytes, and a delta would be machinery in
+     * service of an economy nobody can measure. It is also the only shape that
+     * can say a thread is *gone* — `deleteIfEmpty` removes one, and there is no
+     * record left to send.
+     *
+     * Nothing is replayed, and the rule this repo already records is why: a
+     * subscription answers what changes and a question answers what is, so a
+     * client subscribes *and* asks, here and on every reconnect.
+     */
+    readonly changes: () => Stream.Stream<ReadonlyArray<Thread>>;
 
     /**
      * A thread, optionally branched from another.
@@ -330,6 +352,27 @@ export const make = Effect.gen(function* () {
   const one = (thread: string): Thread | undefined =>
     readAll().find((entry) => entry.id === thread);
 
+  // Sliding rather than dropping, which is the difference between an event and
+  // a state. `Pages` drops, because a navigation nobody could receive is spent;
+  // here the newest list is the only one that is *true*, so a full buffer must
+  // lose the oldest snapshot and never the newest.
+  const hub = yield* PubSub.sliding<ReadonlyArray<Thread>>(16);
+
+  /**
+   * Say that something changed, having already changed it.
+   *
+   * Failure is swallowed on purpose, and it is the one place in this file that
+   * is. The write has happened by the time this runs, so a read that could not
+   * answer must not turn a successful rename into a refusal — the caller would
+   * report a failure for work that is on disk. What it costs is a stale window
+   * until the next question, which is what every client is already built to
+   * survive.
+   */
+  const announce = ask("cannot read threads", readAll).pipe(
+    Effect.flatMap((all) => PubSub.publish(hub, all)),
+    Effect.ignore,
+  );
+
   /**
    * Run a write, but only for a thread that exists.
    *
@@ -357,10 +400,15 @@ export const make = Effect.gen(function* () {
           ),
         ),
       ),
+      // Every write that goes through here announces itself — rename, archive,
+      // attach, detach, link, unlink — so a writer added later cannot forget.
+      Effect.tap(() => announce),
     );
 
   return {
     list: () => ask("cannot list threads", readAll),
+
+    changes: () => Stream.fromPubSub(hub),
 
     create: (title: string, parent?: string) =>
       Effect.sync(() => threadId(new Date(), Math.random())).pipe(
@@ -388,6 +436,7 @@ export const make = Effect.gen(function* () {
             return made;
           });
         }),
+        Effect.tap(() => announce),
       ),
 
     restore: (thread: string, title: string, parent?: string, pr?: ThreadPr) =>
@@ -413,7 +462,10 @@ export const make = Effect.gen(function* () {
           linkPr.run(thread, pr.project, pr.number);
         }
         return true;
-      }),
+        // Only when it actually put one back. A restore that found the thread
+        // already there changed nothing, and a snapshot identical to the last
+        // one is a re-render every client pays for and nobody asked for.
+      }).pipe(Effect.tap((made) => (made ? announce : Effect.void))),
 
     rename: (thread: string, title: string) =>
       change(
@@ -441,7 +493,10 @@ export const make = Effect.gen(function* () {
         const before = readThread.all(thread).length;
         dropEmpty.run(thread, thread);
         return before > 0 && readThread.all(thread).length === 0;
-      }),
+        // Same rule as `restore`: only a deletion that happened is news. This
+        // is the one change no per-record feed could carry — the record is what
+        // went away.
+      }).pipe(Effect.tap((gone) => (gone ? announce : Effect.void))),
 
     detach: (thread: string, member: ThreadMember) =>
       change(

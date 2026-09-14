@@ -1,28 +1,35 @@
 import type { Thread } from "@awp-kit/protocol";
 import { useEffect, useRef, useState } from "react";
-import { listThreads, onReconnect } from "./daemon";
+import { listThreads, onReconnect, watchThreads } from "./daemon";
 
-// The threads, and a way to say they changed.
+// The threads: asked for once, and then watched.
 //
-// Deliberately not the shape `useJobs` has. Jobs arrive on a stream because a
-// job changes on its own — that is what a job *is* — and a list refreshed on a
-// timer would show the state between the interesting moments and nothing else.
+// This is `useJobs`' shape now, and it was not. The argument for the old one
+// was that a thread changes when a person changes it in this window, so the
+// reply to the change is the update — and every exception to that had already
+// been patched separately by the time there were three of them:
 //
-// A thread changes when a person changes it, in this window. So every mutation
-// already has the new value in its reply, and the only thing missing is a way
-// to say "read them again" after one — which is `reload`. Adding a stream here
-// would be a second mechanism for something the reply already answered, and the
-// two would disagree the first time one of them was slow.
+//   a create job    claims the workspace at its second-to-last step, minutes
+//                   after the reply this window acted on. `progressKey`
+//   a review        links the pull request from inside the job. `onStarted`
+//   the inbox join  adopts one by its head commit, on a read nobody made
+//                   here. `useAdoptions`
 //
-// The exception is a workspace created by a *job*: the claim happens in the
-// daemon, minutes later, and nothing here would hear it. `Sidebar` reloads when
-// a job finishes, which is the one place the two systems have to meet.
+// Three implementations of "read the threads again" is exactly the shape this
+// codebase calls the copy that drifts, and none of them covers the fourth case
+// at all: a second daemon on the same store, where the person changing the
+// thread is in the other window.
+//
+// Nothing exposes a `reload` any more, and that is the measure of it: there is
+// no longer a caller anywhere in the window whose job is to notice that the
+// threads might have moved. The question is asked twice — at mount, and every
+// time the socket comes back — which is the rule this file already followed for
+// the reason a stream carries changes from *now*.
 
 export interface Threads {
   readonly threads: ReadonlyArray<Thread>;
   /** Absent while it is working, which is not the same as "none". */
   readonly failure: string | undefined;
-  readonly reload: () => void;
 }
 
 /**
@@ -65,11 +72,21 @@ export function useThreads(): Threads {
     // feed: nothing arrives to say what changed while it was away, so a window
     // that survived a restart would go on showing the state from before it.
     const stop = onReconnect(() => load(alive, setThreads, setFailure));
+    // And every change from now, whoever made it — this window, a job step in
+    // the daemon, an agent's own tool, or a second instance on the same store.
+    // The feed carries the whole list, so there is nothing to merge.
+    const watching = watchThreads((found) => {
+      if (alive.current) {
+        setThreads(found);
+        setFailure(undefined);
+      }
+    });
     return () => {
       alive.current = false;
       stop();
+      watching();
     };
   }, []);
 
-  return { threads, failure, reload: () => load(alive, setThreads, setFailure) };
+  return { threads, failure };
 }
