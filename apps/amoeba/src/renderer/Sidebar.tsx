@@ -1,11 +1,19 @@
 import type { SessionInfo, Thread, WorkspaceFacts, WorkspaceStatus } from "@awp-kit/protocol";
+import { CaretRightIcon } from "@phosphor-icons/react/CaretRight";
 import * as stylex from "@stylexjs/stylex";
-import { motion } from "motion/react";
-import { pill } from "./springs";
+import { AnimatePresence, motion } from "motion/react";
+import { pill, useSpring } from "./springs";
 import { useMemo, useState } from "react";
-import { ArchiveThread } from "./ArchiveThread";
+import { useThreadMenu } from "./ArchiveThread";
+import { More, RightClick } from "./menus";
+import { useWorkspaceMenu } from "./ReclaimWorkspace";
 import { type Facts, factsKey } from "./useFacts";
-import { rememberLooseOpen, rememberedLooseOpen } from "./remembered";
+import {
+  rememberFolded,
+  rememberLooseOpen,
+  rememberedFolded,
+  rememberedLooseOpen,
+} from "./remembered";
 import { typeset } from "./typeset";
 import { colors, space, text, timing } from "./tokens.stylex";
 import {
@@ -140,10 +148,22 @@ const styles = stylex.create({
   // not so much that the name loses its column.
   nested: { paddingInlineStart: "1.5rem" },
 
+  /**
+   * The box whose height the fold animates.
+   *
+   * `overflow: hidden` is the whole mechanism: without it the rows are drawn
+   * over the group below for the length of the transition, which reads as the
+   * list tearing rather than folding.
+   */
+  folding: { overflow: "hidden" },
+
   group: { marginBottom: "0.5rem" },
   heading: {
     display: "flex",
-    alignItems: "baseline",
+    // `center`, not `baseline`. The caret is an icon in a flex box now, and a
+    // flex container's baseline is its last line box — so under `baseline` the
+    // mark sat low against the title instead of centred on it.
+    alignItems: "center",
     gap: "0.4rem",
     padding: `0.15rem ${space.gutter}`,
   },
@@ -191,7 +211,22 @@ const styles = stylex.create({
     textAlign: "left",
     cursor: "pointer",
   },
-  caret: { flexShrink: 0, width: "0.7rem", fontSize: text.small, color: colors.muted },
+  /**
+   * The disclosure mark. A box the icon is centred in, not a text slot.
+   *
+   * `display: flex` so the rotation turns about the icon's own centre — an
+   * inline span is as tall as the line box, so a rotation inside one pivots
+   * about a point above the glyph and the caret appears to swing rather than
+   * to turn.
+   */
+  caret: {
+    flexShrink: 0,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    width: "0.9rem",
+    color: colors.muted,
+  },
   // How much is behind the fold. A disclosure that will not say how much it is
   // hiding is one nobody opens.
   count: { flexShrink: 0, fontSize: text.small, color: colors.muted },
@@ -621,11 +656,37 @@ function Row({
   // the cadence the two lines exist to keep.
   const refusal = several ? undefined : workspace.sessions[0]?.refusal;
 
+  // ── which menu this row gets, and it is one or the other ─────────────────
+  //
+  // A row standing in for its whole thread — `title` is set, which is how
+  // `Group` says so — carries the thread's menu, because that thread draws no
+  // heading and has nowhere else to put it. A row under a heading does not:
+  // the heading above already carries it, and one per sibling would offer to
+  // archive the thread four times.
+  const asThread = useThreadMenu({
+    thread: title === undefined ? undefined : thread,
+    onChanged: onThreadsChanged,
+  });
+  // The other half. A row under a heading can be taken back on its own —
+  // `thread` is the claim that makes that expressible, and `pair` is the
+  // member. Both hooks always run and one of them always answers nothing.
+  const asCheckout = useWorkspaceMenu({
+    thread: title === undefined ? thread?.id : undefined,
+    member: title === undefined ? pair : undefined,
+    onChanged: onThreadsChanged,
+  });
+  const menu = title === undefined ? asCheckout : asThread;
+  // Named apart from the row's own `onOpen`, which opens a workspace. This
+  // resets the menu's `copy link` label — see `useThreadMenu`.
+  const resetMenu = title === undefined ? undefined : asThread.onOpen;
+
   return (
-    <div
+    <RightClick
+      items={menu.items}
+      onOpen={resetMenu}
+      style={[styles.row, active && styles.rowOn]}
       onPointerEnter={() => setHovered(true)}
       onPointerLeave={() => setHovered(false)}
-      {...stylex.props(styles.row, active && styles.rowOn)}
     >
       {/* ── the edge travels down the strip ──────────────────────────────
           One accent bar with a `layoutId`, so moving between rows slides it
@@ -668,15 +729,10 @@ function Row({
           <Dot live={live} status={facts?.status} unread={facts?.unread === true} />
           <span {...stylex.props(styles.label)}>{shown}</span>
         </button>
-        {/* Only when this row *is* the thread. A thread holding one workspace
-            draws no heading — see `Group` — so the row is the only line the
-            thread has, and the control has to be on it or it is unreachable
-            for most threads on a real machine. A row under a heading gets
-            nothing: the heading above it already carries the menu, and one
-            per sibling would offer to archive the thread four times. */}
-        {title !== undefined && thread !== undefined && (
-          <ArchiveThread thread={thread} shown={hovered} onArchived={onThreadsChanged} />
-        )}
+        {/* Which menu this is, is decided above — see `menu`. Every row has
+            one; what differs is whether its items are the thread's or this
+            one checkout's. */}
+        <More label={`more for ${shown}`} shown={hovered} items={menu.items} onOpen={resetMenu} />
       </div>
 
       <div {...stylex.props(styles.meta)}>
@@ -768,7 +824,8 @@ function Row({
           <span {...stylex.props(styles.reason)}>{refusal}</span>
         )}
       </div>
-    </div>
+      {menu.dialogs}
+    </RightClick>
   );
 }
 
@@ -800,14 +857,37 @@ function Group({
   /** Open a workspace that has no session. See Row's own. */
   readonly onOpen: (project: string, workspace: string) => void;
   readonly onThreadsChanged: () => void;
-  /** Only the loose group folds; a thread is small and is the point. */
   readonly folded: boolean;
+  /**
+   * Undefined where there is nothing to fold into.
+   *
+   * A thread holding one workspace draws no heading at all — see below — and a
+   * fold with no heading has no control to live on.
+   */
   readonly onFold: (() => void) | undefined;
 }) {
   // Hover on the heading, tracked here for the same reason `Row` tracks its
   // own: the control is in a child component, and `:hover` on a parent cannot
   // reach across one. Focus reveals it on its own — see `trigger`.
   const [hovered, setHovered] = useState(false);
+
+  // ── a fold is a flick, not a panel ───────────────────────────────────────
+  //
+  // `heavy` first, on the reasoning that a group of rows is the largest thing
+  // this column moves. Wrong: weight is about what is being moved, and what a
+  // person is doing here is *glancing* — folding a thread away to see the one
+  // under it, several times in a row. At 0.46s that reads as the column
+  // thinking about it.
+  //
+  // `pill` is the crispest preset with any give at all, and the caret's
+  // rotation takes the same one: two halves of one gesture that disagreed
+  // about how long it takes would read as two controls.
+  const folding = useSpring(pill);
+
+  // The thread's own menu — its items, and the two dialogs they open. Called
+  // unconditionally with a possibly-absent thread, because the loose group has
+  // none and a hook cannot be skipped.
+  const menu = useThreadMenu({ thread: group.thread, onChanged: onThreadsChanged });
 
   // ── one workspace is not a group ─────────────────────────────────────────
   //
@@ -832,7 +912,9 @@ function Group({
   // The empty thread keeps its heading: it has no row to collapse into, and a
   // thread waiting for its job to finish is exactly the thing a person is
   // watching for.
-  if (onFold === undefined && group.thread !== undefined && group.workspaces.length === 1) {
+  // It is also the one group with no fold: a heading that would hide exactly
+  // one row is a control that costs a line to save a line.
+  if (group.thread !== undefined && group.workspaces.length === 1) {
     const only = group.workspaces[0];
     return only === undefined ? null : (
       <div {...stylex.props(styles.group)}>
@@ -851,85 +933,147 @@ function Group({
     );
   }
 
-  // ── the ⋯ is on the thread, and it is a sibling of the fold ──────────────
+  // ── every heading folds, and it is the same control ──────────────────────
   //
-  // A menu trigger is a button, and a button cannot be nested inside the fold
-  // button — so the heading is a row holding both rather than one control.
-  // Only a real thread gets one: the derived groups the sidebar makes for
-  // workspaces nobody has claimed have nothing to archive.
-  const more =
-    group.thread === undefined ? null : (
-      <ArchiveThread thread={group.thread} shown={hovered} onArchived={onThreadsChanged} />
-    );
+  // Only the loose group used to, on the argument that a thread is small and
+  // is the point. That was true while a thread held one workspace — and it is
+  // the *other* rule above, not this one, that was carrying it: a one-workspace
+  // thread draws no heading, so there was never anything to fold.
+  //
+  // A thread across three repositories is three two-line rows under a heading,
+  // and two of those fill the column. So the fold appears exactly where the
+  // heading does, which is exactly where there is more than one thing behind
+  // it.
+  //
+  // What stays different is the default, not the control: the loose group is
+  // the archive and is shut until opened, where a thread is the work and is
+  // open until somebody puts it away. See `rememberedFolded`.
+  const loose = group.thread === undefined;
 
+  // A button, because it does something. A menu trigger is a button too, and a
+  // button cannot be nested inside one — which is why the heading row holds
+  // two controls rather than being one.
+  const fold = (
+    <button
+      type="button"
+      aria-expanded={!folded}
+      onClick={onFold}
+      {...stylex.props(styles.heading, styles.headingButton, styles.grow)}
+    >
+      {/* ── one caret, rotated, rather than two glyphs swapped ───────────
+
+            It was `▸` and `▾`, which are two problems. They are *characters*,
+            so their size and weight are the text face's rather than this
+            control's — measured against a 13px `text.small` they came out
+            noticeably lighter and smaller than every other mark in the
+            column, and there is no size at which a geometric shape from a
+            prose font matches an icon set drawn for the purpose.
+
+            And swapping one character for another is a pop. A disclosure's
+            natural motion is the caret turning, which says the same thing the
+            two glyphs said and says it *continuously* — so it also reads
+            during the fold rather than only at its ends. */}
+      <motion.span
+        aria-hidden
+        {...stylex.props(styles.caret)}
+        animate={{ rotate: folded ? 0 : 90 }}
+        initial={false}
+        transition={folding}
+      >
+        <CaretRightIcon size={14} weight="bold" />
+      </motion.span>
+      <span {...stylex.props(typeset.subhead, styles.threadName, loose && styles.loose)}>
+        {group.title}
+      </span>
+      <span {...stylex.props(styles.count)}>{group.workspaces.length}</span>
+    </button>
+  );
+
+  // ── the heading IS the menu's area ───────────────────────────────────────
+  //
+  // Right-clicking a thread opens what its ⋯ opens, so the menu owns the row
+  // rather than sitting in it — `ThreadMenu` renders the heading element
+  // itself and takes the style it would have had. A wrapper would put a div
+  // between the row and the column's flex.
+  //
+  // Only a real thread has one: the derived group the sidebar makes for
+  // workspaces nobody has claimed has nothing to archive, nothing to add a
+  // project to, and no id to link to.
   const heading =
-    onFold === undefined ? (
-      <div
-        {...stylex.props(styles.heading)}
-        onMouseEnter={() => setHovered(true)}
-        onMouseLeave={() => setHovered(false)}
-      >
-        <span {...stylex.props(typeset.subhead, styles.threadName)}>{group.title}</span>
-        {more}
-      </div>
+    group.thread === undefined ? (
+      <div {...stylex.props(styles.headingRow)}>{fold}</div>
     ) : (
-      <div
-        {...stylex.props(styles.headingRow)}
-        onMouseEnter={() => setHovered(true)}
-        onMouseLeave={() => setHovered(false)}
+      <RightClick
+        items={menu.items}
+        onOpen={menu.onOpen}
+        style={[styles.headingRow]}
+        onPointerEnter={() => setHovered(true)}
+        onPointerLeave={() => setHovered(false)}
       >
-        {/* A button, because it does something — unlike a thread heading,
-            which is a heading precisely because a thread has nothing to
-            open. */}
-        <button
-          type="button"
-          aria-expanded={!folded}
-          onClick={onFold}
-          {...stylex.props(styles.heading, styles.headingButton, styles.grow)}
-        >
-          <span aria-hidden {...stylex.props(styles.caret)}>
-            {folded ? "▸" : "▾"}
-          </span>
-          <span {...stylex.props(typeset.subhead, styles.threadName, styles.loose)}>
-            {group.title}
-          </span>
-          <span {...stylex.props(styles.count)}>{group.workspaces.length}</span>
-        </button>
-        {more}
-      </div>
+        {fold}
+        <More
+          label={`more for ${group.title}`}
+          shown={hovered}
+          items={menu.items}
+          onOpen={menu.onOpen}
+        />
+      </RightClick>
     );
 
   return (
     <div {...stylex.props(styles.group)}>
       {heading}
-      {folded ? null : (
-        <>
-          {/* Said rather than left blank. A thread with nothing in it is the row
+      {/* ── it folds, rather than disappearing ──────────────────────────────
+
+          Nothing pops: the window's mandate. A conditional render has nothing
+          to transition — a component that is not in the tree cannot animate —
+          so the body is kept mounted through the fold and its *height* is
+          what moves, which is the one property that can carry a list of rows
+          collapsing.
+
+          `overflow: hidden` on the folding box is what makes a height
+          animation possible at all; without it the rows are drawn over the
+          group below for the length of the transition. The vertical padding
+          is on the rows rather than here for the same reason: padding on a box
+          animating to zero leaves a gap that never closes. */}
+      <AnimatePresence initial={false}>
+        {!folded && (
+          <motion.div
+            key="body"
+            {...stylex.props(styles.folding)}
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={folding}
+          >
+            {/* Said rather than left blank. A thread with nothing in it is the row
           waiting to be filled, and an empty space under a heading reads as a
           rendering fault. */}
-          {group.workspaces.length === 0 && (
-            <div {...stylex.props(styles.empty, styles.nested)}>nothing yet</div>
-          )}
+            {group.workspaces.length === 0 && (
+              <div {...stylex.props(styles.empty, styles.nested)}>nothing yet</div>
+            )}
 
-          {group.workspaces.map((workspace) => (
-            <div key={workspace.key} {...stylex.props(styles.nested)}>
-              <Row
-                workspace={workspace}
-                facts={factsFor(facts, workspace)}
-                // No title: the heading above already says it, and repeating
-                // it on every child would name the group four times.
-                title={undefined}
-                selected={selected}
-                at={at}
-                onSelect={onSelect}
-                onOpen={onOpen}
-                thread={group.thread}
-                onThreadsChanged={onThreadsChanged}
-              />
-            </div>
-          ))}
-        </>
-      )}
+            {group.workspaces.map((workspace) => (
+              <div key={workspace.key} {...stylex.props(styles.nested)}>
+                <Row
+                  workspace={workspace}
+                  facts={factsFor(facts, workspace)}
+                  // No title: the heading above already says it, and repeating
+                  // it on every child would name the group four times.
+                  title={undefined}
+                  selected={selected}
+                  at={at}
+                  onSelect={onSelect}
+                  onOpen={onOpen}
+                  thread={group.thread}
+                  onThreadsChanged={onThreadsChanged}
+                />
+              </div>
+            ))}
+          </motion.div>
+        )}
+      </AnimatePresence>
+      {menu.dialogs}
     </div>
   );
 }
@@ -983,6 +1127,24 @@ export function Sidebar({
   );
   const [looseOpen, setLooseOpen] = useState(rememberedLooseOpen);
 
+  // ── the folded threads, by id ────────────────────────────────────────────
+  //
+  // A set of what is *shut*, so a thread nobody has touched is open and a
+  // thread this window has never seen needs no entry. The loose group keeps
+  // its own boolean beside this rather than joining it: it has no id, and its
+  // default is the opposite. Two things with two defaults are two values.
+  const [folded, setFolded] = useState(rememberedFolded);
+  const toggleFold = (id: string) => () => {
+    setFolded((was) => {
+      const next = new Set(was);
+      if (!next.delete(id)) {
+        next.add(id);
+      }
+      rememberFolded(next);
+      return next;
+    });
+  };
+
   // The two states of the column, chosen before the markup rather than inside
   // it. A daemon that is not running is the ordinary case during development,
   // so it gets a sentence and the command, not an empty list.
@@ -991,7 +1153,8 @@ export function Sidebar({
       <>
         {groups.length === 0 && <div {...stylex.props(styles.empty)}>no workspaces</div>}
         {groups.map((group) => {
-          const isLoose = group.thread === undefined;
+          const id = group.thread?.id;
+          const isLoose = id === undefined;
           return (
             <Group
               key={group.key}
@@ -1002,7 +1165,7 @@ export function Sidebar({
               onSelect={onSelect}
               onOpen={onOpen}
               onThreadsChanged={onThreadsChanged}
-              folded={isLoose && !looseOpen}
+              folded={isLoose ? !looseOpen : folded.has(id)}
               onFold={
                 isLoose
                   ? () =>
@@ -1010,7 +1173,7 @@ export function Sidebar({
                         rememberLooseOpen(!open);
                         return !open;
                       })
-                  : undefined
+                  : toggleFold(id)
               }
             />
           );

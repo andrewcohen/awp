@@ -2098,6 +2098,28 @@ export const layer = AwpRpcs.toLayer(
           return { job: job.id };
         }),
 
+      // One checkout, not the thread. The same job kind with `only` set — see
+      // `ArchiveThread.only` — so the refusal and the title are composed here
+      // exactly as they are above, and the daemon is again the one that knows
+      // the thread's name.
+      ThreadReclaimStart: (payload) =>
+        Effect.gen(function* () {
+          const all = yield* threads.list().pipe(Effect.orDie);
+          const thread = all.find((one) => one.id === payload.thread);
+          if (thread === undefined) {
+            return yield* Effect.fail(new ThreadNotFound({ thread: payload.thread }));
+          }
+          const job = yield* jobs
+            .enqueue(archiveThreadRef, {
+              thread: payload.thread,
+              deleteBookmarks: payload.deleteBookmarks,
+              title: thread.title,
+              only: payload.member,
+            })
+            .pipe(Effect.orDie);
+          return { job: job.id };
+        }),
+
       ThreadAttach: ({ thread, member }) =>
         threads.attach(thread, member).pipe(Effect.catchTag("ThreadStoreError", Effect.die)),
 

@@ -56,7 +56,14 @@ export const archiveThreadRef: JobRef<ArchiveThread> = {
   // The name, not the id. A row reading `archive 20260828-wjrq` names
   // something only this system can resolve, in a panel a person reads to find
   // out what is happening.
-  title: (input) => `archive ${input.title.trim() === "" ? input.thread : input.title.trim()}`,
+  //
+  // And it says which of the two scopes this is. A one-checkout reclaim titled
+  // `archive tabular exports` would read, in the jobs panel, as the thread
+  // going away — which is the one thing it does not do.
+  title: (input) =>
+    input.only === undefined
+      ? `archive ${input.title.trim() === "" ? input.thread : input.title.trim()}`
+      : `reclaim ${input.only.project}/${input.only.workspace}`,
 };
 
 export interface ArchiveDeps {
@@ -147,9 +154,35 @@ export const archiveThread = (deps: ArchiveDeps): JobKind<ArchiveThread> => {
           .pipe(Effect.mapError(refused("could not read the projects")));
         const roots = new Map(known.map((project) => [project.name, project.root]));
 
+        // ── one member, or all of them ──────────────────────────────────
+        //
+        // `only` narrows the scope and changes nothing else: every step below
+        // works from `plan`, so a one-entry plan is a reclaim of one checkout
+        // written by the same four steps. See `ArchiveThread.only`.
+        //
+        // A member the thread no longer holds is a refusal rather than an
+        // empty plan — a job that reported success having touched nothing is
+        // the shape this file's own history warns about, where the thread went
+        // away and every directory stayed.
+        const wanted =
+          input.only === undefined
+            ? thread.members
+            : thread.members.filter(
+                (member) =>
+                  member.project === input.only?.project &&
+                  member.workspace === input.only?.workspace,
+              );
+        if (input.only !== undefined && wanted.length === 0) {
+          return yield* Effect.fail(
+            permanent(
+              `"${thread.title}" does not hold ${input.only.project}/${input.only.workspace}`,
+            ),
+          );
+        }
+
         const plan: Array<Planned> = [];
         const skipped: Array<string> = [];
-        for (const member of thread.members) {
+        for (const member of wanted) {
           const dir = workspacePath(member.project, member.workspace);
           const found: string | undefined = yield* jj
             .sourceRoot(dir)
@@ -292,21 +325,49 @@ export const archiveThread = (deps: ArchiveDeps): JobKind<ArchiveThread> => {
   };
 
   /** Last, so a failure above it leaves the thread where somebody can see it. */
+  /**
+   * The last step, and the one place the two scopes differ.
+   *
+   *   no `only`   the thread is archived, so it leaves the sidebar
+   *   `only`      the member is detached, and the thread stays — having lost
+   *               a checkout, which is the whole point of reclaiming one
+   *
+   * Both are the reversible half: everything before this took something away
+   * that cannot be put back, and the undo here says so by only ever restoring
+   * the record.
+   */
   const archiveStep: JobStep<ArchiveThread> = {
     name: "archive",
     run: (input, context) =>
       Effect.gen(function* () {
+        const only = input.only;
+        if (only === undefined) {
+          yield* threads
+            .archive(input.thread, true)
+            .pipe(Effect.mapError(refused("could not archive the thread")));
+          yield* context.log("archived");
+          return;
+        }
         yield* threads
-          .archive(input.thread, true)
-          .pipe(Effect.mapError(refused("could not archive the thread")));
-        yield* context.log("archived");
+          .detach(input.thread, only)
+          .pipe(Effect.mapError(refused("could not release the workspace")));
+        yield* context.log(`released ${only.project}/${only.workspace}`);
       }),
     // The only undo there is. Everything before this took something away that
     // cannot be put back, and the record says so rather than pretending.
+    //
+    // Re-attaching is honest in the same narrow way archiving back is: the
+    // claim returns, the checkout does not. A person reading the row afterwards
+    // sees the thread it belonged to, which is better than a member silently
+    // lost because a later step failed.
     undo: (input) =>
-      threads
-        .archive(input.thread, false)
-        .pipe(Effect.mapError(refused("could not bring the thread back")), Effect.asVoid),
+      input.only === undefined
+        ? threads
+            .archive(input.thread, false)
+            .pipe(Effect.mapError(refused("could not bring the thread back")), Effect.asVoid)
+        : threads
+            .attach(input.thread, input.only)
+            .pipe(Effect.mapError(refused("could not put the workspace back")), Effect.asVoid),
   };
 
   return {

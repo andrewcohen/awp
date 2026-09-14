@@ -841,143 +841,149 @@ const Panel = ({
  */
 export const Working = ({ doing }: { readonly doing?: string | undefined }) => {
   const turning = useTurning(true);
-  const [since] = useState(() => Date.now());
-  const [seconds, setSeconds] = useState(0);
-  useEffect(() => {
-    // A second is its own clock rather than a division of the frame
-    // counter: the frames stop under reduced motion, and how long
-    // something has taken is information rather than decoration.
-    const timer = setInterval(() => setSeconds(Math.round((Date.now() - since) / 1000)), 1000);
-    return () => clearInterval(timer);
-  }, [since]);
 
-  // `thinking` is the honest word for a turn with no call in flight, which
-  // is a real and common state: the model is composing, and the row that
-  // said `working` said nothing the spinner did not.
+  // `thinking` is the honest word for a turn with no call in flight, which is
+  // a real and common state: the model is composing, and a row that said
+  // `working` would say nothing the mark does not.
   const latest = doing === undefined || doing === "" ? THINKING : doing;
-  /**
-   * What is actually drawn, which is the latest activity once it has held
-   * still for a moment.
-   *
-   * ── a burst of calls is not four readings ────────────────────────────────
-   *
-   * An agent reading six files answers six tool calls inside a second, and
-   * each one is a different sentence of a different length — so the pill rolled
-   * six times and sprang to six widths in the time it takes to read one of
-   * them. None of those was legible, and the movement is what made the line
-   * hard to ignore rather than easy to glance at.
-   *
-   * Trailing, so a burst paints once, at the end, with the activity that is
-   * still going. The cost is deliberate and is the other half of the feature:
-   * a call that finishes inside {@link SETTLING} is never drawn at all, and a
-   * reading nobody could have read is a reading not worth the movement.
-   */
-  const [say, setSay] = useState(latest);
-  useEffect(() => {
-    if (say === latest) return;
-    // ── an absence has to hold for longer than a change does ───────────────
-    //
-    // Reported as the width still moving more than it should, and the debounce
-    // above was not what was wrong: measured in a browser, the pill holds one
-    // width across thirty frames, so neither the turning mark nor the clock
-    // moves it. What moves it is `doing` itself, between two calls.
-    //
-    // A turn is calls with gaps in it — one finishes, the model composes, the
-    // next starts — and every gap is an activity of its own. So a run of work
-    // read:
-    //
-    //   read a file ── thinking ── Check the types ── thinking ── grep …
-    //     wide           narrow         wide            narrow     wide
-    //
-    // Two width changes per call rather than one, and the narrow one says
-    // nothing: `thinking` between two calls is not a reading, it is the space
-    // between two readings. Held for {@link QUIET} it only ever appears when
-    // the agent has genuinely stopped to compose, which is the one time it is
-    // worth saying — and the mark keeps turning throughout, so the line is
-    // never claiming to be still.
-    const settle = setTimeout(() => setSay(latest), latest === THINKING ? QUIET : SETTLING);
-    return () => clearTimeout(settle);
-  }, [latest, say]);
-  // The pill is as wide as its words, and the words change every few seconds.
-  // See `styles.working` for why that has to be animated rather than jumped.
+
+  // ── the clock is per activity, and it is also the debounce ───────────────
+  //
+  // Reported twice — "its jumping like crazy", then "it also changes too
+  // frequently when there are fast commands maybe we didnt debounce enough".
+  // The second is the diagnosis and the first is what it costs, and a longer
+  // debounce is not the fix for either.
+  //
+  // A trailing debounce still repaints once per call that outlives it, so any
+  // window short enough to keep the readout current is short enough for a run
+  // of quick commands to walk straight through:
+  //
+  //   read a ─ Find who ─ Check ─ grep ─ read b     five calls, ~1.4s
+  //   220ms debounce → four repaints, four widths
+  //
+  // And a pill carrying *words* sizes to them, so every repaint is a width
+  // change beside the composer. The movement is structural rather than a
+  // tuning problem.
+  //
+  // So the gate is duration, not settling: an activity is drawn once it has
+  // been the current one for {@link LONG_ENOUGH} seconds. A fast command
+  // cannot reach it, so a burst moves nothing at all — and what is on screen
+  // is by construction the call somebody would actually want named, which is
+  // the one that has been going long enough to wonder about.
+  //
+  // ── the clock lives in a child, because that is how it is reset ──────────
+  //
+  // Two shapes were tried first and both are illegal here. A `setState` in an
+  // effect keyed on the activity is flagged by react-doctor, correctly: it is
+  // a second render to reach a number this one already had. Deriving from a
+  // ref adjusted during render is flagged twice over — `react(refs)` for
+  // reading `.current` while rendering and `react(purity)` for `Date.now()`,
+  // and both rules are right about what they are guarding.
+  //
+  // Remounting is React's own answer to "reset state when a prop changes", so
+  // `Activity` is keyed by the activity and starts its clock at mount. It also
+  // puts the decision where the data is: whether a call has lasted long enough
+  // to name is a question about that call, and nothing above it needs the
+  // answer.
+  // The pill resizes twice a slow call now — see the note on `layout` below.
   const settling = useSpring();
 
   return (
     // No entrance of its own: the ledge it sits on animates its height, and
     // two animations on one thing is the fight `springs.ts` exists to stop.
     <motion.p
+      title={latest}
       {...stylex.props(styles.working)}
-      // ── the width is animated, because it is the thing that changes ──────
+      // ── the width is animated, and now it rarely changes ─────────────────
       //
-      // `read a file` and `Find who provides the worker pool` are a hundred
-      // pixels apart, and the pill sizes to whichever it is holding. Snapped,
-      // that is an edge jumping left and right beside the composer every time
-      // the agent moves on — the same restlessness the ledge was pinned to
-      // stop, arriving on the other axis.
+      // Kept, because the pill does still resize — once when a call crosses
+      // ten seconds, and once when it goes back to the mark. Twice per slow
+      // call rather than four times a second is exactly the difference being
+      // asked for, and an unanimated change of a hundred pixels beside the
+      // composer is the jump this was reported for in the first place.
+      //
+      // It is also what covers the words leaving: `Activity` is remounted per
+      // activity, so an outgoing sentence has no exit of its own, and what a
+      // person sees instead is the pill closing around the mark.
       //
       // `layout="size"` and not `layout`: this sits in a dock anchored to the
       // bottom of the column, so a full layout animation would also animate
-      // the position it is already being held at. Size is the only thing that
-      // legitimately moves.
+      // the position it is already being held at.
       layout="size"
       transition={settling}
     >
       <span {...stylex.props(styles.turningWord)} aria-hidden="true">
         {turningAt(turning)}
       </span>
-      {/* ── it rolls, rather than shimmering ─────────────────────────────
-          A gradient sweeping through a word is what every chat in the
-          world does, and it is decoration: it says something is happening
-          without saying what. Reported as "the shimmer is lame… dont just
-          copy codex".
-
-          This is a departures board. The line carries what the agent is
-          doing *right now* — the live call's own purpose, which is the
-          field that says intent — and each new activity rolls the old one
-          up and out of the way. The movement is a consequence of the
-          information changing, which is the only kind of movement that
-          keeps being worth looking at.
-
-          `mode="popLayout"` so the outgoing line leaves the flow at once
-          and the incoming one does not wait for it — two lines of text
-          sliding past each other in a strip one line tall. */}
-      <span {...stylex.props(styles.rolling)}>
-        <AnimatePresence initial={false} mode="popLayout">
-          <motion.span
-            key={say}
-            {...stylex.props(styles.doing)}
-            initial={{ y: "0.85em", opacity: 0 }}
-            animate={{ y: 0, opacity: 1 }}
-            exit={{ y: "-0.85em", opacity: 0 }}
-            transition={jelly}
-          >
-            {say}
-          </motion.span>
-        </AnimatePresence>
-      </span>
-      {seconds >= WORTH_SAYING && (
-        <span {...stylex.props(typeset.label, styles.since)}>{took(seconds)}</span>
-      )}
+      <Activity key={latest} what={latest} />
     </motion.p>
+  );
+};
+
+/**
+ * One activity, and how long it has been the current one.
+ *
+ * Says nothing at all until it has lasted {@link LONG_ENOUGH} seconds — which
+ * is the whole of the debounce, and the reason a burst of fast calls cannot
+ * move the pill. See the note in `Working`.
+ *
+ * Its own component because it is keyed by the activity: a remount is how the
+ * clock is reset, and the clock is the only state here.
+ */
+const Activity = ({ what }: { readonly what: string }) => {
+  const [at] = useState(() => Date.now());
+  const [seconds, setSeconds] = useState(0);
+  useEffect(() => {
+    // Twice a second, so the ten-second boundary is crossed promptly rather
+    // than up to a second late. A second is its own clock rather than a
+    // division of the frame counter: the frames stop under reduced motion, and
+    // how long something has taken is information rather than decoration.
+    const timer = setInterval(() => setSeconds(Math.floor((Date.now() - at) / 1000)), 500);
+    return () => clearInterval(timer);
+  }, [at]);
+
+  return (
+    // ── it arrives, rather than shimmering ───────────────────────────────
+    //
+    // A gradient sweeping through a word is what every chat in the world does,
+    // and it is decoration: it says something is happening without saying
+    // what. Reported as "the shimmer is lame… dont just copy codex".
+    //
+    // What appears here is a call that has already lasted ten seconds, so this
+    // happens at most a few times a minute — and when it does it is carrying a
+    // sentence somebody has been waiting on.
+    <AnimatePresence initial={false}>
+      {seconds >= LONG_ENOUGH && (
+        <motion.span
+          {...stylex.props(styles.rolling)}
+          initial={{ opacity: 0, y: "0.4em" }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0 }}
+          transition={jelly}
+        >
+          <span {...stylex.props(styles.doing)}>{what}</span>
+          <span {...stylex.props(typeset.label, styles.since)}>{took(seconds)}</span>
+        </motion.span>
+      )}
+    </AnimatePresence>
   );
 };
 
 /**
  * What the agent is doing this second, or nothing.
  *
- * The last call of the live turn that has not finished — last, because a
- * turn runs them in order and the newest is the one happening; of the live
- * turn, because a call left hanging by an older turn is not work in
- * progress, whatever its status says.
+ * The last call of the live turn that has not finished — last, because a turn
+ * runs them in order and the newest is the one happening; of the live turn,
+ * because a call left hanging by an older turn is not work in progress,
+ * whatever its status says.
  */
 const doing = (items: ReadonlyArray<Item>, turn: number): string | undefined => {
   for (let at = items.length - 1; at >= 0; at -= 1) {
     const item = items[at];
-    // A compaction is not a tool call and takes no turn with it, but it is
-    // the whole of what the agent is doing while it runs — and it is the one
-    // wait in this window that can be half a minute with no call to show for
-    // it. It is last in the list while it is happening, so the same walk
-    // finds it.
+    // A compaction is not a tool call and takes no turn with it, but it is the
+    // whole of what the agent is doing while it runs — and it is the one wait
+    // in this window that can be half a minute with no call to show for it. It
+    // is last in the list while it is happening, so the same walk finds it.
     if (item?.kind === "compacted") {
       return item.status === "running" ? "compacting" : undefined;
     }
@@ -988,38 +994,55 @@ const doing = (items: ReadonlyArray<Item>, turn: number): string | undefined => 
 };
 
 /**
- * Past this, how long a tool call has taken is worth saying, in seconds.
+ * Past this, how long a finished tool call took is worth printing, in seconds.
  *
- * The same rule as the context figure and the status bar: an elapsed time on
- * every row is furniture, and what a person is looking for is the one call
- * that has been going for minutes.
+ * A transcript row's elapsed count and nothing else. An elapsed on every row
+ * is furniture — most calls are milliseconds — and what a person scanning back
+ * through a turn is looking for is the one that took minutes.
  */
 const WORTH_SAYING = 10;
 
 /**
- * How long an activity has to hold still before the line draws it, in ms.
+ * How long an activity has to have lasted before the pill names it, in
+ * seconds.
  *
- * Long enough to swallow a burst — six `Read`s answered inside a second —
- * and short enough that a call somebody is waiting on appears to arrive at
- * once. It is deliberately not one of the `timing` tokens: those are how long
- * a movement takes, and this is how long to wait before starting one.
+ * ── not the same judgement as {@link WORTH_SAYING}, though it was briefly ──
+ *
+ * These were one constant at 10, under a comment saying that was deliberate.
+ * It was wrong. The number above answers "is this duration interesting",
+ * looking back at a finished call; this one answers "has this held still long
+ * enough to be worth moving the pill for", about a call in flight. They only
+ * looked alike because both are a threshold in seconds.
+ *
+ * Read as one, the pill inherited a bar set for the other question and stayed
+ * a bare mark through almost every turn — ten seconds is a long time to watch
+ * a spinner that has the answer and is not saying it.
+ *
+ * Three is the lower bound that still does the job it exists for. What it has
+ * to suppress is a burst — six calls answered inside a second, which is what
+ * made the pill unreadable — and essentially none of those reach three. What
+ * it buys back is every call between three and ten seconds, which is most of
+ * the ones somebody actually wonders about.
+ *
+ * The cost, which is real: a run of slow calls with short gaps between them
+ * collapses the pill to the mark and grows it again on each gap, because a
+ * gap is `thinking` and `thinking` is an activity like any other. That is at
+ * worst one change every few seconds against the four a second this replaced,
+ * and the honest alternative — holding the last name through a gap — means
+ * the pill reporting a call that has already finished.
  */
-const SETTLING = 220;
+const LONG_ENOUGH = 3;
 
-/** What the line says when a turn has no call in flight. */
+/** What the row says when a turn has no call in flight. */
 const THINKING = "thinking";
 
-/**
- * How long a turn has to go quiet before the line says so, in ms.
- *
- * Longer than {@link SETTLING}, and deliberately: a change between two
- * activities is something happening, where this is something *not* happening,
- * and the gap between two tool calls is the ordinary shape of a turn rather
- * than a state anybody wants reported. Long enough to swallow the pause
- * between one call and the next, short enough that a model composing for a
- * while is not left claiming to be reading a file.
- */
-const QUIET = 900;
+// A `SETTLING` of 220ms and a `QUIET` of 900ms used to live here: a trailing
+// debounce on the activity, and a longer one on the gaps between calls. Both
+// are gone, and the reason is in `Working` — the gate is now how long an
+// activity has *lasted*, which subsumes both. A burst of fast calls is
+// swallowed because none of them reaches ten seconds, and a gap between two
+// calls is swallowed by the same rule rather than by a second number tuned
+// against the first.
 
 /**
  * How far from the bottom still counts as reading the tail, in pixels.
@@ -2252,6 +2275,23 @@ const styles = stylex.create({
    */
   half: { flex: 1, minWidth: 0, display: "flex" },
   /**
+   * The resting state: the mark, and nothing else.
+   *
+   * Sized and shaped as the tail button beside it, deliberately — that control
+   * is the window's existing answer to "a small round thing on this row", and
+   * two round things of two sizes read as two kinds of furniture. What it does
+   * not borrow is the hover treatment: this is a readout and that is a button.
+   *
+   * Square, because a circle is what a fixed footprint means here: with no
+   * words the pill would otherwise be a stadium as wide as its own padding.
+   */
+  justTheMark: {
+    justifyContent: "center",
+    width: "1.6rem",
+    height: "1.6rem",
+    padding: 0,
+  },
+  /**
    * The way back to the tail.
    *
    * Its own glass rather than the pill's, because it is a control and the
@@ -2300,6 +2340,7 @@ const styles = stylex.create({
     position: "relative",
     display: "inline-flex",
     alignItems: "center",
+    gap: "0.45rem",
     height: "1.25em",
     // The one part that gives when the pill is at its ceiling. `minWidth: 0`
     // is the half that matters: a flex item will not shrink below its content

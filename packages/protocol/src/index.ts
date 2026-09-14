@@ -649,6 +649,27 @@ export const ArchiveThread = Schema.Struct({
       }),
     ),
   ),
+  /**
+   * One checkout instead of the whole thread, or absent for all of them.
+   *
+   * ── the same job, at a smaller scope ──────────────────────────────────
+   *
+   * Reclaiming one member of a thread is every step this kind already has,
+   * over a one-entry plan: kill its sessions, forget the workspace, remove the
+   * directory, maybe delete the bookmark. A second kind would be the same four
+   * step bodies written twice, and the one that drifts is the copy nobody
+   * runs.
+   *
+   * What differs is only the last step. With no `only` the thread is archived;
+   * with one it is *detached* — the thread stays, having lost a checkout, and
+   * a thread whose other repositories are still being worked in is exactly the
+   * case this exists for.
+   *
+   * `Schema.optional` and not `UndefinedOr`, like every field on a job record:
+   * the store is JSON, JSON has no `undefined`, and a required key left unset
+   * comes back absent.
+   */
+  only: Schema.optional(ThreadMember),
 });
 
 export type ArchiveThread = (typeof ArchiveThread)["Type"];
@@ -2711,6 +2732,32 @@ export class AwpRpcs extends RpcGroup.make(
     // second copy of something the daemon has in hand, and the plan is not a
     // client's to decide at all.
     payload: { thread: Schema.String, deleteBookmarks: Schema.Boolean },
+    success: Schema.Struct({ job: Schema.String }),
+    error: ThreadNotFound,
+  }),
+
+  /**
+   * Reclaim one checkout, leaving the thread and its other members alone.
+   *
+   * The same job as {@link Rpc ThreadArchiveStart} with `only` set — see
+   * {@link ArchiveThread} for why that is one kind rather than two. The last
+   * step detaches the member instead of archiving the thread.
+   *
+   * A job and not a call, for the reason every destructive multi-step thing
+   * here is one: it kills sessions, forgets a workspace and removes a
+   * directory, and a failure part way through has to be visible and resumable
+   * rather than a rejected promise.
+   *
+   * {@link Rpc ThreadDetach} is the *other* thing and stays: that releases the
+   * claim and takes nothing with it, which is what moving a workspace between
+   * threads means. This takes the checkout away.
+   */
+  Rpc.make("ThreadReclaimStart", {
+    payload: {
+      thread: Schema.String,
+      member: ThreadMember,
+      deleteBookmarks: Schema.Boolean,
+    },
     success: Schema.Struct({ job: Schema.String }),
     error: ThreadNotFound,
   }),
