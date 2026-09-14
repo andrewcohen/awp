@@ -746,10 +746,29 @@ export const createWorkspace = (deps: WorkspaceDeps): JobKind<CreateWorkspace> =
         // Absent means the terminal, which is what every job enqueued before
         // this field existed asked for by saying nothing.
         if (input.face === "chat") {
+          // ── say that this one waits, because it is the step that looks hung ──
+          //
+          // `Chat.brief` is `send` plus holding the conversation open until the
+          // turn ends, which is what stops `RcMap` releasing the adapter and
+          // shooting the agent two minutes into its first answer. So this step
+          // is legitimately `running` for as long as that answer takes.
+          //
+          // Reported as "not even sure this job seems stuck", against a job that
+          // was working perfectly: the workspace was built, `pnpm i` had
+          // finished, the session was live — and the last thing the panel said
+          // was `telling the chat what to do`, which reads as instantaneous.
+          // Then several minutes of nothing.
+          //
+          // Two lines rather than one, and the second is the whole repair: a
+          // step that names what it is waiting for and how long it will wait is
+          // a step a person can leave alone. Logged before the wait rather than
+          // after it, which is the only order that helps.
           yield* context.log("telling the chat what to do");
+          yield* context.log("waiting for the agent's first answer — up to 20 minutes");
           yield* brief({ project: input.project, workspace, text: input.prompt }).pipe(
             Effect.mapError((error) => permanent(`could not brief the chat: ${error.reason}`)),
           );
+          yield* context.log("the agent answered");
           return;
         }
 

@@ -406,6 +406,21 @@ const styles = stylex.create({
   // the principle that a screen has one subject and everything else is about
   // it — a second strong thing makes neither one strong.
   strong: { color: colors.text, fontSize: text.title, fontWeight: text.medium },
+  /**
+   * A count in the status bar, emphasised without being enlarged.
+   *
+   * It used to borrow `strong`, which is the *top bar's title* — 18px, right
+   * for a workspace name across the top of the window and wrong in a footer
+   * whose own size is 14. Reported as "the job thing `1 running` is so large",
+   * and it was also inconsistent: `failed` and `needs cleaning up` beside it
+   * carry no size of their own, so the least urgent of the three counts was
+   * the biggest.
+   *
+   * Weight and colour rather than size, which is the rule the scale is built
+   * on — size is the axis that trades legibility for hierarchy, and in a row
+   * of three counts there is no hierarchy to express.
+   */
+  count: { color: colors.text, fontWeight: text.medium },
   live: { color: colors.live },
   warn: { color: colors.warn },
   // Truncation goes on the one field that can be arbitrarily long. Everything
@@ -705,7 +720,7 @@ export function AgentBar({
       {face !== undefined && <FaceMenu face={face} busy={swapping} onSwap={onFace} />}
 
       {counted.running > 0 && (
-        <span {...stylex.props(styles.strong)}>{counted.running} running</span>
+        <span {...stylex.props(styles.count)}>{counted.running} running</span>
       )}
       {counted.failed > 0 && <span {...stylex.props(styles.warn)}>{counted.failed} failed</span>}
       {counted.dirty > 0 && (
