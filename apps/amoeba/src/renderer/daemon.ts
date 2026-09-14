@@ -408,6 +408,27 @@ export const archiveThread = (thread: string, deleteBookmarks: boolean): Promise
   );
 
 /**
+ * Take one checkout back, leaving the thread and its other members alone.
+ *
+ * The same job as above with a narrower scope — see `ArchiveThread.only`. Not
+ * `ThreadDetach`, which releases the claim and takes nothing with it: that is
+ * how a workspace moves between threads, and this is how it goes away.
+ */
+export const reclaimWorkspace = (
+  thread: string,
+  member: { readonly project: string; readonly workspace: string },
+  deleteBookmarks: boolean,
+): Promise<string> =>
+  runtime.runPromise(
+    Effect.map(
+      Effect.flatMap(AwpClient, (rpc) =>
+        rpc.ThreadReclaimStart({ thread, member, deleteBookmarks }),
+      ),
+      (reply) => reply.job,
+    ),
+  );
+
+/**
  * Everywhere a new workspace in this project could start from.
  *
  * Asked of the daemon rather than worked out here, because turning a branch

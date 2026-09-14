@@ -2,9 +2,11 @@ import { AlertDialog } from "@base-ui/react/alert-dialog";
 import { Menu } from "@base-ui/react/menu";
 import type { Thread } from "@awp-kit/protocol";
 import * as stylex from "@stylexjs/stylex";
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
+import { AddProject } from "./AddProject";
 import { threadLink } from "./address";
 import { archiveThread, said } from "./daemon";
+import { type Items, menuDanger, menuItem } from "./menus";
 import { typeset } from "./typeset";
 import { colors, lift, text, timing } from "./tokens.stylex";
 
@@ -41,51 +43,6 @@ import { colors, lift, text, timing } from "./tokens.stylex";
 // place a person can ask for the opposite, so they have to ask.
 
 const styles = stylex.create({
-  trigger: {
-    flexShrink: 0,
-    // Above the row's stretched target — see `stretch` in Sidebar.tsx, whose
-    // `::after` covers the whole band. Without this the one control on the row
-    // that is not "open it" would be under a transparent sheet, and pressing ⋯
-    // would open the workspace instead of the menu.
-    position: "relative",
-    zIndex: 1,
-    padding: "0 0.25rem",
-    backgroundColor: "transparent",
-    borderStyle: "none",
-    color: colors.muted,
-    font: "inherit",
-    fontSize: text.small,
-    lineHeight: 1,
-    cursor: "pointer",
-    // Never `display: none` — an element outside the layout cannot be focused,
-    // and hover-only means the feature does not exist without a pointer.
-    opacity: 0,
-    ":focus-visible": { opacity: 1 },
-  },
-  shown: { opacity: 1 },
-  positioner: { zIndex: 20 },
-  menu: {
-    // Portalled, so the family is stated rather than inherited.
-    minWidth: "10rem",
-    padding: "0.25rem",
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderStyle: "solid",
-    borderColor: colors.border,
-    borderRadius: "0.35rem",
-    color: colors.text,
-    boxShadow: lift.high,
-  },
-  item: {
-    display: "flex",
-    alignItems: "center",
-    padding: "0.3rem 0.5rem",
-    borderRadius: "0.25rem",
-    cursor: "pointer",
-    backgroundColor: { default: "transparent", ":hover": colors.raised },
-    outline: "none",
-  },
-
   backdrop: {
     position: "fixed",
     inset: 0,
@@ -158,17 +115,39 @@ const styles = stylex.create({
   failure: { color: colors.warn, fontSize: text.small },
 });
 
-export function ArchiveThread({
+/**
+ * A thread's menu: its items, and the dialogs two of them open.
+ *
+ * A hook rather than a component, because the two halves of a menu go in two
+ * places — `RightClick` wraps the row, `More` sits inside it wherever the row
+ * has room — and the dialogs belong at the end, outside both. A component
+ * owning all three could only ever put them in one arrangement, and the
+ * heading and the row do not share one.
+ */
+export function useThreadMenu({
   thread,
-  shown,
-  onArchived,
+  onChanged,
 }: {
-  readonly thread: Thread;
-  /** The heading is hovered. Focus reveals the trigger on its own. */
-  readonly shown: boolean;
-  readonly onArchived: () => void;
-}) {
+  /**
+   * The thread, or nothing where the row has none.
+   *
+   * Undefined is accepted rather than the caller branching, because a hook
+   * cannot be called conditionally — and both callers have a case with no
+   * thread: the sidebar's derived group for unclaimed workspaces, and a row
+   * under a heading that already carries the menu. With no thread the items
+   * are empty and the dialogs render nothing.
+   */
+  readonly thread: Thread | undefined;
+  /** The thread list is out of date — something was archived or added to. */
+  readonly onChanged: () => void;
+}): {
+  readonly items: Items;
+  readonly onOpen: () => void;
+  /** Rendered once by the caller, outside the row. */
+  readonly dialogs: ReactNode;
+} {
   const [asking, setAsking] = useState(false);
+  const [adding, setAdding] = useState(false);
   const [bookmarks, setBookmarks] = useState(false);
   const [failure, setFailure] = useState<string | undefined>();
   const [busy, setBusy] = useState(false);
@@ -176,13 +155,14 @@ export function ArchiveThread({
   const go = () => {
     setBusy(true);
     setFailure(undefined);
+    if (thread === undefined) return;
     archiveThread(thread.id, bookmarks)
       .then(() => {
         setAsking(false);
         // The job is what does the work; this only says the list should be
         // read again, so the thread leaves the sidebar now rather than when
         // the last step happens to finish.
-        onArchived();
+        onChanged();
       })
       .catch((error: unknown) => {
         setFailure(said(error));
@@ -198,141 +178,136 @@ export function ArchiveThread({
    */
   const [copied, setCopied] = useState<boolean | undefined>(undefined);
 
-  const title = thread.title === "" ? "this thread" : thread.title;
+  const title = thread === undefined || thread.title === "" ? "this thread" : thread.title;
 
-  return (
-    <>
-      <Menu.Root
-        onOpenChange={(open) => {
-          if (open) {
-            // A menu reopened an hour later saying `copied` would be
-            // reporting a press nobody remembers making.
-            setCopied(undefined);
-          }
-        }}
-      >
-        <Menu.Trigger
-          aria-label={`more for ${title}`}
-          title="more"
-          {...stylex.props(styles.trigger, shown && styles.shown)}
+  const items: Items = () =>
+    thread === undefined ? null : (
+      <>
+        {/* ── the link is to the THREAD, not to a checkout ──────────
+
+    A thread survives its checkouts being renamed, added and
+    removed, so a link naming one of them goes stale the first
+    time somebody reorganises the work. `/t/<id>` resolves to
+    whichever checkout the thread holds first — see the `thread`
+    variant in address.ts.
+
+    `closeOnClick={false}`, and that is the whole of the
+    feedback: the clipboard can be refused — a renderer served
+    over a custom protocol is not always a secure context — and
+    a menu that closed on a copy that did not happen would be a
+    control that silently did nothing. So the item stays and
+    says which it was. */}
+        <Menu.Item
+          closeOnClick={false}
+          onClick={() => {
+            navigator.clipboard
+              ?.writeText(threadLink(thread.id))
+              .then(() => setCopied(true))
+              .catch(() => setCopied(false));
+          }}
+          {...stylex.props(menuItem)}
         >
-          ⋯
-        </Menu.Trigger>
-        <Menu.Portal>
-          <Menu.Positioner sideOffset={4} align="end" {...stylex.props(styles.positioner)}>
-            <Menu.Popup {...stylex.props(typeset.label, styles.menu)}>
-              {/* The ellipsis says there is more; the item's own ellipsis says
-                  it will ask first, which is the convention everywhere else a
-                  menu opens a dialog. */}
-              {/* ── the link is to the THREAD, not to a checkout ──────────
+          {copied === undefined ? "copy link" : copied ? "copied" : "the clipboard was refused"}
+        </Menu.Item>
 
-                  A thread survives its checkouts being renamed, added and
-                  removed, so a link naming one of them goes stale the first
-                  time somebody reorganises the work. `/t/<id>` resolves to
-                  whichever checkout the thread holds first — see the `thread`
-                  variant in address.ts.
+        {/* ── the second repository, from here ──────────────────────
 
-                  `closeOnClick={false}`, and that is the whole of the
-                  feedback: the clipboard can be refused — a renderer served
-                  over a custom protocol is not always a secure context — and
-                  a menu that closed on a copy that did not happen would be a
-                  control that silently did nothing. So the item stays and
-                  says which it was. */}
-              <Menu.Item
-                closeOnClick={false}
-                onClick={() => {
-                  navigator.clipboard
-                    ?.writeText(threadLink(thread.id))
-                    .then(() => setCopied(true))
-                    .catch(() => setCopied(false));
-                }}
-                {...stylex.props(styles.item)}
-              >
-                {copied === undefined
-                  ? "copy link"
-                  : copied
-                    ? "copied"
-                    : "the clipboard was refused"}
-              </Menu.Item>
-              <Menu.Item
-                onClick={() => {
-                  setBookmarks(false);
-                  setFailure(undefined);
-                  setAsking(true);
-                }}
-                {...stylex.props(styles.item)}
-              >
-                archive…
-              </Menu.Item>
-            </Menu.Popup>
-          </Menu.Positioner>
-        </Menu.Portal>
-      </Menu.Root>
+    The cmd+N modal can name several projects at once, which is
+    the way in when somebody already knows the work spans two.
+    This is the way in for the case that actually happens: the
+    api half turning out to be necessary an hour later. Both
+    reach the same `ThreadStart`. */}
+        <Menu.Item onClick={() => setAdding(true)} {...stylex.props(menuItem)}>
+          add a project…
+        </Menu.Item>
 
-      <AlertDialog.Root open={asking} onOpenChange={setAsking}>
-        <AlertDialog.Portal>
-          <AlertDialog.Backdrop {...stylex.props(styles.backdrop)} />
-          <AlertDialog.Popup {...stylex.props(typeset.prose, styles.popup)}>
-            <AlertDialog.Title {...stylex.props(typeset.heading, styles.title)}>
-              Archive {title}?
-            </AlertDialog.Title>
+        {/* The ellipsis says there is more; the item's own ellipsis says
+    it will ask first, which is the convention everywhere else a
+    menu opens a dialog. */}
+        <Menu.Item
+          onClick={() => {
+            setBookmarks(false);
+            setFailure(undefined);
+            setAsking(true);
+          }}
+          {...stylex.props(menuItem, menuDanger)}
+        >
+          archive…
+        </Menu.Item>
+      </>
+    );
 
-            <AlertDialog.Description {...stylex.props(styles.said)}>
-              {thread.members.length === 0
-                ? "It holds no workspaces, so this only puts it away."
-                : `Its ${thread.members.length === 1 ? "checkout is" : `${thread.members.length} checkouts are`} removed from disk and their sessions are killed. This cannot be undone.`}
-            </AlertDialog.Description>
+  const dialogs =
+    thread === undefined ? null : (
+      <>
+        <AddProject thread={thread} open={adding} onOpenChange={setAdding} onStarted={onChanged} />
 
-            {thread.members.length > 0 && (
-              <div {...stylex.props(typeset.address, styles.list)}>
-                {thread.members.map((member) => (
-                  <span key={`${member.project}/${member.workspace}`}>
-                    {member.project}/{member.workspace}
-                  </span>
-                ))}
-              </div>
-            )}
+        <AlertDialog.Root open={asking} onOpenChange={setAsking}>
+          <AlertDialog.Portal>
+            <AlertDialog.Backdrop {...stylex.props(styles.backdrop)} />
+            <AlertDialog.Popup {...stylex.props(typeset.prose, styles.popup)}>
+              <AlertDialog.Title {...stylex.props(typeset.heading, styles.title)}>
+                Archive {title}?
+              </AlertDialog.Title>
 
-            {thread.members.length > 0 && (
-              <>
-                <label {...stylex.props(styles.choice)}>
-                  <input
-                    type="checkbox"
-                    checked={bookmarks}
-                    onChange={(event) => setBookmarks(event.target.checked)}
-                    {...stylex.props(styles.box)}
-                  />
-                  delete their bookmarks too
-                </label>
-                {/* Said only when it is being asked for. A warning that is
+              <AlertDialog.Description {...stylex.props(styles.said)}>
+                {thread.members.length === 0
+                  ? "It holds no workspaces, so this only puts it away."
+                  : `Its ${thread.members.length === 1 ? "checkout is" : `${thread.members.length} checkouts are`} removed from disk and their sessions are killed. This cannot be undone.`}
+              </AlertDialog.Description>
+
+              {thread.members.length > 0 && (
+                <div {...stylex.props(typeset.address, styles.list)}>
+                  {thread.members.map((member) => (
+                    <span key={`${member.project}/${member.workspace}`}>
+                      {member.project}/{member.workspace}
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              {thread.members.length > 0 && (
+                <>
+                  <label {...stylex.props(styles.choice)}>
+                    <input
+                      type="checkbox"
+                      checked={bookmarks}
+                      onChange={(event) => setBookmarks(event.target.checked)}
+                      {...stylex.props(styles.box)}
+                    />
+                    delete their bookmarks too
+                  </label>
+                  {/* Said only when it is being asked for. A warning that is
                     always on screen is a warning nobody reads by the third
                     time. */}
-                <p {...stylex.props(bookmarks ? styles.warn : styles.keep, styles.said)}>
-                  {bookmarks
-                    ? "A bookmark is a name for a commit, not part of the checkout — deleting it can leave commits nothing points at."
-                    : "The bookmarks stay, so the commits are still there under their names."}
-                </p>
-              </>
-            )}
+                  <p {...stylex.props(bookmarks ? styles.warn : styles.keep, styles.said)}>
+                    {bookmarks
+                      ? "A bookmark is a name for a commit, not part of the checkout — deleting it can leave commits nothing points at."
+                      : "The bookmarks stay, so the commits are still there under their names."}
+                  </p>
+                </>
+              )}
 
-            {failure !== undefined && <div {...stylex.props(styles.failure)}>{failure}</div>}
+              {failure !== undefined && <div {...stylex.props(styles.failure)}>{failure}</div>}
 
-            <div {...stylex.props(styles.buttons)}>
-              <AlertDialog.Close {...stylex.props(typeset.label, styles.button)}>
-                cancel
-              </AlertDialog.Close>
-              <button
-                type="button"
-                disabled={busy}
-                onClick={go}
-                {...stylex.props(typeset.label, styles.button, styles.danger)}
-              >
-                {busy ? "archiving…" : "archive"}
-              </button>
-            </div>
-          </AlertDialog.Popup>
-        </AlertDialog.Portal>
-      </AlertDialog.Root>
-    </>
-  );
+              <div {...stylex.props(styles.buttons)}>
+                <AlertDialog.Close {...stylex.props(typeset.label, styles.button)}>
+                  cancel
+                </AlertDialog.Close>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={go}
+                  {...stylex.props(typeset.label, styles.button, styles.danger)}
+                >
+                  {busy ? "archiving…" : "archive"}
+                </button>
+              </div>
+            </AlertDialog.Popup>
+          </AlertDialog.Portal>
+        </AlertDialog.Root>
+      </>
+    );
+
+  return { items, onOpen: () => setCopied(undefined), dialogs };
 }

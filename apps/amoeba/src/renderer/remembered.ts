@@ -51,6 +51,7 @@ const PAGE = "amoeba.page";
 const DRAFT = "amoeba.draft";
 const PANELS = "amoeba.panels";
 const VISITS = "amoeba.visits";
+const FOLDED = "amoeba.folded";
 
 /**
  * Stored as two letters rather than JSON.
@@ -421,4 +422,33 @@ export const rememberedVisits = (): ReadonlyArray<string> => {
 
 export const rememberVisits = (visits: ReadonlyArray<string>): void => {
   writeStored(VISITS, visits.length === 0 ? undefined : visits.join("\n"));
+};
+
+// ── which threads are folded away ──────────────────────────────────────────
+//
+// The loose group above stores one letter, because there is one of it. A
+// thread's fold is per thread, so it is a map — and **only the folded ones are
+// in it**, which is what makes "open" the default with nothing written down.
+//
+// That asymmetry against `rememberedLooseOpen` is deliberate and is the same
+// argument, read the other way. The loose group is the archive, so it is shut
+// until somebody opens it; a thread is the work, so it is open until somebody
+// puts it away. A map of every thread's state would also grow without bound —
+// an archived thread's entry would outlive the thread — where a map of the
+// folded ones is as long as the number of things a person has chosen to hide.
+//
+// Keyed by thread id rather than title: a rename must not silently unfold it.
+
+export const rememberedFolded = (): ReadonlySet<string> =>
+  new Set(Object.keys(asMap(readStored(FOLDED))));
+
+export const rememberFolded = (folded: ReadonlySet<string>): void => {
+  // `undefined` rather than `"{}"` when nothing is folded, so the key leaves
+  // storage entirely instead of accumulating an empty object forever.
+  writeStored(
+    FOLDED,
+    folded.size === 0
+      ? undefined
+      : JSON.stringify(Object.fromEntries([...folded].map((id) => [id, "c"]))),
+  );
 };
