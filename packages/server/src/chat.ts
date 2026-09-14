@@ -285,6 +285,7 @@ interface Conversation {
    *   prompt   a turn of its own, which is what a message sent to an idle
    *            agent is, and what a steer becomes on an agent that cannot
    *            be steered
+   *   queued   held, because a compaction is running. Sent when it is over
    */
   readonly send: (text: string, key: string) => Effect.Effect<ChatDelivery, ChatError>;
   /**
@@ -757,6 +758,33 @@ export const conversation = (
       }
     });
 
+    // ── a compaction is a turn, and steering into it destroys it ──────────
+    //
+    // Reported as "steering during compacting should not fail the compact it
+    // should queue the message for after". `/compact` is delivered as an
+    // ordinary prompt, so it *is* the turn in flight — and a steer is defined
+    // as an injection into the turn in flight. The adapter duly injects it
+    // into the one turn that is rewriting the context, which comes back as
+    // `compacting failed` with the message delivered into a turn that is
+    // going nowhere. Both halves are lost, and the only evidence is a
+    // sentence in the transcript that reads like the model's own failure.
+    //
+    // Nothing on the steering request says "not while compacting" — there is
+    // no flag for it and `idleBehavior` answers a different question — so the
+    // only process that can decline is this one, which is already reading the
+    // compaction's own sentences to draw its row. The state is therefore read
+    // off the update stream rather than tracked separately: `compactionOf` is
+    // the single reader of those three sentences, and a second opinion about
+    // whether a compaction is running is the copy that drifts.
+    const compacting = yield* Ref.make(false);
+    const waitingToSend = yield* Ref.make<ReadonlyArray<string>>([]);
+    // Assigned once `deliver` exists, below. A `let` rather than a forward
+    // declaration because the reader fiber is forked before the session is
+    // even open: what it must not do is capture an effect that was empty at
+    // the moment the fiber started, and reading the binding at the moment the
+    // line runs is what stops that.
+    let flushWaiting: Effect.Effect<void> = Effect.void;
+
     // Requests this client made, waiting for their replies, and requests the
     // agent made, waiting for a person. Two directions, two tables.
     let next = 0;
@@ -850,6 +878,14 @@ export const conversation = (
           const update = updateOf((message["params"] ?? {}) as Record<string, unknown>);
           if (update !== undefined) {
             yield* emit(identified(update));
+            if (update.kind === "compact") {
+              const running = update.status === "running";
+              yield* Ref.set(compacting, running);
+              // `failed` flushes too. A compaction that did not work is still
+              // a compaction that is over, and holding somebody's message
+              // hostage to it would lose the message as well.
+              if (!running) yield* flushWaiting;
+            }
           }
           return;
         }
@@ -1114,6 +1150,91 @@ export const conversation = (
       prompt: [{ type: "text", text }],
     });
 
+    /**
+     * Get `text` to the agent, whichever way is open right now.
+     *
+     * Split out of `send` because there are two callers with different
+     * timing: somebody pressing return, and the flush that runs when a
+     * compaction is over. Only the first has a message to put on the stream —
+     * by the time the second runs, the row has been on screen for a minute
+     * marked `queued`, and emitting it again would draw it twice.
+     */
+    const deliver = (text: string): Effect.Effect<ChatDelivery, ChatError> =>
+      Effect.gen(function* () {
+        // Steer first, when the agent can be steered and there is nothing
+        // being compacted to steer into.
+        //
+        // **`idleBehavior: "promptRequired"`, and it is the whole reason this
+        // is one call rather than two.** Without it, a steer sent when no
+        // turn is running makes the *adapter* start one, detached — so this
+        // process would emit no `turn started`, no `turn ended`, and the
+        // window would watch a reply arrive with nothing saying a turn was
+        // under way. With it the adapter refuses instead, by name, and the
+        // ordinary path below runs and owns the lifecycle.
+        //
+        // It also means there is no "is a turn running" state kept here. The
+        // adapter decides, and its own comment says the check and the push
+        // "stay in one synchronous section so the turn cannot settle in the
+        // gap" — which is a race this side could not have avoided. The
+        // compaction is the one thing this side knows and the adapter will
+        // not tell it.
+        if (steering && !(yield* Ref.get(compacting))) {
+          const steered = yield* Effect.result(
+            request("_session/steering", {
+              ...promptOf(text),
+              _meta: { steering: { idleBehavior: "promptRequired" } },
+            }),
+          );
+          if (Result.isSuccess(steered) && steered.success["outcome"] === "injected") {
+            return "steer" as const;
+          }
+        }
+
+        yield* emit({ kind: "turn", status: "started" });
+        yield* Effect.forkIn(
+          request("session/prompt", promptOf(text)).pipe(
+            Effect.map((reply) => String(reply["stopReason"] ?? "")),
+            // A refused or crashed turn still ends. Reporting only the happy
+            // edge leaves the window saying "working" for the rest of the
+            // session, which is the worst of the three states to be wrong
+            // about.
+            Effect.orElseSucceed(() => "failed"),
+            // Any call still in flight is settled *before* the turn's own
+            // end, so a client folding both in one batch sees the rows
+            // resolve and then the turn stop — rather than a turn that
+            // ended with work apparently still going on inside it.
+            Effect.tap(() => settleHangingCalls),
+            Effect.flatMap((stopReason) => emit({ kind: "turn", status: "ended", stopReason })),
+            // ── and nothing is left holding ─────────────────────────────
+            //
+            // The ordinary release is the compaction's own "compacting
+            // completed." sentence. This is the case where that sentence
+            // never comes: the turn was cancelled, the adapter died, or
+            // upstream reworded it — `compactionOf` says in its own note
+            // that a rewording degrades to prose, and without this that
+            // degradation would also strand somebody's message for the life
+            // of the conversation. A turn that has ended is not compacting,
+            // whatever was or was not said.
+            Effect.tap(() => Ref.set(compacting, false)),
+            Effect.tap(() => flushWaiting),
+          ),
+          mine,
+        );
+        return "prompt" as const;
+      });
+
+    // Assigning the binding declared above. Ignored rather than failed: this
+    // runs inside the reader fiber and inside a turn's own end, and neither
+    // has anywhere to report a refusal — what a conversation that cannot be
+    // had says so on is the update stream.
+    flushWaiting = Effect.ignore(
+      Effect.gen(function* () {
+        for (const text of yield* Ref.getAndSet(waitingToSend, [])) {
+          yield* deliver(text);
+        }
+      }),
+    );
+
     return {
       sessionId,
 
@@ -1162,54 +1283,20 @@ export const conversation = (
           //
           // Before the turn edges, and before the request, so the order on the
           // stream is the order it happened in even if the adapter is slow to
-          // accept it.
+          // accept it. It is also before the hold below, which is what makes a
+          // held message a row somebody can see rather than a send that did
+          // nothing for half a minute.
           yield* emit({ kind: "message", role: "user", text, id: key });
 
-          // Steer first, when the agent can be steered.
-          //
-          // **`idleBehavior: "promptRequired"`, and it is the whole reason this
-          // is one call rather than two.** Without it, a steer sent when no
-          // turn is running makes the *adapter* start one, detached — so this
-          // process would emit no `turn started`, no `turn ended`, and the
-          // window would watch a reply arrive with nothing saying a turn was
-          // under way. With it the adapter refuses instead, by name, and the
-          // ordinary path below runs and owns the lifecycle.
-          //
-          // It also means there is no "is a turn running" state kept here. The
-          // adapter decides, and its own comment says the check and the push
-          // "stay in one synchronous section so the turn cannot settle in the
-          // gap" — which is a race this side could not have avoided.
-          if (steering) {
-            const steered = yield* Effect.result(
-              request("_session/steering", {
-                ...promptOf(text),
-                _meta: { steering: { idleBehavior: "promptRequired" } },
-              }),
-            );
-            if (Result.isSuccess(steered) && steered.success["outcome"] === "injected") {
-              return "steer" as const;
-            }
+          // Held, not refused and not steered. See the note beside
+          // `compacting`: the turn in flight is the one rewriting the
+          // context, and injecting into it loses both.
+          if (yield* Ref.get(compacting)) {
+            yield* Ref.update(waitingToSend, (all) => [...all, text]);
+            return "queued" as const;
           }
 
-          yield* emit({ kind: "turn", status: "started" });
-          yield* Effect.forkIn(
-            request("session/prompt", promptOf(text)).pipe(
-              Effect.map((reply) => String(reply["stopReason"] ?? "")),
-              // A refused or crashed turn still ends. Reporting only the happy
-              // edge leaves the window saying "working" for the rest of the
-              // session, which is the worst of the three states to be wrong
-              // about.
-              Effect.orElseSucceed(() => "failed"),
-              // Any call still in flight is settled *before* the turn's own
-              // end, so a client folding both in one batch sees the rows
-              // resolve and then the turn stop — rather than a turn that
-              // ended with work apparently still going on inside it.
-              Effect.tap(() => settleHangingCalls),
-              Effect.flatMap((stopReason) => emit({ kind: "turn", status: "ended", stopReason })),
-            ),
-            mine,
-          );
-          return "prompt" as const;
+          return yield* deliver(text);
         }),
 
       /** Every session the adapter sees here, by id. Asked for by the probe. */
@@ -1479,7 +1566,47 @@ const partsOf = (key: string): readonly [string, string] => {
   return [key.slice(0, at), key.slice(at + 1)] as const;
 };
 
+/**
+ * Run something in `where`, at most one at a time per key.
+ *
+ * Two mistakes it exists to make impossible, both of which are invisible until
+ * an adapter is being held open forever or has been shot mid-turn:
+ *
+ *   forked in `where`   and never in the caller's scope. The caller is a
+ *                       request, and a fiber in a request's scope is
+ *                       interrupted when the reply is sent — which is
+ *                       immediately, and is the one thing this must outlive
+ *   one per key         a second send during a turn would otherwise take a
+ *                       second reference, and the release is per finish: one
+ *                       of them would be a reference nothing gives back
+ *
+ * The key is cleared when the work ends however it ends — a failure that left
+ * the key set would mean no further work for that conversation, ever, which
+ * fails in the direction nobody would look.
+ */
+export const oneAtATime = (where: Scope.Scope) => {
+  const running = new Set<string>();
+  return (key: string, work: Effect.Effect<unknown, unknown>): Effect.Effect<void> =>
+    Effect.gen(function* () {
+      if (running.has(key)) {
+        return;
+      }
+      running.add(key);
+      yield* Effect.forkIn(
+        Effect.ensuring(
+          Effect.ignore(work),
+          Effect.sync(() => running.delete(key)),
+        ),
+        where,
+      );
+    });
+};
+
 export const make = Effect.gen(function* () {
+  // The daemon's own scope, captured here because a fiber that has to outlive
+  // the request that started it needs somewhere to live. See
+  // `mindUntilSettled`.
+  const mine = yield* Effect.scope;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const db = yield* Db;
   // ── the system defaults, read per conversation ─────────────────────────
@@ -1724,6 +1851,56 @@ export const make = Effect.gen(function* () {
       WAITS,
     );
 
+  /**
+   * Hold the adapter open for the length of a turn, whoever is watching.
+   *
+   * ── the bug this exists for, measured on itself ───────────────────────────
+   *
+   * `idleTimeToLive` releases a conversation two minutes after its last
+   * reference goes, and releasing it kills the adapter. The comment there says
+   * "a person switching tabs comes back within seconds", which is true and is
+   * not the case that hurts: **the window's reference is the chat panel's
+   * subscription, and Base UI unmounts a hidden tab.** So switching the
+   * accessory column to the diff — which is exactly what somebody does while
+   * an agent works — starts a two-minute clock on the agent that is working.
+   *
+   * What it looks like from outside is the agent dying mid-thought. Read off
+   * this repository's own transcript, seven times in one afternoon:
+   *
+   *   every stall   the last message was `stop_reason: tool_use`, and the
+   *                 tool result never came back — there was no longer a
+   *                 process to give it to
+   *   the adapter   2m29s old against a conversation two hours old, having
+   *                 started at the exact second of the last stall
+   *   and the tell  the model choice reverts on every respawn, so it was
+   *                 re-selected by hand once per death
+   *
+   * `Chat.brief` already holds a reference this way, because the create job
+   * has no window — and the interactive path, which has a window that is free
+   * to look away, was the one without it. The hold is the same `settled`, so
+   * it is bounded by the same two numbers: a turn that never starts gives up
+   * after 30 seconds, and one still running after 20 minutes stops being this
+   * function's business.
+   *
+   * ── a turn, not a conversation ────────────────────────────────────────────
+   *
+   * Only while something is happening. The TTL's argument is right for an idle
+   * conversation — a held adapter is a process and a model's context — and the
+   * whole of what was wrong is that it was applied to a running one. A
+   * permission nobody has answered counts as happening, because `statuses`
+   * reports it as `waiting`: an agent shot while asking a question loses the
+   * question.
+   *
+   * `forkIn(mine)` and not `forkScoped`: the caller is a request, and a fiber
+   * in the request's scope is interrupted when the reply is sent — which is
+   * immediately, and is the one thing this must outlive.
+   */
+  const alone = oneAtATime(mine);
+  const mindUntilSettled = (key: string) =>
+    // One holder per conversation: a steer arriving mid-turn must not take a
+    // second reference that nothing will release.
+    alone(key, Effect.scoped(Effect.andThen(RcMap.get(conversations, key), settled(key))));
+
   const held = <A>(
     project: string,
     workspace: string,
@@ -1736,7 +1913,13 @@ export const make = Effect.gen(function* () {
       Effect.flatMap(RcMap.get(conversations, keyOf(project, workspace)), (one) => one.updates),
 
     send: (project: string, workspace: string, text: string, key: string) =>
-      held(project, workspace, (one) => one.send(text, key)),
+      Effect.tap(
+        held(project, workspace, (one) => one.send(text, key)),
+        // After the send rather than before it: a refusal has no turn to hold
+        // open, and a holder waiting 30 seconds for one that will never start
+        // would keep a dead conversation alive for exactly as long.
+        () => mindUntilSettled(keyOf(project, workspace)),
+      ),
 
     brief: (project: string, workspace: string, text: string) =>
       held(project, workspace, (one) =>

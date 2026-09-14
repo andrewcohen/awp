@@ -6,7 +6,7 @@ import { Menu } from "@base-ui/react/menu";
 import type { Face } from "@awp-kit/protocol";
 import { FOLD_MS, type Collapsed } from "./columns";
 import { typeset } from "./typeset";
-import { colors, lift, space, text } from "./tokens.stylex";
+import { colors, layer, lift, space, text } from "./tokens.stylex";
 import { tally } from "./useJobs";
 
 // The two strips the columns sit between.
@@ -184,7 +184,7 @@ const styles = stylex.create({
     lineHeight: 1,
     cursor: "pointer",
   },
-  facePositioner: { zIndex: 20 },
+  facePositioner: { zIndex: layer.popup },
   faceMenu: {
     minWidth: "12rem",
     padding: "0.25rem",

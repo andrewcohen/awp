@@ -161,6 +161,54 @@ const styles = stylex.create({
     paddingInline: "1rem",
   },
   /**
+   * The border, while a turn is running.
+   *
+   * ── the smallest thing that can say it ──────────────────────────────────
+   *
+   * Everything with a position was tried first and removed; see the note
+   * above `Composer`. What is left has no shape and no travel — the line
+   * around the box warms toward the accent and back, at the 2.6s the
+   * sidebar's working dot already breathes at.
+   *
+   * A mix rather than the accent itself. The accent is spent in four places
+   * and each marks "this, here" — and this box is already wearing it for
+   * focus, so a full-strength cycle would be one property making two claims.
+   *
+   * ── it breathes while focused too, on a different pair ──────────────────
+   *
+   * It was suppressed under `:focus-within` first, on the argument that the
+   * focus colour should not be blinked over. That reasoning was fine and the
+   * result was useless: reported as "i dont see whatever breathing effect",
+   * because **the composer is focused almost all of the time** — the one state
+   * the animation was turned off in is the ordinary one.
+   *
+   * An animation beats a declaration whatever the order, so a single pair
+   * cannot be right in both states: it would drag the focused border back down
+   * to `border` twice a cycle, which reads as focus flickering off. Two pairs
+   * instead, each breathing around the colour that state is already wearing —
+   * so what pulses is the intensity, and the *meaning* of the colour, focused
+   * or not, never changes.
+   */
+  breathing: {
+    animationName: {
+      default: stylex.keyframes({
+        "0%, 100%": { borderColor: colors.border },
+        "50%": { borderColor: `color-mix(in oklab, ${colors.accent} 45%, ${colors.border})` },
+      }),
+      ":focus-within": stylex.keyframes({
+        "0%, 100%": { borderColor: colors.accent },
+        "50%": { borderColor: `color-mix(in oklab, ${colors.accent} 50%, ${colors.border})` },
+      }),
+    },
+    // Reduced motion means none, not slower. The window's rule.
+    animationDuration: { default: "2.6s", "@media (prefers-reduced-motion: reduce)": "0s" },
+    animationTimingFunction: "cubic-bezier(0.45, 0, 0.55, 1)",
+    animationIterationCount: {
+      default: "infinite",
+      "@media (prefers-reduced-motion: reduce)": "1",
+    },
+  },
+  /**
    * What somebody types, and it is the one rectangle here.
    *
    * ── the card keeps its outline; the dock lost its edge ──────────────────
@@ -320,6 +368,31 @@ const styles = stylex.create({
   warn: { color: colors.warn },
 });
 
+/**
+ * ── what the composer used to do while a turn ran, and why it stopped ─────
+ *
+ * Three techniques lived here, each removed after being looked at:
+ *
+ *   a blurred shape on a motion path   "just a big fuzzy dot", then "i still
+ *                                      just see a blurry ball" — a thing you
+ *                                      can see is not underneath anything
+ *   animated `border-radius`           "its just the corners. terrible". A
+ *                                      radius is anchored at a corner, so no
+ *                                      value of it puts a bump mid-edge
+ *   a deformed SVG outline             a creature with a gait, crawling the
+ *                                      perimeter. "i think i hate it tbh"
+ *
+ * The last one worked, and that is the useful part of the finding: it was not
+ * a tuning failure. **The window already says a turn is running in two
+ * places** — the turning mark on the running row, and the activity pill on the
+ * ledge directly above this box. A third was always going to be the one moving
+ * underneath the words being typed into it.
+ *
+ * So what is left is the smallest thing that can say it: the border breathes.
+ * No travel, no shape, nothing with a position — the same 2.6s the sidebar's
+ * working dot uses, because two marks meaning one thing should move alike.
+ */
+
 export const Composer = ({
   draft,
   onDraft,
@@ -419,6 +492,13 @@ export const Composer = ({
     onBox?.(node);
   };
 
+  // Both the outline's flex and the blob answer to this. Read once here
+  // rather than twice: two calls could not disagree, but a reader would have
+  // to check, and the blob is rendered from a different branch.
+  // The hook first, then the `&&`. Short-circuiting past a hook call makes it
+  // conditional, which react-doctor is right to refuse: an idle composer and a
+  // working one would call a different number of hooks.
+
   return (
     <div {...stylex.props(styles.card)}>
       {/* ── the command menu ───────────────────────────────────────────────
@@ -471,7 +551,14 @@ export const Composer = ({
           ))}
         </div>
       )}
-      <div {...stylex.props(styles.box)}>
+      {/* ── the card itself is what bends ─────────────────────────────────
+
+        `animate` is left undefined when there is nothing to say, rather than
+        set to the resting radius: motion writes an inline `border-radius` for
+        anything it is given, and an inline value would outrank `box`'s own
+        for the rest of the session — so an idle composer would keep whatever
+        shape the last turn left it in. */}
+      <div {...stylex.props(styles.box, working && styles.breathing)}>
         <div {...stylex.props(styles.line)}>
           <textarea
             ref={attach}

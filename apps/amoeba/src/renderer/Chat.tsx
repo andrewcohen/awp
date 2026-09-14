@@ -2,7 +2,7 @@ import type { ChatConfigOption } from "@awp-kit/protocol";
 import * as stylex from "@stylexjs/stylex";
 import { ArrowDownIcon } from "@phosphor-icons/react/ArrowDown";
 import { AnimatePresence, motion } from "motion/react";
-import { Fragment, useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { type Command, agentCommands, commandOf, completed } from "@awp-kit/protocol/commands";
 import { heldBack, toolTitleOf, turningAt } from "@awp-kit/protocol/tools";
 import { Composer, SessionBar } from "./Composer";
@@ -28,7 +28,6 @@ import {
   waiting,
 } from "./conversation";
 import { Patch } from "./Fence";
-import { linkify } from "./linkify";
 import { Markdown } from "./Markdown";
 import {
   chatAnswer,
@@ -275,7 +274,10 @@ const Panel = ({
           // Only a message that started a turn of its own while the agent was
           // already working has to wait for it. A steer is being read now, and
           // saying it is queued would be the opposite of the truth.
-          if (how === "prompt" && working) {
+          // `queued` says the daemon is holding it until a compaction is
+          // over, which is the one case where the wait is certain rather than
+          // inferred — so it does not consult `working`.
+          if (how === "queued" || (how === "prompt" && working)) {
             setHeld((current) => waiting(current, key));
           }
         })
@@ -477,6 +479,28 @@ const Panel = ({
     setAway(distance > AWAY);
   }, [behind]);
 
+  /**
+   * Whether the ledge says what the agent is doing.
+   *
+   * ── it was conditional, and the condition was wrong ───────────────────────
+   *
+   * It hid while the transcript's own running row was readable, asked for as
+   * "only show the thinking thing if we dont see the inline state that shows
+   * the same information". The premise is that the row below the last message
+   * *is* the running call, and it frequently is not: a run of calls rolls up
+   * into a block that draws its tail and counts the rest, a call that started
+   * before the agent said something sits above it, and a subagent's row sits
+   * at `in_progress` for minutes while other rows come and go under it.
+   * Reported as "sometimes the active tool is not below the latest message",
+   * at which point the pill is the only thing on screen that answers.
+   *
+   * So it is back to the whole of every turn, and what went with the
+   * condition is worth more than the condition was: the measurement moved with
+   * every pixel of scroll and fed a row whose height moves the scroll, which
+   * is a loop this window has now had twice. There is nothing left to loop.
+   */
+  const sayDoing = held.running > 0;
+
   useEffect(() => {
     if (grown !== "0:0") followIfStuck();
   }, [grown, followIfStuck]);
@@ -498,12 +522,22 @@ const Panel = ({
     return () => watching.disconnect();
   }, []);
 
+  /** What the padding was last time, so growth can be told from shrinkage. */
+  const stood = useRef(0);
+
   // Padding that grows pushes the tail under the dock, so a reader at the
   // bottom has to be taken back to it — the same rule as content arriving.
   useEffect(() => {
+    const grew = under > stood.current;
+    stood.current = under;
     // Nothing to follow to before the first measurement: the padding is zero,
     // so the tail is already where the dock is about to be.
-    if (under > 0) followIfStuck();
+    //
+    // And only when it grew. Shrinking padding uncovers the tail rather than
+    // burying it, so there is nothing to be taken back to — following there is
+    // a jump to the bottom for somebody who did not ask, which is what closing
+    // the pill on the way back down produced.
+    if (under > 0 && grew) followIfStuck();
     // A reader who is *not* being followed still had the distance under them
     // change, and no scroll event says so.
     measureAway();
@@ -686,7 +720,7 @@ const Panel = ({
           moved once per turn rather than on every change of activity —
           which is the shifting this was reported for. */}
           <AnimatePresence initial={false}>
-            {(held.running > 0 || away) && (
+            {(sayDoing || away) && (
               <motion.div
                 key="ledge"
                 {...stylex.props(styles.ledge)}
@@ -707,7 +741,7 @@ const Panel = ({
                 frames. Nothing pops — so each of the two fades, and the row
                 itself still springs its height when it is the one arriving. */}
                 <AnimatePresence initial={false}>
-                  {held.running > 0 && (
+                  {sayDoing && (
                     <motion.div
                       key="working"
                       {...stylex.props(styles.half)}
@@ -1288,49 +1322,26 @@ const Message = ({
           </span>
         )}
       </span>
-      {/* ── markdown for what the agent wrote, and not for what you wrote ──
+      {/* ── markdown, whoever wrote it ────────────────────────────────────
 
-          An agent answers in markdown — headings, lists, fenced code — and
-          drawn as text that is most of the reply showing its own syntax.
-          `Markdown.tsx` already exists for the PR panel and is reused whole:
-          it builds React elements rather than HTML, so there is no sanitiser
-          to get right.
+          Your own half was drawn as plain text on the argument that it is
+          exactly what you typed, and that rendering it would let a message
+          containing `# ` silently become a heading — a window editing what
+          somebody said. Asked for the other way: "are my messages formatted
+          markdown? they should be".
 
-          Your own message is drawn as text on purpose. It is exactly what you
-          typed, and rendering it would mean a message containing `# ` silently
-          becoming a heading — which is a window editing what somebody said.
+          Which is the better answer, because the premise was wrong about who
+          is writing. People type backticks around a path and dashes in front
+          of a list *because they mean the markup*, and drawing it literally
+          shows the syntax rather than the thing — the same complaint that put
+          `Markdown.tsx` on the agent's half. The cost is real and small: a
+          line beginning `# ` renders as a heading.
 
-          What that decision took with it was the links, in the one place a
-          person pastes urls most — `remark-gfm` autolinks them for the agent's
-          half and nothing did for yours. `linkify` is the narrow version of the
-          same want: it adds no styling, drops no characters and reorders
-          nothing, so there is no input for which it changes what the message
-          says. Which is exactly what could not be promised about markdown. */}
-      {item.role === "agent" ? (
-        <Markdown reading>{item.text}</Markdown>
-      ) : (
-        <p {...stylex.props(typeset.prose, styles.words, styles.reading)}>
-          {linkify(item.text).map((piece, at) =>
-            piece.href === undefined ? (
-              // eslint-disable-next-line react/no-array-index-key -- the pieces
-              // are a pure function of the text and have no identity of their
-              // own; two runs of the same characters are genuinely the same row.
-              <Fragment key={at}>{piece.text}</Fragment>
-            ) : (
-              <a
-                // eslint-disable-next-line react/no-array-index-key -- as above.
-                key={at}
-                href={piece.href}
-                target="_blank"
-                rel="noreferrer"
-                {...stylex.props(styles.link)}
-              >
-                {piece.text}
-              </a>
-            ),
-          )}
-        </p>
-      )}
+          `linkify` went with it. It existed because `remark-gfm` autolinks
+          urls for the agent and nothing did for you, and gfm is now doing both
+          halves — one implementation rather than two that have to agree about
+          what a url is. */}
+      <Markdown reading>{item.text}</Markdown>
       {/* ── where the ANSWER has got to, and only the answer ──────────────
           A paragraph that has stopped growing and one still growing are the
           same picture, and this is the difference — the terminal's own

@@ -2058,8 +2058,16 @@ export type ChatUpdate = (typeof ChatUpdate)["Type"];
  * cannot tell them apart on its own — whether a steer is possible depends on
  * whether a turn was in flight at the moment the adapter looked, which is a
  * question only the adapter can answer without a race.
+ *
+ * `queued` is the third, and it is about one state only: a **compaction**.
+ * Compacting is a turn like any other, so a steer aimed at it is injected into
+ * the very turn that is rewriting the context — which the adapter reports as
+ * `compacting failed`, losing the compaction and leaving the message
+ * delivered into a turn that is going nowhere. So the daemon holds it and
+ * sends it once the compaction is over, and says so, because from the
+ * window's side "held for a few seconds" and "steered" are the same silence.
  */
-export const ChatDelivery = Schema.Literals(["steer", "prompt"]);
+export const ChatDelivery = Schema.Literals(["steer", "prompt", "queued"]);
 
 export type ChatDelivery = (typeof ChatDelivery)["Type"];
 
@@ -2685,15 +2693,46 @@ export class AwpRpcs extends RpcGroup.make(
   }),
 
   /**
-   * Every thread, newest first, archived ones included.
+   * Every thread, newest first. Archived ones are left out.
    *
-   * No stream beside it, unlike jobs, and the difference is the point. A job
-   * changes on its own — that is what a job is — so a client that only asks is
-   * a client that misses everything interesting. A thread changes when a person
-   * changes it, in this window, so the reply to the change is the update.
+   * The store keeps them and this call does not return them — archiving is how
+   * a thread leaves the sidebar, and a reply that carried them would make that
+   * act invisible. Everything that has to see a put-away thread (the archive
+   * job, a restore) reads the store rather than this.
    */
   Rpc.make("ThreadList", {
     success: Schema.Array(Thread),
+  }),
+
+  /**
+   * The same list again, each time any thread changes.
+   *
+   * This was deliberately absent, on the argument that a thread changes when a
+   * person changes it in this window, so the reply to the change is the update.
+   * That premise is false three ways over, and each one was patched separately
+   * before it was replaced:
+   *
+   * ```
+   *   a create job    claims the workspace at its second-to-last step, minutes
+   *                   after the reply the window already acted on
+   *   a review        links the pull request from inside the job
+   *   the inbox join  adopts a pull request by its head commit, on a read
+   *                   nobody made from this window
+   *   another daemon  a second instance on the same store — see the note in
+   *                   CLAUDE.md. Its writer is not this window at all
+   * ```
+   *
+   * The whole list rather than one record, for the reason `WorkspaceFactsChanges`
+   * sends the whole table: it is a few kilobytes, and it is the only shape that
+   * can say a thread is gone.
+   *
+   * Nothing is replayed. A subscription answers what changes and a question
+   * answers what is, so a client asks {@link Rpc ThreadList} at mount and again
+   * on every reconnect, exactly as it does for jobs.
+   */
+  Rpc.make("ThreadChanges", {
+    success: Schema.Array(Thread),
+    stream: true,
   }),
 
   Rpc.make("ThreadCreate", {

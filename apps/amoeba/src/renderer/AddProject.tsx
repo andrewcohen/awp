@@ -1,13 +1,15 @@
 import { Dialog } from "@base-ui/react/dialog";
 import { FolderIcon } from "@phosphor-icons/react/Folder";
+import { FolderPlusIcon } from "@phosphor-icons/react/FolderPlus";
 import type { Thread } from "@awp-kit/protocol";
 import * as stylex from "@stylexjs/stylex";
 import { useState } from "react";
 import { Chip } from "./Chip";
+import { ImportProject } from "./ImportProject";
 import { said, startThread } from "./daemon";
 import { useGrow } from "./grow";
 import { typeset } from "./typeset";
-import { colors, lift, text, timing } from "./tokens.stylex";
+import { colors, layer, lift, text, timing } from "./tokens.stylex";
 import { useProjects } from "./useProjects";
 
 // Adding a second repository to a piece of work already under way.
@@ -63,7 +65,7 @@ const styles = stylex.create({
     top: "50%",
     left: "50%",
     transform: "translate(-50%, -50%)",
-    zIndex: 30,
+    zIndex: layer.modal,
     display: "flex",
     flexDirection: "column",
     gap: "0.75rem",
@@ -97,6 +99,34 @@ const styles = stylex.create({
     resize: "none",
     outline: "none",
   },
+  /**
+   * The import toggle, beside the picker it adds a row to.
+   *
+   * The same control `NewThread` carries, and it had to come here for a
+   * reason the empty case makes plain: a thread already holding a checkout in
+   * every project awp knows about said so and offered nothing, which is a
+   * dead end in the one dialog whose whole subject is *which repository*. A
+   * toggle rather than a second dialog — a modal over a modal is a stack to
+   * get out of, and the panel it opens is four lines tall.
+   */
+  add: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    flexShrink: 0,
+    width: "1.4rem",
+    height: "1.4rem",
+    padding: 0,
+    backgroundColor: "transparent",
+    borderWidth: 1,
+    borderStyle: "solid",
+    borderColor: "transparent",
+    borderRadius: "0.25rem",
+    color: colors.muted,
+    cursor: "pointer",
+    ":hover": { borderColor: colors.border, color: colors.text },
+  },
+  addOn: { backgroundColor: colors.border, color: colors.text },
   buttons: { display: "flex", gap: "0.5rem", justifyContent: "flex-end" },
   button: {
     padding: "0.35rem 0.75rem",
@@ -128,6 +158,7 @@ export function AddProject({
   const [brief, setBrief] = useState("");
   const [failure, setFailure] = useState<string | undefined>();
   const [busy, setBusy] = useState(false);
+  const [importing, setImporting] = useState(false);
   const box = useGrow(brief);
 
   // ── a project the thread already holds is not offered ────────────────────
@@ -173,39 +204,79 @@ export function AddProject({
             Add a project to {title}
           </Dialog.Title>
 
-          {spare.length === 0 ? (
-            <p {...stylex.props(styles.said)}>
-              {projects.projects.length === 0
-                ? "No projects yet. Point awp at a repository from the new-thread window."
-                : "This thread already has a workspace in every project awp knows about."}
-            </p>
-          ) : (
-            <>
-              <div {...stylex.props(styles.bar)}>
-                <Chip
-                  id="add-project-project"
-                  label={chosen ?? ""}
-                  title="the repository the new workspace is made in"
-                  value={chosen ?? ""}
-                  onChange={setProject}
-                  options={spare.map((one) => ({ value: one.name, label: one.name }))}
-                  icon={<FolderIcon size={11} {...stylex.props(styles.chipIcon)} />}
-                  disabled={busy}
-                />
-                {/* Said rather than left to be discovered from the result.
-                    Somebody who expects this to follow the thread's branch
-                    should find out here and not from a diff. */}
-                <span {...stylex.props(styles.said)}>
+          {/* ── the bar is always here, and the import with it ───────────────
+
+              It used to be inside the `spare.length > 0` branch, so a thread
+              already holding a checkout in every known project got a sentence
+              saying exactly that and no control at all — a dead end in the one
+              dialog whose entire subject is *which repository*. The way out of
+              that state is to import a repository, so the way to import one
+              cannot be behind the state it resolves. */}
+          <div {...stylex.props(styles.bar)}>
+            {spare.length > 0 && (
+              <Chip
+                id="add-project-project"
+                label={chosen ?? ""}
+                title="the repository the new workspace is made in"
+                value={chosen ?? ""}
+                onChange={setProject}
+                options={spare.map((one) => ({ value: one.name, label: one.name }))}
+                icon={<FolderIcon size={11} {...stylex.props(styles.chipIcon)} />}
+                disabled={busy}
+              />
+            )}
+            {/* Beside the picker it adds a row to, which is where `NewThread`
+                puts the same control and for the same reason. */}
+            <button
+              type="button"
+              {...stylex.props(styles.add, importing && styles.addOn)}
+              title={importing ? "stop importing" : "import another project"}
+              aria-pressed={importing}
+              disabled={busy}
+              onClick={() => setImporting(!importing)}
+            >
+              <FolderPlusIcon size={12} />
+            </button>
+            {/* Said rather than left to be discovered from the result.
+                Somebody who expects this to follow the thread's branch should
+                find out here and not from a diff. */}
+            <span {...stylex.props(styles.said)}>
+              {spare.length > 0 ? (
+                <>
                   from its own main line, and named{" "}
                   {thread.members[0]?.workspace ?? "after its sibling"}
-                </span>
-              </div>
+                </>
+              ) : projects.projects.length === 0 ? (
+                "No projects yet — import one."
+              ) : (
+                "Every project awp knows about is already in this thread."
+              )}
+            </span>
+          </div>
 
+          {importing && <ImportProject projects={projects.projects} onImported={projects.reload} />}
+
+          {spare.length > 0 && (
+            <>
               <textarea
                 ref={box}
                 value={brief}
                 onChange={(event) => setBrief(event.target.value)}
-                placeholder="what this repository's half of the work is — the agent is briefed with this"
+                // ── the hint has to fit the box it is in ──────────────────
+                //
+                // `useGrow` measures `scrollHeight`, which is a property of
+                // the *value* — a placeholder is painted and contributes
+                // nothing to it. So a one-line box with a placeholder that
+                // wraps clips its own hint, with nothing on screen saying so,
+                // and the empty state is the state this dialog opens in.
+                //
+                // Shortened rather than the box grown: one line at rest is
+                // what every other composer in this window is, and the half
+                // that did not fit was explaining the field rather than
+                // naming it. It is on the tooltip, where it costs no pixels
+                // until it is asked for.
+                placeholder="what this repository's half of the work is"
+                title="the new agent is briefed with this, and nothing else"
                 disabled={busy}
                 rows={1}
                 {...stylex.props(typeset.prose, styles.brief)}

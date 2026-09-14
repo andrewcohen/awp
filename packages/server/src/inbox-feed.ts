@@ -34,6 +34,7 @@ import {
   type PullRequestDetail,
   type Viewer,
 } from "./github";
+import { authored } from "./github-parse";
 import { type Claim, type Source, inboxItems } from "./inbox";
 
 /** The database would not answer. */
@@ -214,6 +215,19 @@ interface Cached {
   readonly degraded: string | undefined;
 }
 
+/**
+ * A pull request no thread has claimed, and the commit that can identify it.
+ *
+ * `headOid` rather than `headRef`: the branch a pull request is opened from is
+ * frequently not the one awp named the workspace's bookmark, and the commit is
+ * the same object under either name. See the adoption pass in `handlers.ts`.
+ */
+export interface UnclaimedHead {
+  readonly project: string;
+  readonly number: number;
+  readonly headOid: string;
+}
+
 export class InboxFeed extends Context.Service<
   InboxFeed,
   {
@@ -242,7 +256,7 @@ export class InboxFeed extends Context.Service<
         member: { readonly project: string; readonly workspace: string },
         headOid: string,
       ) => Effect.Effect<boolean>;
-    }) => Effect.Effect<Inbox>;
+    }) => Effect.Effect<Inbox & { readonly unclaimed: ReadonlyArray<UnclaimedHead> }>;
 
     /**
      * One pull request, from what was last read or by asking.
@@ -643,6 +657,38 @@ const make = Effect.gen(function* () {
           items: inboxItems(feed, login, settled),
           sources,
           viewer: login?.login,
+          // ── the heads nothing has claimed ─────────────────────────────
+          //
+          // Handed back rather than resolved here, and the split is the same
+          // one `contains` is: this is where the head commits are, and the
+          // handler is where jj and the thread store are. What the handler
+          // does with them — ask which checkout actually contains one — is a
+          // question per *workspace* rather than per pull request, so it has
+          // to see the whole set at once. A callback per row would be one jj
+          // call per row per checkout, which on a repository with thirty-six
+          // open pull requests is seventy-two processes to answer a question
+          // that takes two.
+          unclaimed: feed.flatMap((source) =>
+            source.prs
+              .filter((pr) => claimed(source.project, pr.number)?.thread === undefined)
+              .filter((pr) => pr.headOid !== "")
+              // ── yours only ──────────────────────────────────────────────
+              //
+              // The adoption this feeds asks whether a checkout contains the
+              // head on top of trunk, and somebody else's branch satisfies
+              // that the moment you start work on top of it — which is the
+              // ordinary way to review a stack. Adopting there would file
+              // their pull request under your thread, and the row would then
+              // offer your checkout as the place to open it.
+              //
+              // Authorship is the line because this exists for one case: a
+              // pull request *you* opened for work that already had a
+              // workspace. A viewer nobody is signed in as adopts nothing,
+              // which is the same answer every other viewer-relative bucket
+              // gives.
+              .filter((pr) => authored(pr, login))
+              .map((pr) => ({ project: source.project, number: pr.number, headOid: pr.headOid })),
+          ),
         };
       }),
 

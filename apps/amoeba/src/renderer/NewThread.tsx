@@ -15,7 +15,7 @@ import { growth, useGrow } from "./grow";
 import { useOverlay } from "./overlays";
 import { acceptsFiles } from "./dropped";
 import { typeset } from "./typeset";
-import { colors, lift, text, timing } from "./tokens.stylex";
+import { colors, layer, lift, text, timing } from "./tokens.stylex";
 
 // Starting a thread: a composer, not a form.
 //
@@ -304,7 +304,7 @@ const styles = stylex.create({
   },
   warn: { color: colors.warn },
 
-  positioner: { zIndex: 10 },
+  positioner: { zIndex: layer.popup },
   menu: {
     padding: "0.2rem",
     backgroundColor: colors.surface,
@@ -380,13 +380,11 @@ function Composer({
   request,
   projects,
   onClose,
-  onStarted,
   onProjects,
 }: {
   readonly request: NewThreadRequest;
   readonly projects: ReadonlyArray<Project>;
   readonly onClose: () => void;
-  readonly onStarted: () => void;
   /** Read the project list again — an import happened. */
   readonly onProjects: () => void;
 }) {
@@ -526,7 +524,8 @@ function Composer({
             ...overrides,
           });
         }
-        onStarted();
+        // Nothing to tell the window: the thread reached the store, and the
+        // store publishes. See `ThreadChanges`.
         onClose();
       })
       .catch((error: unknown) => {
@@ -785,13 +784,11 @@ export function NewThread({
   request,
   projects,
   onClose,
-  onStarted,
   onProjects,
 }: {
   readonly request: NewThreadRequest | undefined;
   readonly projects: ReadonlyArray<Project>;
   readonly onClose: () => void;
-  readonly onStarted: () => void;
   readonly onProjects: () => void;
 }) {
   // Before the early return, because a hook cannot be called conditionally —
@@ -824,7 +821,6 @@ export function NewThread({
             request={request}
             projects={projects}
             onClose={onClose}
-            onStarted={onStarted}
             onProjects={onProjects}
           />
         </Dialog.Popup>

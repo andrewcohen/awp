@@ -357,9 +357,17 @@ export const forgetProject = (name: string): Promise<boolean> =>
 
 // ── threads and workspaces ─────────────────────────────────────────────────
 //
-// No watcher beside these, unlike jobs, and the asymmetry is the point. A job
-// changes on its own; a thread changes when a person changes it, in this
-// window, so the reply to the change *is* the update.
+// There is a watcher beside these now, and the note that used to be here said
+// there was not — a thread changes when a person changes it in this window, so
+// the reply to the change is the update. It turned out to be false in every
+// case the window then had to work around: a create job claims the workspace
+// minutes after its reply, a review links a pull request from inside the job,
+// the inbox join adopts one by its head commit, and a second daemon on the same
+// store has a writer that is not this window at all.
+//
+// The pair is the rule this file already applies to jobs: `listThreads` answers
+// what is, `watchThreads` carries what changes, and anything that resubscribes
+// asks again as well.
 
 export const listThreads = (): Promise<ReadonlyArray<Thread>> =>
   runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.ThreadList()));
@@ -819,6 +827,18 @@ export const openPage = (from: string, url: string): Promise<Page> =>
  * Nothing is replayed on connect. A navigation is an event, and the daemon
  * deliberately keeps no table of them to replay — see pages.ts.
  */
+/**
+ * Every thread, again, each time any of them changes.
+ *
+ * The whole list each time, so there is nothing to fold: the caller replaces
+ * what it holds. See `ThreadChanges` in the contract for why this is not a
+ * per-record feed — a deleted thread is the change with no record to send.
+ */
+export const watchThreads = (onThreads: (threads: ReadonlyArray<Thread>) => void): (() => void) =>
+  subscribe((rpc) =>
+    Stream.runForEach(rpc.ThreadChanges(), (threads) => Effect.sync(() => onThreads(threads))),
+  );
+
 export const watchPages = (onPage: (page: Page) => void): (() => void) =>
   subscribe((rpc) =>
     Stream.runForEach(rpc.PageChanges(), (page) => Effect.sync(() => onPage(page))),

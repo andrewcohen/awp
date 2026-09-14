@@ -8,7 +8,7 @@ import { threadLink } from "./address";
 import { archiveThread, said } from "./daemon";
 import { type Items, menuDanger, menuItem } from "./menus";
 import { typeset } from "./typeset";
-import { colors, lift, text, timing } from "./tokens.stylex";
+import { colors, layer, lift, text, timing } from "./tokens.stylex";
 
 // Putting a thread away, and taking its checkouts back with it.
 //
@@ -66,7 +66,7 @@ const styles = stylex.create({
     top: "50%",
     left: "50%",
     transform: "translate(-50%, -50%)",
-    zIndex: 30,
+    zIndex: layer.modal,
     display: "flex",
     flexDirection: "column",
     gap: "0.75rem",
@@ -218,7 +218,7 @@ export function useThreadMenu({
     api half turning out to be necessary an hour later. Both
     reach the same `ThreadStart`. */}
         <Menu.Item onClick={() => setAdding(true)} {...stylex.props(menuItem)}>
-          add a project…
+          add project to thread…
         </Menu.Item>
 
         {/* The ellipsis says there is more; the item's own ellipsis says

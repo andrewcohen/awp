@@ -168,6 +168,24 @@ interface Fakes {
   /** The commit `trunk()` resolves to, for the label question above. */
   readonly trunkCommit?: string | undefined;
   /**
+   * Commits a checkout has on top of trunk, for the adoption pass.
+   *
+   * That pass asks `(present(a) | present(b)) & ::@ ~ ::trunk()` — which of
+   * these pull request heads is among the commits this checkout made — and it
+   * is the one question a name comparison cannot answer. Every checkout owns
+   * the same set here, which is enough: the tests that use it have one.
+   */
+  readonly owns?: ReadonlyArray<string> | undefined;
+  /**
+   * Commits that are ancestors of the checkout but sit *below* trunk.
+   *
+   * Which is every commit that has ever merged, for every checkout — so this
+   * is what `~ ::trunk()` exists to exclude, and the fake has to model the
+   * difference or the clause cannot be tested. Dropping it from the revset
+   * must turn these into adoptions.
+   */
+  readonly merged?: ReadonlyArray<string> | undefined;
+  /**
    * Refuse any revset mentioning `trunk()`, the way jj does when it cannot
    * settle on one. The only branch in `Revisions` a test can reach.
    */
@@ -348,31 +366,46 @@ const run = <A>(body: (rpc: Client) => Effect.Effect<A, unknown, Scope.Scope>, f
               //   trunk()                the base a thread starts from
               //   anything else          echoed back, so a test can see which
               //                          revset the handler chose
-              revset.startsWith("present(")
-                ? Effect.succeed(fakes.contains === false ? [] : [revision(revset)])
-                : revset === "@"
-                  ? Effect.succeed([
-                      { ...revision(`${revset} limit ${limit}`), empty: fakes.dirty !== true },
-                    ])
-                  : fakes.noTrunk === true && revset.includes("trunk()")
-                    ? Effect.fail(
-                        new JjError({
-                          op: "list revisions",
-                          reason: "Revset `trunk()` is ambiguous",
-                        }),
-                      )
-                    : Effect.succeed([
-                        {
-                          ...revision(`${revset} limit ${limit}`),
-                          // The commit `trunk()` sits on, when a test says. Every
-                          // other revset gets the placeholder, which matches no
-                          // bookmark and so leaves the label at its fallback.
-                          commitId:
-                            revset === "trunk()" && fakes.trunkCommit !== undefined
-                              ? fakes.trunkCommit
-                              : "bbb",
-                        },
-                      ]),
+              // The adoption pass, whose revset is a *parenthesised* union —
+              // matched before the single `present(` case, which it would
+              // otherwise fall past into the echo and adopt nothing.
+              revset.startsWith("(present(")
+                ? Effect.succeed(
+                    [
+                      ...(fakes.owns ?? []),
+                      // Only when the revset does not cut trunk away. This is
+                      // the half that makes the clause testable rather than
+                      // merely present.
+                      ...(revset.includes("~ ::trunk()") ? [] : (fakes.merged ?? [])),
+                    ]
+                      .filter((oid) => revset.includes(oid))
+                      .map((oid) => ({ ...revision(revset), commitId: oid })),
+                  )
+                : revset.startsWith("present(")
+                  ? Effect.succeed(fakes.contains === false ? [] : [revision(revset)])
+                  : revset === "@"
+                    ? Effect.succeed([
+                        { ...revision(`${revset} limit ${limit}`), empty: fakes.dirty !== true },
+                      ])
+                    : fakes.noTrunk === true && revset.includes("trunk()")
+                      ? Effect.fail(
+                          new JjError({
+                            op: "list revisions",
+                            reason: "Revset `trunk()` is ambiguous",
+                          }),
+                        )
+                      : Effect.succeed([
+                          {
+                            ...revision(`${revset} limit ${limit}`),
+                            // The commit `trunk()` sits on, when a test says. Every
+                            // other revset gets the placeholder, which matches no
+                            // bookmark and so leaves the label at its fallback.
+                            commitId:
+                              revset === "trunk()" && fakes.trunkCommit !== undefined
+                                ? fakes.trunkCommit
+                                : "bbb",
+                          },
+                        ]),
             // Likewise: the patch it hands back is the request it was given, so
             // a test can assert on the snapshot decision the handler made.
             diff: (options: DiffOf) =>
@@ -2118,6 +2151,121 @@ describe("InboxList", () => {
     // workspace" for a workspace already on disk.
     expect(row?.workspace).toBe("lantern");
     expect(answer.thread?.prs).toEqual([{ project: "awp", number: 51 }]);
+  });
+
+  // ── and the branch is frequently not named after the workspace ────────────
+  //
+  // Found on a real pair: PR #623's head was `andrew/promise-v3-fastest-origin`
+  // and the workspace's own bookmark was `andrew/handoff-promise-v3-fastest` —
+  // the same commit under two names, because somebody named the branch after
+  // the change before opening it. The name pass above cannot see that, and it
+  // is the ordinary case rather than a corner: opening a pull request happens
+  // in `gh`, where nothing knows what awp called the checkout.
+  it("adopts a pull request whose head commit is in the checkout", async () => {
+    const answer = await run(
+      (rpc) =>
+        Effect.gen(function* () {
+          const thread = yield* rpc.ThreadCreate({ title: "the lantern rewrite" });
+          yield* rpc.ThreadAttach({
+            thread: thread.id,
+            member: { project: "awp", workspace: "lantern" },
+          });
+          const inbox = yield* rpc.InboxList({});
+          // Read back from the store: what makes this survive the branch being
+          // renamed is that it was written down, not that it was reported.
+          const every = yield* rpc.ThreadList();
+          return { inbox, thread: every.find((one) => one.id === thread.id) };
+        }),
+      {
+        viewer: "me",
+        bookmarkPrefix: "andrew",
+        // A branch named after the change, not after the checkout.
+        prs: [pr({ number: 61, headRef: "andrew/fastest-origin", headOid: "beef", author: "me" })],
+        owns: ["beef"],
+      },
+    );
+
+    const row = answer.inbox.items.find((item) => item.number === 61);
+    expect(row?.thread).toBe(answer.thread?.id);
+    expect(row?.workspace).toBe("lantern");
+    expect(answer.thread?.prs).toEqual([{ project: "awp", number: 61 }]);
+  });
+
+  it("adopts nothing when the head is not among the checkout's own commits", async () => {
+    // `~ ::trunk()` is the whole safety of this: every merged commit is an
+    // ancestor of every checkout, so without it the first workspace asked
+    // would adopt every pull request that has ever landed.
+    const answer = await run(
+      (rpc) =>
+        Effect.gen(function* () {
+          const thread = yield* rpc.ThreadCreate({ title: "the lantern rewrite" });
+          yield* rpc.ThreadAttach({
+            thread: thread.id,
+            member: { project: "awp", workspace: "lantern" },
+          });
+          return yield* rpc.InboxList({});
+        }),
+      {
+        viewer: "me",
+        bookmarkPrefix: "andrew",
+        prs: [pr({ number: 62, headRef: "andrew/fastest-origin", headOid: "beef", author: "me" })],
+        owns: [],
+      },
+    );
+
+    expect(answer.items[0]?.thread).toBeUndefined();
+  });
+
+  it("does not adopt a pull request that merged long ago", async () => {
+    // Every landed commit is an ancestor of every checkout, so this is the one
+    // that would go wrong at scale: without `~ ::trunk()` the first workspace
+    // asked adopts the repository's entire history of pull requests.
+    const answer = await run(
+      (rpc) =>
+        Effect.gen(function* () {
+          const thread = yield* rpc.ThreadCreate({ title: "the lantern rewrite" });
+          yield* rpc.ThreadAttach({
+            thread: thread.id,
+            member: { project: "awp", workspace: "lantern" },
+          });
+          return yield* rpc.InboxList({});
+        }),
+      {
+        viewer: "me",
+        bookmarkPrefix: "andrew",
+        prs: [pr({ number: 64, headRef: "andrew/landed", headOid: "cafe", author: "me" })],
+        merged: ["cafe"],
+      },
+    );
+
+    expect(answer.items[0]?.thread).toBeUndefined();
+  });
+
+  it("does not adopt somebody else's pull request from under it", async () => {
+    // Reviewing a stack means working on top of their branch, which makes
+    // their head one of this checkout's ancestors — true, and not a claim that
+    // their pull request belongs to this thread. Authorship is the line.
+    const answer = await run(
+      (rpc) =>
+        Effect.gen(function* () {
+          const thread = yield* rpc.ThreadCreate({ title: "the lantern rewrite" });
+          yield* rpc.ThreadAttach({
+            thread: thread.id,
+            member: { project: "awp", workspace: "lantern" },
+          });
+          return yield* rpc.InboxList({});
+        }),
+      {
+        viewer: "me",
+        bookmarkPrefix: "andrew",
+        prs: [
+          pr({ number: 63, headRef: "someone/their-work", headOid: "beef", author: "someone" }),
+        ],
+        owns: ["beef"],
+      },
+    );
+
+    expect(answer.items[0]?.thread).toBeUndefined();
   });
 
   it("does not guess when the branch is not one of ours", async () => {

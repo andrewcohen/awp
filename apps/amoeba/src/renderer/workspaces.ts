@@ -477,14 +477,26 @@ export const threadOf = (
           ),
       );
 
+/**
+ * Which of a thread's pull requests a checkout in `project` is about.
+ *
+ * Its own function because two places need the same tie-break and a second
+ * copy of it is the one that drifts: the accessory strip, which draws a tab
+ * for the open workspace, and the sidebar row, which draws the number. A
+ * thread can hold several — a frontend change and the api behind it is one
+ * piece of work and two pull requests — so "the first one in this project,
+ * else the first one at all" is a rule rather than an obvious answer.
+ */
+export const prIn = (
+  thread: Thread | undefined,
+  project: string | undefined,
+): { readonly project: string; readonly number: number } | undefined => {
+  const mine = thread?.prs.filter((pr) => pr.project === project) ?? [];
+  return mine[0] ?? thread?.prs[0];
+};
+
 export const prOf = (
   identity: { readonly project: string; readonly workspace: string } | undefined,
   threads: ReadonlyArray<Thread>,
-): { readonly project: string; readonly number: number } | undefined => {
-  if (identity === undefined) {
-    return undefined;
-  }
-  const holding = threadOf(identity, threads);
-  const mine = holding?.prs.filter((pr) => pr.project === identity.project) ?? [];
-  return mine[0] ?? holding?.prs[0];
-};
+): { readonly project: string; readonly number: number } | undefined =>
+  identity === undefined ? undefined : prIn(threadOf(identity, threads), identity.project);

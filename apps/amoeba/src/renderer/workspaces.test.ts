@@ -1,6 +1,6 @@
 import type { SessionInfo, Thread, WorkspaceStatus } from "@awp-kit/protocol";
 import { describe, expect, it, test } from "vitest";
-import { type Workspace, groupByThread, groupByWorkspace, openable } from "./workspaces";
+import { type Workspace, groupByThread, groupByWorkspace, openable, prIn } from "./workspaces";
 
 // The grouping is where the sidebar's one real decision lives, so it is tested
 // away from the markup. Every fixture below is shaped like something `zmx ls`
@@ -510,5 +510,36 @@ describe("the order workspaces come back in", () => {
       "thicket.lantern",
       "thicket.orchard",
     ]);
+  });
+});
+
+describe("prIn", () => {
+  // A thread can hold a frontend change and the api behind it — one piece of
+  // work, two pull requests, two projects. Which one a checkout is about is
+  // the project it is standing in.
+  const both = thread({
+    prs: [
+      { project: "orchard", number: 88 },
+      { project: "thicket", number: 2418 },
+    ],
+  });
+
+  it("answers the pull request in the checkout's own project", () => {
+    expect(prIn(both, "thicket")?.number).toBe(2418);
+  });
+
+  it("falls back to the first when the project has none", () => {
+    // A workspace in a third repository is still part of this work, and the
+    // thread's first pull request is the better answer than nothing at all.
+    expect(prIn(both, "harbor-works")?.number).toBe(88);
+  });
+
+  it("answers nothing for a thread with no pull requests", () => {
+    expect(prIn(thread(), "thicket")).toBeUndefined();
+  });
+
+  it("answers nothing when there is no thread", () => {
+    // Most workspaces on a real machine belong to no thread at all.
+    expect(prIn(undefined, "thicket")).toBeUndefined();
   });
 });

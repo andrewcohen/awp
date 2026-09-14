@@ -3,7 +3,7 @@ import { CaretDownIcon } from "@phosphor-icons/react/CaretDown";
 import * as stylex from "@stylexjs/stylex";
 import type React from "react";
 import { typeset } from "./typeset";
-import { colors, text } from "./tokens.stylex";
+import { colors, layer, text } from "./tokens.stylex";
 
 // A small select that reads as a chip rather than as a form field.
 //
@@ -112,7 +112,7 @@ const styles = stylex.create({
   },
   chipQuiet: { color: colors.muted },
   chipCaret: { flexShrink: 0, color: colors.muted, opacity: 0.7 },
-  positioner: { zIndex: 10 },
+  positioner: { zIndex: layer.popup },
   menu: {
     padding: "0.2rem",
     backgroundColor: colors.surface,

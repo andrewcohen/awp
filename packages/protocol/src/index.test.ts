@@ -268,6 +268,7 @@ const handlers = AwpRpcs.toLayer({
   ProjectImport: () => Effect.succeed(project),
   ProjectForget: () => Effect.succeed(true),
   ThreadList: () => Effect.succeed([thread]),
+  ThreadChanges: () => Stream.make([thread]),
   ThreadAt: ({ from }) =>
     Effect.succeed({
       project: "thicket",
