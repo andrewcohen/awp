@@ -2042,19 +2042,43 @@ export const layer = AwpRpcs.toLayer(
        * wrote. `TaskNotOurs` is republished as `TaskRefused`: the store's
        * refusal and the contract's are the same sentence, and the sentence is
        * the interface.
+       *
+       * And each one announces itself on `TaskChanges`, which the sweep alone
+       * used to do. A write moves no file, so no sweep would ever report it —
+       * which left a task an agent wrote with `awp_task_add` invisible in the
+       * panel beside it, and a task removed in one window still drawn in the
+       * next. Measured in a browser: a row written from outside never arrived,
+       * where every ingested change arrives within the sweep.
+       *
+       * Announced after the store has answered, so nothing is published for a
+       * write that was refused.
        */
       TaskAdd: ({ subject, description, status, tags }) =>
-        tasks
-          .add({ subject, description, status, tags })
-          .pipe(Effect.map(onTheWire), Effect.mapError(refusedTask)),
+        tasks.add({ subject, description, status, tags }).pipe(
+          Effect.tap(() => taskFeed.wrote("added")),
+          Effect.map(onTheWire),
+          Effect.mapError(refusedTask),
+        ),
 
       TaskStatus: ({ id, status }) =>
-        tasks.setStatus(id, status).pipe(Effect.map(onTheWire), Effect.mapError(refusedTask)),
+        tasks.setStatus(id, status).pipe(
+          Effect.tap(() => taskFeed.wrote("changed")),
+          Effect.map(onTheWire),
+          Effect.mapError(refusedTask),
+        ),
 
       TaskTag: ({ id, tag, on }) =>
-        tasks.tag(id, tag, on).pipe(Effect.map(onTheWire), Effect.mapError(refusedTask)),
+        tasks.tag(id, tag, on).pipe(
+          Effect.tap(() => taskFeed.wrote("changed")),
+          Effect.map(onTheWire),
+          Effect.mapError(refusedTask),
+        ),
 
-      TaskForget: ({ id }) => tasks.remove(id).pipe(Effect.mapError(refusedTask)),
+      TaskForget: ({ id }) =>
+        tasks.remove(id).pipe(
+          Effect.tap(() => taskFeed.wrote("removed")),
+          Effect.mapError(refusedTask),
+        ),
 
       ProjectList: () => allProjects(),
 
@@ -2199,6 +2223,11 @@ export const layer = AwpRpcs.toLayer(
           for (const source of ["todo", "claude"] as const) {
             yield* tasks.ingest(source, projectPrefix(name), []).pipe(Effect.ignore);
           }
+          // Said out loud for the same reason the four writes are: this empties
+          // rows without touching a file, so no sweep will ever report it, and
+          // a panel open on `everywhere` would go on drawing a forgotten
+          // project's tasks until an unrelated list moved.
+          yield* taskFeed.wrote("removed");
           return had;
         }),
 

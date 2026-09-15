@@ -66,6 +66,19 @@ export interface TaskFeed {
    */
   readonly nudge: () => Effect.Effect<void>;
   /**
+   * A write made through this daemon, announced to whoever is watching.
+   *
+   * The sweep publishes what a *file* said; this is the other writer. A task
+   * written by `awp_task_add`, or moved by another window, changes no file and
+   * therefore no sweep — so without this a panel sitting open beside the agent
+   * that wrote it learns nothing until some unrelated list happens to move.
+   *
+   * One row, because every one of these calls is one row. The count is what
+   * crosses the wire and a client re-reads on any of them, so the kind is here
+   * to keep the figure honest rather than because anything branches on it.
+   */
+  readonly wrote: (kind: "added" | "changed" | "removed") => Effect.Effect<void>;
+  /**
    * Every sweep that changed something, from now.
    *
    * Holding this is what keeps the timer running — see the note above. Nothing
@@ -313,6 +326,16 @@ export const make = (options: {
     });
 
     return {
+      wrote: (kind: "added" | "changed" | "removed") =>
+        Effect.gen(function* () {
+          const at = yield* Clock.currentTimeMillis;
+          yield* PubSub.publish(hub, {
+            added: kind === "added" ? 1 : 0,
+            changed: kind === "changed" ? 1 : 0,
+            removed: kind === "removed" ? 1 : 0,
+            at,
+          });
+        }),
       read: (filter?: TaskFilter) =>
         Effect.gen(function* () {
           const held = yield* options.tasks.list(filter).pipe(Effect.orElseSucceed(() => []));

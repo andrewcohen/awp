@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { WorkspaceStatus } from "@awp-kit/protocol";
+import type { TaskChange, WorkspaceStatus } from "@awp-kit/protocol";
 import { layer as dbLayer } from "@awp-kit/store";
 import { Duration, Effect, Fiber, Layer, Stream } from "effect";
 import { afterAll, describe, expect, test } from "vitest";
@@ -59,7 +59,7 @@ const run = <A>(
 const watching = <A>(
   feed: TaskFeed,
   act: Effect.Effect<A>,
-): Effect.Effect<ReadonlyArray<{ readonly added: number; readonly at: number }>> =>
+): Effect.Effect<ReadonlyArray<TaskChange>> =>
   Effect.gen(function* () {
     const seen = yield* Effect.forkDetach(Stream.runCollect(Stream.take(feed.changes(), 1)));
     yield* Effect.sleep(Duration.millis(50));
@@ -149,6 +149,31 @@ describe("sweep", () => {
       }),
     );
     expect(seen).toEqual([]);
+  });
+});
+
+// A write moves no file, so no sweep can report it — and the panel only ever
+// re-reads on a push. Without these the agent's own `awp_task_add` lands in a
+// store nothing looking at it is told about, which was measured in a browser
+// before it was written down here.
+describe("a write says so too", () => {
+  const nothing = project("thicket", "");
+
+  test("a task written through the daemon is pushed", async () => {
+    const seen = await run([nothing], (feed) => watching(feed, feed.wrote("added")));
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.added).toBe(1);
+    expect(seen[0]?.at).toBeGreaterThan(0);
+  });
+
+  test("one row, in the column that moved", async () => {
+    const seen = await run([nothing], (feed) => watching(feed, feed.wrote("removed")));
+    expect(seen[0]).toMatchObject({ added: 0, changed: 0, removed: 1 });
+  });
+
+  test("a move is a change rather than an arrival, so a count stays a count", async () => {
+    const seen = await run([nothing], (feed) => watching(feed, feed.wrote("changed")));
+    expect(seen[0]).toMatchObject({ added: 0, changed: 1, removed: 0 });
   });
 });
 

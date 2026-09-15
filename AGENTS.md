@@ -1187,6 +1187,25 @@ one an equality check would lose: a workspace that was `working` and is now
 **absent** — a conversation released mid-turn — has settled too. `waiting`
 counts as well; a turn that stopped to ask a question has stopped writing.
 
+**And a write is not a sweep, so it has to say so itself.** Every trigger above
+is about a _file_, and the store has a writer that touches none —
+`awp_task_add` from the agent in the next column, a dot pressed in another
+window, a project forgotten. The sweep counts what ingest moved, so a write
+moves nothing it can count, and a panel that only re-reads on a push therefore
+never learns. Measured in a browser against the daemon, on `#/`:
+
+```
+  written from outside, before   never arrived — the panel sat on 53 for 25s
+  written from outside, after    11ms, unprompted
+  removed from outside, before   still drawn, with the row already gone
+```
+
+`TaskFeed.wrote` is the announcement and the four handlers call it, after the
+store has answered so a refusal publishes nothing. One row per call, in the
+column that moved, because each of those calls is exactly one row.
+`ProjectForget` says it too: releasing a project's rows empties them without
+touching a file, which is the same shape one level up.
+
 ### The panel draws every source as one list
 
 ```

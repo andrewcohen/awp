@@ -299,12 +299,23 @@ const run = <A>(body: (rpc: Client) => Effect.Effect<A, unknown, Scope.Scope>, f
                 fakes.ingested?.push({ source, prefix, count: incoming.length });
                 return { added: 0, changed: 0, removed: incoming.length === 0 ? 1 : 0 };
               }),
-            // The writers are `tasks.test.ts`'s, against a real file. Nothing
-            // in this suite calls one; they are here because the service is a
-            // whole shape and a fake missing a method is a defect at the call
-            // site rather than a compile error — which is exactly how a job
-            // step was left hanging once.
-            add: () => Effect.die("no writing in this fake"),
+            // The writers are `tasks.test.ts`'s, against a real file. What
+            // this suite asks of them is one thing that file cannot see: a
+            // write moves no file, so nothing in a sweep would ever report it,
+            // and the announcement is the handler's rather than the store's.
+            add: (task) =>
+              Effect.succeed({
+                id: "awp:20260915-fake",
+                subject: task.subject,
+                description: task.description,
+                status: task.status,
+                source: "awp" as const,
+                sourceKey: undefined,
+                sourceSeq: undefined,
+                tags: task.tags,
+                createdAt: new Date(0),
+                updatedAt: new Date(0),
+              }),
             setStatus: () => Effect.die("no writing in this fake"),
             tag: () => Effect.die("no writing in this fake"),
             remove: () => Effect.die("no writing in this fake"),
@@ -1972,6 +1983,35 @@ describe("starting a workspace's agent again", () => {
     // builtin — `import/no-nodejs-modules` is on for exactly this reason.
     const dir = await run((rpc) => rpc.WorkspaceDir({ project: "rowan", workspace: "discounts" }));
     expect(dir).toBe(workspacePath("rowan", "discounts"));
+  });
+});
+
+describe("tasks over the contract", () => {
+  it("a write is announced, though it moved no file", async () => {
+    // The sweep pushes what a *file* said, and a write is the other writer:
+    // `awp_task_add` from the agent beside the panel changes nothing on disk,
+    // so no sweep can report it. Measured in a browser first — a row written
+    // from outside never arrived, where every ingested change did.
+    const seen = await run((rpc) =>
+      Effect.gen(function* () {
+        const changes = yield* Stream.runCollect(rpc.TaskChanges().pipe(Stream.take(1))).pipe(
+          Effect.forkScoped,
+        );
+        // The same pause the jobs feed needs, for the same reason: `forkScoped`
+        // returns before the fiber has subscribed, and a PubSub carries what is
+        // published after that.
+        yield* Effect.sleep("50 millis");
+        yield* rpc.TaskAdd({
+          subject: "paginate the exports",
+          description: "",
+          status: "pending",
+          tags: ["project:thicket"],
+        });
+        return yield* Fiber.join(changes);
+      }),
+    );
+    expect([...seen]).toHaveLength(1);
+    expect([...seen][0]).toMatchObject({ added: 1, changed: 0, removed: 0 });
   });
 });
 
