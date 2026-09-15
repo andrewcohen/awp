@@ -498,7 +498,7 @@ export const Composer = ({
       : draft.includes("\n")
         ? "shift+return for a new line"
         : working && draft !== ""
-          ? "return waits for the answer · cmd+return interrupts"
+          ? "cmd+return interrupts"
           : "";
 
   /**
