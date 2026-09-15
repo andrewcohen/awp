@@ -48,6 +48,18 @@ const comment = (over: Partial<ReviewComment>): ReviewComment =>
     ...over,
   }) as ReviewComment;
 
+/** One task, as the store would answer it. */
+const entry = (over: Partial<Task> = {}): Task => ({
+  id: "awp:20260915-ab12",
+  subject: "measure the sweep",
+  description: "over every checkout",
+  status: "pending",
+  source: "awp",
+  tags: ["project:rowan"],
+  seq: undefined,
+  ...over,
+});
+
 /** A daemon that answers, plus a record of what it was asked. */
 const daemonOf = (
   over: Partial<Daemon> = {},
@@ -75,6 +87,18 @@ const daemonOf = (
       browse: (from, url) => {
         asked.push({ browse: from, url });
         return Effect.succeed({ thread: "th-1", url });
+      },
+      addTask: (task) => {
+        asked.push({ addTask: task });
+        return Effect.succeed(entry({ subject: task.subject, tags: task.tags }));
+      },
+      setTaskStatus: (id, status) => {
+        asked.push({ setTaskStatus: id, status });
+        return Effect.succeed(entry({ id, status }));
+      },
+      tagTask: (id, tag, on) => {
+        asked.push({ tagTask: id, tag, on });
+        return Effect.succeed(entry({ id, tags: on ? [tag] : [] }));
       },
       ...over,
     },
@@ -462,5 +486,88 @@ describe("awp_task", () => {
     const got = call("awp_task");
     expect(got.failed).toBe(true);
     expect(got.asked).toEqual([]);
+  });
+});
+
+describe("awp_task_add", () => {
+  it("tags the task with the project the server is standing in", () => {
+    // Never an argument, like every other tool here — a task with no project
+    // tag is one the panel's own scope cannot find, and one with the wrong
+    // tag is a write into somebody else's list.
+    const got = call("awp_task_add", { subject: "measure the sweep" });
+    expect(got.failed).toBe(false);
+    expect(got.asked).toContainEqual({
+      addTask: {
+        subject: "measure the sweep",
+        description: "",
+        status: "pending",
+        tags: ["project:rowan"],
+      },
+    });
+  });
+
+  it("starts pending unless asked otherwise", () => {
+    const got = call("awp_task_add", { subject: "x", status: "in_progress" });
+    expect(got.asked).toContainEqual(expect.objectContaining({ addTask: expect.anything() }));
+    expect(JSON.stringify(got.asked)).toContain("in_progress");
+  });
+
+  it("refuses with no subject, before asking the daemon", () => {
+    const got = call("awp_task_add");
+    expect(got.failed).toBe(true);
+    expect(got.asked).toEqual([]);
+  });
+
+  it("says the id it wrote, so the next call has something to name", () => {
+    const got = call("awp_task_add", { subject: "measure the sweep" });
+    expect(got.text).toContain("awp:20260915-ab12");
+  });
+});
+
+describe("awp_task_status and awp_task_tag are bound to this project", () => {
+  // An id can name a task in any project, which every other tool here is
+  // structurally unable to do. So the binding is a check rather than an
+  // absence, and this is the test that says so.
+  const elsewhere = { board: () => Effect.succeed([]) };
+
+  it("refuses an id that is not this project's, and does not write", () => {
+    const got = call(
+      "awp_task_status",
+      { id: "awp:somebody-else", status: "completed" },
+      elsewhere,
+    );
+    expect(got.failed).toBe(true);
+    expect(got.text).toContain("rowan");
+    expect(JSON.stringify(got.asked)).not.toContain("setTaskStatus");
+  });
+
+  it("asks the board for this project's tasks and nothing wider", () => {
+    call("awp_task_tag", { id: "awp:20260915-ab12", tag: "thread:x" }, elsewhere);
+    expect(elsewhere.board).toBeDefined();
+    const got = call("awp_task_tag", { id: "awp:20260915-ab12", tag: "thread:x" });
+    expect(got.asked).toContainEqual({ board: { tags: ["project:rowan"] } });
+  });
+
+  it("moves a task that is this project's", () => {
+    const got = call(
+      "awp_task_status",
+      { id: "awp:20260915-ab12", status: "completed" },
+      { board: () => Effect.succeed([entry()]) },
+    );
+    expect(got.failed).toBe(false);
+    expect(got.text).toContain("completed");
+  });
+
+  it("removes a tag when told to, and defaults to applying one", () => {
+    const own = { board: () => Effect.succeed([entry()]) };
+    const on = call("awp_task_tag", { id: "awp:20260915-ab12", tag: "thread:x" }, own);
+    expect(on.text).toContain("thread:x");
+    const off = call("awp_task_tag", { id: "awp:20260915-ab12", tag: "thread:x", on: false }, own);
+    expect(off.text).toContain("no tags");
+  });
+
+  it("refuses with no id, before asking the daemon", () => {
+    expect(call("awp_task_status", { status: "completed" }).asked).toEqual([]);
+    expect(call("awp_task_tag", { tag: "x" }).asked).toEqual([]);
   });
 });

@@ -299,6 +299,15 @@ const run = <A>(body: (rpc: Client) => Effect.Effect<A, unknown, Scope.Scope>, f
                 fakes.ingested?.push({ source, prefix, count: incoming.length });
                 return { added: 0, changed: 0, removed: incoming.length === 0 ? 1 : 0 };
               }),
+            // The writers are `tasks.test.ts`'s, against a real file. Nothing
+            // in this suite calls one; they are here because the service is a
+            // whole shape and a fake missing a method is a defect at the call
+            // site rather than a compile error — which is exactly how a job
+            // step was left hanging once.
+            add: () => Effect.die("no writing in this fake"),
+            setStatus: () => Effect.die("no writing in this fake"),
+            tag: () => Effect.die("no writing in this fake"),
+            remove: () => Effect.die("no writing in this fake"),
           }),
         ),
         // A conversation nobody has. The chat calls are exercised by

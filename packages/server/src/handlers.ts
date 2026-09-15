@@ -19,6 +19,7 @@ import {
   JobNotFound,
   NoAgent,
   NotAWorkspace,
+  TaskRefused,
   type PageNote,
   type Project,
   ProjectImportFailed,
@@ -57,7 +58,7 @@ import { Projects, discover, expand, nearestRepo } from "./projects";
 import { Reviews, commentId } from "./reviews";
 import { WorkspaceState } from "./workspace-state";
 import { Threads } from "./threads";
-import { type Task as StoredTask, Tasks } from "./tasks";
+import { type TaskNotOurs, type Task as StoredTask, type TaskStoreError, Tasks } from "./tasks";
 import { make as taskFeedOf, projectPrefix, settled } from "./task-feed";
 
 /**
@@ -90,6 +91,17 @@ const onTheWire = (task: StoredTask): Task => ({
   tags: task.tags,
   seq: task.sourceSeq,
 });
+
+/**
+ * A task write that did not happen, as one sentence.
+ *
+ * Both halves reach here: a store that is broken, and a write aimed at a row
+ * awp only copied. They are different things and a caller does the same thing
+ * with either — read what it says — so they arrive under one name rather than
+ * as a union nothing branches on.
+ */
+const refusedTask = (error: TaskStoreError | TaskNotOurs): TaskRefused =>
+  new TaskRefused({ reason: error.reason });
 
 /** The same refusal, under the name the two review calls publish. */
 const asReviewFailure = <A, R>(
@@ -2021,6 +2033,28 @@ export const layer = AwpRpcs.toLayer(
        * open panel, each of them reading every project's files for itself.
        */
       TaskChanges: () => taskFeed.changes(),
+
+      /**
+       * The four writes, and the one shape they share.
+       *
+       * Each answers with the row it made, so a caller — a panel, or a model
+       * reading a tool's reply — is not left to ask again for what it just
+       * wrote. `TaskNotOurs` is republished as `TaskRefused`: the store's
+       * refusal and the contract's are the same sentence, and the sentence is
+       * the interface.
+       */
+      TaskAdd: ({ subject, description, status, tags }) =>
+        tasks
+          .add({ subject, description, status, tags })
+          .pipe(Effect.map(onTheWire), Effect.mapError(refusedTask)),
+
+      TaskStatus: ({ id, status }) =>
+        tasks.setStatus(id, status).pipe(Effect.map(onTheWire), Effect.mapError(refusedTask)),
+
+      TaskTag: ({ id, tag, on }) =>
+        tasks.tag(id, tag, on).pipe(Effect.map(onTheWire), Effect.mapError(refusedTask)),
+
+      TaskForget: ({ id }) => tasks.remove(id).pipe(Effect.mapError(refusedTask)),
 
       ProjectList: () => allProjects(),
 

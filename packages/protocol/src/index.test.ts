@@ -259,6 +259,37 @@ const handlers = AwpRpcs.toLayer({
   TaskList: () => Effect.succeed([task]),
   TaskBoard: () => Effect.succeed([]),
   TaskChanges: () => Stream.empty,
+  TaskAdd: () =>
+    Effect.succeed({
+      id: "awp:20260915-ab12",
+      subject: "measure the sweep",
+      description: "",
+      status: "pending",
+      source: "awp",
+      tags: [],
+      seq: undefined,
+    }),
+  TaskStatus: () =>
+    Effect.succeed({
+      id: "awp:20260915-ab12",
+      subject: "measure the sweep",
+      description: "",
+      status: "pending",
+      source: "awp",
+      tags: [],
+      seq: undefined,
+    }),
+  TaskTag: () =>
+    Effect.succeed({
+      id: "awp:20260915-ab12",
+      subject: "measure the sweep",
+      description: "",
+      status: "pending",
+      source: "awp",
+      tags: [],
+      seq: undefined,
+    }),
+  TaskForget: () => Effect.void,
   TaskSend: () => Effect.succeed("— a task from this workspace's list"),
   JobRetry: () => Effect.succeed(job),
   JobCancel: () => Effect.void,

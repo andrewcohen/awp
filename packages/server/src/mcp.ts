@@ -198,6 +198,14 @@ export interface Daemon {
     readonly tags?: ReadonlyArray<string>;
     readonly statuses?: ReadonlyArray<string>;
   }) => Effect.Effect<ReadonlyArray<Task>, Refusal>;
+  readonly addTask: (task: {
+    readonly subject: string;
+    readonly description: string;
+    readonly status: string;
+    readonly tags: ReadonlyArray<string>;
+  }) => Effect.Effect<Task, Refusal>;
+  readonly setTaskStatus: (id: string, status: string) => Effect.Effect<Task, Refusal>;
+  readonly tagTask: (id: string, tag: string, on: boolean) => Effect.Effect<Task, Refusal>;
 }
 
 /**
@@ -346,7 +354,108 @@ export const TOOLS = [
       additionalProperties: false,
     },
   },
+  // ── and three that write ─────────────────────────────────────────────────
+  //
+  // The tools above read somebody else's list. These three write awp's own,
+  // which is a source nothing sweeps — so a task written here cannot be
+  // decided finished by the next reading of a file.
+  //
+  // **The project is the directory's, never an argument**, exactly as it is
+  // for every other tool here. Adding takes it from the checkout this server
+  // runs in; the two that take an id check that the task is one of that
+  // project's before touching it, so an id read out of somewhere else is a
+  // refusal rather than a write into another repository's list.
+  {
+    name: "awp_task_add",
+    description:
+      "Write something down as work to do, where it will outlive this session. Prefer " +
+      "this to keeping a plan only in the conversation: a task here is readable from " +
+      "every checkout of the project and survives the session ending. The description " +
+      "is the valuable half — say what was measured, what was tried, and what done " +
+      "means, not just the title.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        subject: { type: "string", description: "One line. What the work is." },
+        description: {
+          type: "string",
+          description: "Markdown. The argument behind it — why, what was tried, what done means.",
+        },
+        status: {
+          type: "string",
+          enum: ["pending", "in_progress", "blocked"],
+          description: "Where it starts. Defaults to pending.",
+        },
+      },
+      required: ["subject"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "awp_task_status",
+    description:
+      "Move a task awp owns to another status. Only tasks written with awp_task_add can " +
+      "be moved: one read out of a TODO.md or an agent's own list is a copy, and it " +
+      "finishes where it is written — the refusal says which.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "As awp_tasks reports it." },
+        status: { type: "string", enum: ["pending", "in_progress", "blocked", "completed"] },
+      },
+      required: ["id", "status"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "awp_task_tag",
+    description:
+      "Apply or remove a label on any task, whatever wrote it. A tag survives the sweeps " +
+      "that rebuild a copied task, so it is the one thing that can be said about " +
+      "somebody else's row without contradicting it — `thread:<id>` to say which piece " +
+      "of work it belongs to, or a word of your own.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "As awp_tasks reports it." },
+        tag: { type: "string", description: "A label. `thread:<id>` is the one awp reads." },
+        on: { type: "boolean", description: "False removes it. Defaults to true." },
+      },
+      required: ["id", "tag"],
+      additionalProperties: false,
+    },
+  },
 ] as const;
+
+/**
+ * Whether a task belongs to the project this server is bound to.
+ *
+ * The binding rule, applied to the one pair of tools that take an id: every
+ * other tool here is scoped by having no argument that could name another
+ * checkout, and an id can. Without this, a task id read out of a conversation
+ * — or guessed — would be a write into some other repository's list, which is
+ * precisely the failure the Go implementation shipped and `NotAWorkspace`
+ * exists to make legible.
+ *
+ * Checked by reading the project's own board rather than by parsing the id: an
+ * id's shape is the store's business, and a rule here that knew it would be a
+ * second copy of one.
+ */
+const ownTask = (
+  daemon: Daemon,
+  cwd: string,
+  id: string,
+): Effect.Effect<Task, { readonly reason: string }> =>
+  Effect.gen(function* () {
+    const where = yield* daemon.threadAt(cwd);
+    const found = yield* daemon.board({ tags: [`project:${where.project}`] });
+    const one = found.find((task) => task.id === id);
+    return one === undefined
+      ? yield* Effect.fail({
+          reason: `no task ${id} in ${where.project} — awp_tasks lists this project's`,
+        })
+      : one;
+  });
 
 /**
  * The statuses a task list is read to plan from.
@@ -580,6 +689,72 @@ export const answer = (
               one === undefined
                 ? said(`no task called ${wanted} — awp_tasks lists them`, true)
                 : said(taskSaid(one)),
+            );
+          }
+
+          case "awp_task_add": {
+            const subject = text(args, "subject");
+            if (subject === undefined) {
+              return reply(said("awp_task_add needs a subject", true));
+            }
+            // The project is the checkout's, and `awp_thread`'s refusal for a
+            // directory outside a workspace is the one wanted — a task with no
+            // project tag is a task the panel's own scope cannot find.
+            const where = yield* Effect.result(daemon.threadAt(cwd));
+            if (!Result.isSuccess(where)) {
+              return reply(said(where.failure.reason, true));
+            }
+            const made = yield* Effect.result(
+              daemon.addTask({
+                subject,
+                description: text(args, "description") ?? "",
+                status: text(args, "status") ?? "pending",
+                tags: [`project:${where.success.project}`],
+              }),
+            );
+            return reply(
+              Result.isSuccess(made)
+                ? said(`wrote ${made.success.id}: ${made.success.subject}`)
+                : said(made.failure.reason, true),
+            );
+          }
+
+          case "awp_task_status":
+          case "awp_task_tag": {
+            const wanted = text(args, "id");
+            if (wanted === undefined) {
+              return reply(said(`${name} needs an id — awp_tasks lists them`, true));
+            }
+            const mine = yield* Effect.result(ownTask(daemon, cwd, wanted));
+            if (!Result.isSuccess(mine)) {
+              return reply(said(mine.failure.reason, true));
+            }
+            if (name === "awp_task_status") {
+              const status = text(args, "status");
+              if (status === undefined) {
+                return reply(said("awp_task_status needs a status", true));
+              }
+              const moved = yield* Effect.result(daemon.setTaskStatus(wanted, status));
+              return reply(
+                Result.isSuccess(moved)
+                  ? said(`${wanted} is ${moved.success.status}`)
+                  : said(moved.failure.reason, true),
+              );
+            }
+            const tag = text(args, "tag");
+            if (tag === undefined) {
+              return reply(said("awp_task_tag needs a tag", true));
+            }
+            const on = args["on"] !== false;
+            const held = yield* Effect.result(daemon.tagTask(wanted, tag, on));
+            return reply(
+              Result.isSuccess(held)
+                ? said(
+                    held.success.tags.length === 0
+                      ? `${wanted} has no tags`
+                      : `${wanted} is tagged ${held.success.tags.join(", ")}`,
+                  )
+                : said(held.failure.reason, true),
             );
           }
 

@@ -199,3 +199,159 @@ describe("list", () => {
     expect(held).toHaveLength(3);
   });
 });
+
+// ── writing ────────────────────────────────────────────────────────────────
+//
+// The store had one writer, ingest, and everything about it is shaped by the
+// source owning the row. These are the calls where this window owns it — plus
+// the one that reaches across, which is a tag.
+
+describe("add", () => {
+  test("writes a task nothing sweeps", async () => {
+    const path = file();
+    const held = await on(path, (tasks) =>
+      Effect.gen(function* () {
+        const made = yield* tasks.add({
+          subject: "measure the sweep",
+          description: "over every checkout",
+          status: "pending",
+          tags: ["project:thicket"],
+        });
+        // The sweep that would delete an ingested row under this prefix. An
+        // awp task is not reachable by one, and that is the whole property.
+        yield* tasks.ingest("todo", "thicket#", []);
+        yield* tasks.ingest("claude", "thicket#", []);
+        return { made, left: yield* tasks.list() };
+      }),
+    );
+    expect(held.made.source).toBe("awp");
+    expect(held.left.map((task) => task.id)).toEqual([held.made.id]);
+  });
+
+  test("answers the row it wrote, so nobody has to ask again", async () => {
+    const path = file();
+    const made = await on(path, (tasks) =>
+      tasks.add({ subject: "trust the repo", description: "", status: "pending", tags: [] }),
+    );
+    expect(made.subject).toBe("trust the repo");
+    expect(made.id.startsWith("awp:")).toBe(true);
+  });
+});
+
+describe("setStatus", () => {
+  test("moves a task awp owns", async () => {
+    const path = file();
+    const moved = await on(path, (tasks) =>
+      Effect.gen(function* () {
+        const made = yield* tasks.add({
+          subject: "measure the sweep",
+          description: "",
+          status: "pending",
+          tags: [],
+        });
+        return yield* tasks.setStatus(made.id, "in_progress");
+      }),
+    );
+    expect(moved.status).toBe("in_progress");
+  });
+
+  test("refuses an ingested one, and says where it is written", async () => {
+    const path = file();
+    const refused = await on(path, (tasks) =>
+      Effect.gen(function* () {
+        yield* tasks.ingest("todo", "thicket#", [incoming()]);
+        return yield* Effect.flip(tasks.setStatus(taskId("todo", "thicket#1"), "completed"));
+      }),
+    );
+    // The sentence is the interface — what reads it is as often a model as a
+    // person, and "it did not work" would send them nowhere.
+    expect(String(refused.reason)).toContain("came from todo");
+  });
+
+  test("refuses a task that is not there at all", async () => {
+    const path = file();
+    const refused = await on(path, (tasks) => Effect.flip(tasks.setStatus("awp:nope", "pending")));
+    expect(String(refused.reason)).toContain("no task");
+  });
+});
+
+describe("tag", () => {
+  test("a person's tag survives the sweep that rebuilt the task", async () => {
+    // The property the `applied` column exists for, and the one a second table
+    // would have had to invent a rule for. Without it a thread tag is written
+    // and then silently undone by the next reading of the file it came from.
+    const path = file();
+    const held = await on(path, (tasks) =>
+      Effect.gen(function* () {
+        yield* tasks.ingest("todo", "thicket#", [incoming()]);
+        const id = taskId("todo", "thicket#1");
+        yield* tasks.tag(id, "thread:20260915-ab12", true);
+        yield* tasks.ingest("todo", "thicket#", [incoming({ subject: "reworded" })]);
+        return yield* tasks.list();
+      }),
+    );
+    expect(held[0]?.tags).toContain("thread:20260915-ab12");
+    // And the source's own tag is still there: the sweep replaced what it
+    // wrote, which is both halves of the rule.
+    expect(held[0]?.tags).toContain("project:thicket");
+  });
+
+  test("untagging one the source implies is honest about being temporary", async () => {
+    const path = file();
+    const held = await on(path, (tasks) =>
+      Effect.gen(function* () {
+        yield* tasks.ingest("todo", "thicket#", [incoming()]);
+        const id = taskId("todo", "thicket#1");
+        const after = yield* tasks.tag(id, "project:thicket", false);
+        yield* tasks.ingest("todo", "thicket#", [incoming()]);
+        return { after, swept: yield* tasks.list() };
+      }),
+    );
+    expect(held.after.tags).not.toContain("project:thicket");
+    expect(held.swept[0]?.tags).toContain("project:thicket");
+  });
+
+  test("applying one the source already implies keeps it through a sweep that stops", async () => {
+    const path = file();
+    const held = await on(path, (tasks) =>
+      Effect.gen(function* () {
+        yield* tasks.ingest("todo", "thicket#", [incoming()]);
+        const id = taskId("todo", "thicket#1");
+        yield* tasks.tag(id, "project:thicket", true);
+        yield* tasks.ingest("todo", "thicket#", [incoming({ tags: [] })]);
+        return yield* tasks.list();
+      }),
+    );
+    expect(held[0]?.tags).toContain("project:thicket");
+  });
+});
+
+describe("remove", () => {
+  test("forgets a task awp owns, tags and all", async () => {
+    const path = file();
+    const left = await on(path, (tasks) =>
+      Effect.gen(function* () {
+        const made = yield* tasks.add({
+          subject: "measure the sweep",
+          description: "",
+          status: "pending",
+          tags: ["project:thicket"],
+        });
+        yield* tasks.remove(made.id);
+        return yield* tasks.list();
+      }),
+    );
+    expect(left).toEqual([]);
+  });
+
+  test("refuses an ingested one", async () => {
+    const path = file();
+    const refused = await on(path, (tasks) =>
+      Effect.gen(function* () {
+        yield* tasks.ingest("todo", "thicket#", [incoming()]);
+        return yield* Effect.flip(tasks.remove(taskId("todo", "thicket#1")));
+      }),
+    );
+    expect(String(refused.reason)).toContain("only copied here");
+  });
+});

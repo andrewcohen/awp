@@ -51,6 +51,17 @@ export class TaskStoreError extends Data.TaggedError("TaskStoreError")<{
   readonly cause?: unknown;
 }> {}
 
+/**
+ * A write aimed at a task this store only copied.
+ *
+ * Its own refusal rather than a `TaskStoreError`, because nothing is broken —
+ * the answer names where that task is actually written, and what reads it is
+ * as often a model as a person.
+ */
+export class TaskNotOurs extends Data.TaggedError("TaskNotOurs")<{
+  readonly reason: string;
+}> {}
+
 /** Where a task came from. The half of its key that says who may change it. */
 export type TaskSource = "todo" | "claude" | "awp";
 
@@ -112,6 +123,22 @@ export const migrations: ReadonlyArray<Migration> = [
       `create index task_tags_tag on task_tags (tag)`,
     ],
   },
+  {
+    // A tag a *person* applied, kept apart from one a source implies.
+    //
+    // Ingest replaces a task's tags wholesale, because the tags it applies are
+    // derived — a source that stops implying `project:thicket` must stop
+    // carrying it. That is exactly wrong for a tag somebody typed: a
+    // `thread:<id>` applied to a `TODO.md` task would be deleted by the next
+    // sweep of the file it came from, which is a write silently undone by a
+    // read. So the sweep only clears what the sweep wrote.
+    //
+    // A column rather than a second table: the unique that keeps one tag on one
+    // task is the thing both kinds want, and two tables would need it across
+    // both.
+    name: "tasks.002-applied-tags",
+    up: [`alter table task_tags add column applied integer not null default 0`],
+  },
 ];
 
 /** What a caller may narrow a listing to. Both absent means everything. */
@@ -161,6 +188,48 @@ export class Tasks extends Context.Service<
       { readonly added: number; readonly changed: number; readonly removed: number },
       TaskStoreError
     >;
+
+    /**
+     * A task somebody wrote here, rather than one copied in.
+     *
+     * The first writer this store has had. Its source is `awp`, which is what
+     * makes it safe from every sweep: ingest deletes by `(source, prefix)` and
+     * nothing sweeps this one, so there is no file whose next reading could
+     * decide this task had been finished.
+     */
+    readonly add: (task: {
+      readonly subject: string;
+      readonly description: string;
+      readonly status: string;
+      readonly tags: ReadonlyArray<string>;
+    }) => Effect.Effect<Task, TaskStoreError>;
+
+    /**
+     * Move a task awp owns to another status.
+     *
+     * Refused for an ingested one, and that refusal is the honest half of the
+     * feature: ingest's upsert writes the source's status back over anything
+     * set here, so a `TODO.md` task marked done in this window would be pending
+     * again within ten seconds, with nothing on screen to say why. The file is
+     * where that task finishes.
+     */
+    readonly setStatus: (
+      id: string,
+      status: string,
+    ) => Effect.Effect<Task, TaskStoreError | TaskNotOurs>;
+
+    /**
+     * Apply or remove a tag, on any task whatever its source.
+     *
+     * Any task, unlike the two above, because a tag is the one thing this store
+     * can say about somebody else's row without contradicting it — `thread:<id>`
+     * on a `TODO.md` entry is a claim about what the work belongs to, not about
+     * what the file says. It survives every sweep; see the migration's note.
+     */
+    readonly tag: (id: string, tag: string, on: boolean) => Effect.Effect<Task, TaskStoreError>;
+
+    /** Forget a task awp owns. Refused for an ingested one, for the same reason. */
+    readonly remove: (id: string) => Effect.Effect<void, TaskStoreError | TaskNotOurs>;
   }
 >()("awp/Tasks") {}
 
@@ -207,6 +276,22 @@ const count = (value: unknown): number | undefined =>
  */
 export const taskId = (source: TaskSource, key: string): string => `${source}:${key}`;
 
+/**
+ * The key a task written here is stored under: the day, and four characters.
+ *
+ * The same spelling `threadId` uses, deliberately — both are things somebody
+ * may read in a log line, and two id formats in one system is two things to
+ * recognise for no gain. Taking the clock and the randomness as arguments is
+ * what makes it a function a test can pin rather than a source of surprise.
+ */
+export const stamp = (now: Date, random: number): string => {
+  const day = now.toISOString().slice(0, 10).replaceAll("-", "");
+  const tail = Math.floor(random * 36 ** 4)
+    .toString(36)
+    .padStart(4, "0");
+  return `${day}-${tail}`;
+};
+
 export const make = Effect.gen(function* () {
   const db = yield* Db;
 
@@ -226,9 +311,30 @@ export const make = Effect.gen(function* () {
         or source_seq  is not excluded.source_seq`,
   );
   const addTag = db.prepare(
-    "insert into task_tags (task_id, tag) values (?, ?) on conflict do nothing",
+    "insert into task_tags (task_id, tag, applied) values (?, ?, 0) on conflict do nothing",
   );
-  const dropTags = db.prepare("delete from task_tags where task_id = ?");
+  // A person's tag is applied whether or not a source already implied it, so
+  // this promotes rather than inserting: a tag that survives a sweep and one
+  // that is re-derived by every sweep are the same row, and the flag is which.
+  const applyTag = db.prepare(
+    `insert into task_tags (task_id, tag, applied) values (?, ?, 1)
+       on conflict (task_id, tag) do update set applied = 1`,
+  );
+  const removeTag = db.prepare("delete from task_tags where task_id = ? and tag = ?");
+  // Only what the sweep itself wrote. A tag somebody applied is not the
+  // source's to take away — see the migration's note.
+  const dropTags = db.prepare("delete from task_tags where task_id = ? and applied = 0");
+  const insert = db.prepare(
+    `insert into tasks (id, subject, description, status, source, source_key, source_seq,
+                        created_at, updated_at)
+     values (?, ?, ?, ?, 'awp', ?, null, ?, ?)`,
+  );
+  const setStatusOf = db.prepare("update tasks set status = ?, updated_at = ? where id = ?");
+  const sourceOf = db.prepare("select source from tasks where id = ?");
+  // The cascade covers this, and it is written out because `remove` deletes a
+  // task rather than letting a sweep do it — a foreign key that is off would
+  // leave the tags behind, and `foreign_keys = on` is a connection setting.
+  const removeApplied = db.prepare("delete from task_tags where task_id = ?");
   const drop = db.prepare("delete from tasks where id = ?");
   const keysOf = db.prepare(
     "select id, subject, description, status, source_seq from tasks where source = ? and source_key like ?",
@@ -241,46 +347,71 @@ export const make = Effect.gen(function* () {
        from tasks`,
   );
 
+  const read = (filter?: TaskFilter): ReadonlyArray<Task> => {
+    // Read whole and filtered here rather than composed into SQL. The
+    // table is a person's task list — tens of rows, not thousands — and a
+    // dynamic `where` built from a caller's tag array is the one shape in
+    // this file that could take a value straight into a statement.
+    const tags = new Map<string, string[]>();
+    for (const row of allTags.all()) {
+      const id = text(row["task_id"]);
+      const held = tags.get(id) ?? [];
+      held.push(text(row["tag"]));
+      tags.set(id, held);
+    }
+    const wanted = filter?.tags ?? [];
+    const statuses = filter?.statuses;
+    return rows
+      .all()
+      .map((row): Task => {
+        const id = text(row["id"]);
+        return {
+          id,
+          subject: text(row["subject"]),
+          description: text(row["description"]),
+          status: text(row["status"]),
+          source: text(row["source"]) as TaskSource,
+          sourceKey: typeof row["source_key"] === "string" ? row["source_key"] : undefined,
+          sourceSeq: count(row["source_seq"]),
+          tags: (tags.get(id) ?? []).toSorted(),
+          createdAt: new Date(count(row["created_at"]) ?? 0),
+          updatedAt: new Date(count(row["updated_at"]) ?? 0),
+        };
+      })
+      .filter(
+        (task) =>
+          wanted.every((tag) => task.tags.includes(tag)) &&
+          (statuses === undefined || statuses.includes(task.status)),
+      )
+      .toSorted(order);
+  };
+
+  /**
+   * One task, read back.
+   *
+   * Every write answers with the row it made, so a caller — a panel, or a model
+   * reading a tool's reply — does not have to ask again to find out what was
+   * stored. It is a read of the whole small table, which `list`'s own note is
+   * the argument for: this is a person's task list, tens of rows.
+   */
+  const one = (id: string): Task | undefined => read().find((task) => task.id === id);
+
+  /** The refusal every write aimed at somebody else's row answers with. */
+  const ours = (id: string): TaskNotOurs | undefined => {
+    const row = sourceOf.all(id)[0];
+    const source = row === undefined ? undefined : text(row["source"]);
+    return source === "awp"
+      ? undefined
+      : new TaskNotOurs({
+          reason:
+            source === undefined
+              ? `no task ${id}`
+              : `${id} came from ${source} and is only copied here — change it where it is written`,
+        });
+  };
+
   return {
-    list: (filter?: TaskFilter) =>
-      ask("read the tasks", () => {
-        // Read whole and filtered here rather than composed into SQL. The
-        // table is a person's task list — tens of rows, not thousands — and a
-        // dynamic `where` built from a caller's tag array is the one shape in
-        // this file that could take a value straight into a statement.
-        const tags = new Map<string, string[]>();
-        for (const row of allTags.all()) {
-          const id = text(row["task_id"]);
-          const held = tags.get(id) ?? [];
-          held.push(text(row["tag"]));
-          tags.set(id, held);
-        }
-        const wanted = filter?.tags ?? [];
-        const statuses = filter?.statuses;
-        return rows
-          .all()
-          .map((row): Task => {
-            const id = text(row["id"]);
-            return {
-              id,
-              subject: text(row["subject"]),
-              description: text(row["description"]),
-              status: text(row["status"]),
-              source: text(row["source"]) as TaskSource,
-              sourceKey: typeof row["source_key"] === "string" ? row["source_key"] : undefined,
-              sourceSeq: count(row["source_seq"]),
-              tags: (tags.get(id) ?? []).toSorted(),
-              createdAt: new Date(count(row["created_at"]) ?? 0),
-              updatedAt: new Date(count(row["updated_at"]) ?? 0),
-            };
-          })
-          .filter(
-            (task) =>
-              wanted.every((tag) => task.tags.includes(tag)) &&
-              (statuses === undefined || statuses.includes(task.status)),
-          )
-          .toSorted(order);
-      }),
+    list: (filter?: TaskFilter) => ask("read the tasks", () => read(filter)),
 
     ingest: (source: TaskSource, keyPrefix: string, tasks: ReadonlyArray<Incoming>) =>
       ask(`ingest ${tasks.length} tasks from ${source}`, () => {
@@ -329,6 +460,78 @@ export const make = Effect.gen(function* () {
           drop.run(id);
         }
         return { added, changed, removed: held.size };
+      }),
+
+    add: (task: {
+      readonly subject: string;
+      readonly description: string;
+      readonly status: string;
+      readonly tags: ReadonlyArray<string>;
+    }) =>
+      ask("add a task", () => {
+        const now = Date.now();
+        // The same spelling a thread id has, for the same reason: both are
+        // things somebody may end up reading in a log line, and two id formats
+        // in one system is two things to recognise for no gain.
+        const key = stamp(new Date(now), Math.random());
+        const id = taskId("awp", key);
+        insert.run(id, task.subject, task.description, task.status, key, now, now);
+        for (const tag of task.tags) {
+          // Applied, not derived: nothing sweeps an awp task, but a tag that
+          // read as a source's would be a lie about who may take it away.
+          applyTag.run(id, tag);
+        }
+        const made = one(id);
+        if (made === undefined) {
+          throw new Error(`task ${id} did not survive being written`);
+        }
+        return made;
+      }),
+
+    setStatus: (id: string, status: string) =>
+      Effect.gen(function* () {
+        const refused = yield* ask("read a task's source", () => ours(id));
+        if (refused !== undefined) {
+          return yield* Effect.fail(refused);
+        }
+        return yield* ask("set a task's status", () => {
+          setStatusOf.run(status, Date.now(), id);
+          const moved = one(id);
+          if (moved === undefined) {
+            throw new Error(`task ${id} went missing while being changed`);
+          }
+          return moved;
+        });
+      }),
+
+    tag: (id: string, tag: string, on: boolean) =>
+      ask(on ? "tag a task" : "untag a task", () => {
+        if (on) {
+          applyTag.run(id, tag);
+        } else {
+          // Removed outright rather than demoted to a derived tag. A sweep
+          // puts back whatever the source still implies, so an untag of one
+          // the source applies is honest about being temporary.
+          removeTag.run(id, tag);
+        }
+        const held = one(id);
+        if (held === undefined) {
+          throw new Error(`no task ${id}`);
+        }
+        return held;
+      }),
+
+    remove: (id: string) =>
+      Effect.gen(function* () {
+        const refused = yield* ask("read a task's source", () => ours(id));
+        if (refused !== undefined) {
+          return yield* Effect.fail(refused);
+        }
+        yield* ask("remove a task", () => {
+          dropTags.run(id);
+          removeApplied.run(id);
+          drop.run(id);
+        });
       }),
   };
 });

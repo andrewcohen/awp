@@ -258,6 +258,22 @@ export const TaskChange = Schema.Struct({
 });
 export type TaskChange = (typeof TaskChange)["Type"];
 
+/**
+ * A write aimed at a task awp only copied.
+ *
+ * Nothing is broken, so it is a refusal rather than a failure, and the sentence
+ * names where that task is actually written. Ingest's upsert writes a source's
+ * status back over anything set here — so a `TODO.md` entry marked done in this
+ * window would be pending again within ten seconds, with nothing on screen to
+ * say why. The file is where that one finishes.
+ *
+ * A tag is the exception and takes no refusal: it is the one thing that can be
+ * said about somebody else's row without contradicting it.
+ */
+export class TaskRefused extends Schema.TaggedError<TaskRefused>()("TaskRefused", {
+  reason: Schema.String,
+}) {}
+
 export const Project = Schema.Struct({
   /**
    * The repository directory's basename, and the project's whole identity.
@@ -2718,6 +2734,65 @@ export class AwpRpcs extends RpcGroup.make(
   Rpc.make("TaskChanges", {
     success: TaskChange,
     stream: true,
+  }),
+
+  // ── and this window is a writer now ──────────────────────────────────────
+  //
+  // The board was read-only for as long as it had nothing of its own in it:
+  // every row was a copy of a file somebody else wrote, and a panel that could
+  // change one would have been a second writer of somebody else's list — which
+  // `agent-tasks.ts` says in its own comment it will not be.
+  //
+  // What changes that is a source awp owns. An `awp` task is swept by nothing,
+  // so there is no later reading of a file that could decide it had been
+  // finished, and these four calls are the whole of what may be done to one.
+  //
+  //   TaskAdd      write one here
+  //   TaskStatus   move one awp owns · refused for a copy
+  //   TaskTag      any task, whatever its source — see TaskRefused
+  //   TaskForget   drop one awp owns · refused for a copy
+
+  Rpc.make("TaskAdd", {
+    payload: {
+      subject: Schema.String,
+      /** Markdown, and rendered as such. Empty is ordinary. */
+      description: Schema.String,
+      /**
+       * Where it starts.
+       *
+       * Given rather than defaulted, because the two openings are different
+       * acts: writing something down for later, and starting it.
+       */
+      status: Schema.String,
+      tags: Schema.Array(Schema.String),
+    },
+    success: Task,
+    error: TaskRefused,
+  }),
+
+  Rpc.make("TaskStatus", {
+    payload: { id: Schema.String, status: Schema.String },
+    success: Task,
+    error: TaskRefused,
+  }),
+
+  /**
+   * Apply or remove a tag.
+   *
+   * On any task, whatever wrote it, and it outlives every sweep — which is what
+   * makes `thread:<id>` on a `TODO.md` entry the thing it is: a claim about
+   * what the work belongs to, not a contradiction of what the file says.
+   */
+  Rpc.make("TaskTag", {
+    payload: { id: Schema.String, tag: Schema.String, on: Schema.Boolean },
+    success: Task,
+    error: TaskRefused,
+  }),
+
+  Rpc.make("TaskForget", {
+    payload: { id: Schema.String },
+    success: Schema.Void,
+    error: TaskRefused,
   }),
 
   /**
