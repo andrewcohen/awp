@@ -46,6 +46,8 @@ export interface Listed {
   readonly status: string;
   /** `todo` · `claude` · `awp`, as the store has it. */
   readonly source: string;
+  /** When the row last changed. What the completed section is ordered by. */
+  readonly at: number;
   /**
    * What `TaskSend` takes.
    *
@@ -86,6 +88,7 @@ const listed = (task: Task): Listed => ({
   description: task.description,
   status: task.status,
   source: task.source,
+  at: task.updatedAt,
   task: {
     id: task.id,
     subject: task.subject,
@@ -95,18 +98,28 @@ const listed = (task: Task): Listed => ({
 });
 
 /**
- * The board as rows, outstanding only, and how many are done.
+ * The board as rows: what is outstanding, and what is finished.
  *
  * `toSorted` on a mapped array, so the order is stable: two rows of equal rank
  * keep the order the store answered in rather than whatever the engine's
  * comparator happens to do with them.
+ *
+ * The two halves are ordered by different things, and that is the whole of why
+ * they are two arrays rather than one with a filter at the call site:
+ *
+ *   outstanding   what is underway first, then an agent's live queue above
+ *                 what is merely written down. A reading order
+ *   done          newest first, because the question asked of a finished list
+ *                 is "what got done while I was away" — which is about when,
+ *                 and nothing else here is
  */
 export const merge = (
   board: ReadonlyArray<Task>,
-): { readonly rows: ReadonlyArray<Listed>; readonly done: number } => {
+): { readonly rows: ReadonlyArray<Listed>; readonly done: ReadonlyArray<Listed> } => {
   const all = board.map(listed);
   const rows = all
     .filter((row) => !finished(row.status))
     .toSorted((a, b) => rank(a.status) - rank(b.status) || from(a.source) - from(b.source));
-  return { rows, done: all.length - rows.length };
+  const done = all.filter((row) => finished(row.status)).toSorted((a, b) => b.at - a.at);
+  return { rows, done };
 };

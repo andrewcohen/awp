@@ -656,6 +656,36 @@ function Window() {
     return () => window.removeEventListener("keydown", onKey, { capture: true });
   }, []);
 
+  // cmd+B folds the sidebar, cmd+shift+B the accessory column.
+  //
+  // Capture at `window` and `event.code`, for the two reasons cmd+N's note
+  // gives at length. `event.code` earns it twice here: the chord is told apart
+  // by shift, and `key` arrives upper-case whenever shift is down.
+  //
+  // The toggles in the top bar are the discoverable half and these are the
+  // half that works from inside the pane — where the pointer is not, and where
+  // reaching for a 22px target at the other end of the window is the gesture
+  // this replaces. Both write through `fold`, so the remembered state and the
+  // fold animation are the same ones a press of the button produces.
+  //
+  // Nothing in `menu.ts` claims B, which is what leaves the key reachable at
+  // all — a menu item wearing an accelerator takes it before the page sees it.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.code !== "KeyB" || !(event.metaKey || event.ctrlKey) || event.altKey) {
+        return;
+      }
+      event.preventDefault();
+      fold(event.shiftKey ? "accessory" : "sidebar")();
+    };
+    window.addEventListener("keydown", onKey, { capture: true });
+    return () => window.removeEventListener("keydown", onKey, { capture: true });
+    // `fold` is rebuilt every render and closes over nothing that changes —
+    // both setters are stable — so listing it would rebind the listener on
+    // every render of the window.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // The appearance theme rides the outermost element rather than <html>. The
   // variables it sets are inherited, so everything below sees them, and putting
   // them here keeps the override inside React's tree — where it can be reasoned
@@ -765,6 +795,9 @@ function Window() {
             }
             connected={connected}
             collapsed={collapsed}
+            // The thread the open workspace belongs to, for its title and for
+            // renaming it in place — see `Where`.
+            thread={threadOf(here, threads)}
             face={here === undefined ? undefined : face}
             swapping={swapping}
             onFace={(chosen) => {

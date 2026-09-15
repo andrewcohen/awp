@@ -134,7 +134,31 @@ const styles = stylex.create({
     transitionDuration: "100ms",
     ":hover": { color: colors.text, borderColor: colors.muted },
   },
+  // The finished count, which is a control. Drawn as the sentence it was
+  // rather than as a button: it sits inside the count's own line, and a
+  // bordered box there would read as a second thing in the head instead of as
+  // half of what is already written.
+  done: {
+    padding: 0,
+    backgroundColor: "transparent",
+    borderStyle: "none",
+    color: colors.muted,
+    font: "inherit",
+    cursor: "pointer",
+    ":hover": { color: colors.text },
+  },
+  showing: { color: colors.text },
   list: { flex: 1, minHeight: 0, overflowY: "auto", overflowX: "hidden", padding: "0.3rem 0" },
+  // Quieter than the outstanding rows, and separated by a rule rather than by
+  // a heading: what is above is the list, and this is an appendix to it.
+  finished: {
+    marginTop: "0.3rem",
+    paddingTop: "0.3rem",
+    borderTopWidth: 1,
+    borderTopStyle: "solid",
+    borderTopColor: colors.border,
+    opacity: 0.6,
+  },
   note: { padding: "0.6rem", color: colors.muted, fontSize: text.small },
 
   row: {
@@ -283,6 +307,12 @@ const NEXT_STATUS: Record<string, string> = {
   pending: "in_progress",
   in_progress: "completed",
   blocked: "in_progress",
+  // Back to the beginning, which is what makes the dot on a finished row a
+  // control rather than a decoration. The completed section is reachable now,
+  // and the one act wanted from a finished task is putting it back — a dot
+  // that did nothing there would be exactly the lie this panel refuses to
+  // tell for a copied row.
+  completed: "pending",
 };
 
 interface RowProps {
@@ -422,6 +452,12 @@ export function Tasks({ dir, project, workspace, thread }: TasksProps) {
   // rarest thing done here.
   const [writing, setWriting] = useState(false);
   const [draft, setDraft] = useState("");
+  // Whether the finished half is on screen. Deliberately not remembered: this
+  // is a glance rather than a mode — "was that done already" — and a section
+  // that came back open would make the panel's first screen a list of work
+  // nobody has to think about. `rememberedPanels` is the worked example of the
+  // other kind.
+  const [showingDone, setShowingDone] = useState(false);
   const held = useRef<ReadonlyArray<Task>>([]);
   const arriving = useArriving();
   const spring = useSpring();
@@ -557,7 +593,22 @@ export function Tasks({ dir, project, workspace, thread }: TasksProps) {
       <div {...stylex.props(styles.head)}>
         <span {...stylex.props(styles.count)}>
           {rows.length === 0 ? "nothing to do" : `${rows.length} to do`}
-          {done === 0 ? "" : ` · ${done} done`}
+          {done.length === 0 ? undefined : (
+            // The count was the whole sentence and it made the finished half
+            // unreachable: a number saying a thing exists, with no way to it.
+            // A button rather than a second control in the head — there is
+            // room for three things up here and this is already one of them.
+            <button
+              type="button"
+              data-nav-item
+              aria-expanded={showingDone}
+              title={showingDone ? "hide what is finished" : "show what is finished"}
+              onClick={() => setShowingDone((was) => !was)}
+              {...stylex.props(styles.done, showingDone && styles.showing)}
+            >
+              {` · ${done.length} done`}
+            </button>
+          )}
         </span>
         {project === undefined ? undefined : (
           <button
@@ -651,7 +702,7 @@ export function Tasks({ dir, project, workspace, thread }: TasksProps) {
               />
             </motion.div>
           ))
-        ) : asked ? (
+        ) : asked && done.length === 0 ? (
           // Two situations now, and they want different sentences. An empty
           // board is a fact about what is written down; an empty session list
           // is the older, vaguer case — an agent that finished, one that never
@@ -662,6 +713,31 @@ export function Tasks({ dir, project, workspace, thread }: TasksProps) {
               : "No outstanding tasks — neither an agent's own list nor anything written down."}
           </p>
         ) : undefined}
+
+        <AnimatePresence initial={false}>
+          {showingDone && done.length > 0 ? (
+            <motion.div
+              key="finished"
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: "auto", opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              transition={spring}
+              {...stylex.props(styles.opening)}
+            >
+              <div {...stylex.props(styles.finished)}>
+                {done.map((task) => (
+                  <Row
+                    key={task.key}
+                    task={task}
+                    onSend={send(task)}
+                    onMove={move(task)}
+                    state={states[task.key] ?? "idle"}
+                  />
+                ))}
+              </div>
+            </motion.div>
+          ) : undefined}
+        </AnimatePresence>
       </div>
     </div>
   );

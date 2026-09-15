@@ -268,6 +268,7 @@ const handlers = AwpRpcs.toLayer({
       source: "awp",
       tags: [],
       seq: undefined,
+      updatedAt: 0,
     }),
   TaskStatus: () =>
     Effect.succeed({
@@ -278,6 +279,7 @@ const handlers = AwpRpcs.toLayer({
       source: "awp",
       tags: [],
       seq: undefined,
+      updatedAt: 0,
     }),
   TaskTag: () =>
     Effect.succeed({
@@ -288,6 +290,7 @@ const handlers = AwpRpcs.toLayer({
       source: "awp",
       tags: [],
       seq: undefined,
+      updatedAt: 0,
     }),
   TaskForget: () => Effect.void,
   TaskSend: () => Effect.succeed("— a task from this workspace's list"),

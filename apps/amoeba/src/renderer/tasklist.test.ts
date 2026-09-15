@@ -10,6 +10,7 @@ const board = (over: Partial<Task> = {}): Task => ({
   source: "todo",
   tags: ["project:thicket"],
   seq: 91,
+  updatedAt: 0,
   ...over,
 });
 
@@ -42,16 +43,29 @@ describe("merge", () => {
     expect(rows[0]?.source).toBe("claude");
   });
 
-  it("counts finished tasks instead of drawing them", () => {
+  it("keeps finished tasks out of the list, and hands them back separately", () => {
     // Eighty completed against a handful outstanding is the real shape here,
-    // and showing them all buries the four that matter.
+    // and showing them all buries the four that matter. They are still
+    // answered, because the panel's count is a control now.
     const { rows, done } = merge([
       claude({ status: "completed" }),
       claude({ id: "claude:thicket#lantern/4" }),
       board({ status: "completed" }),
     ]);
     expect(rows).toHaveLength(1);
-    expect(done).toBe(2);
+    expect(done).toHaveLength(2);
+  });
+
+  it("orders the finished ones newest first", () => {
+    // The other half is ordered for reading — what is underway, then what is
+    // written down. This half answers "what got done while I was away", which
+    // is a question about when.
+    const { done } = merge([
+      claude({ id: "claude:thicket#lantern/1", status: "completed", updatedAt: 10 }),
+      claude({ id: "claude:thicket#lantern/2", status: "completed", updatedAt: 30 }),
+      claude({ id: "claude:thicket#lantern/3", status: "completed", updatedAt: 20 }),
+    ]);
+    expect(done.map((row) => row.at)).toEqual([30, 20, 10]);
   });
 
   it("labels a task by its number, not its whole id", () => {

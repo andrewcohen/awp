@@ -6,6 +6,7 @@ import { pill, useSpring } from "./springs";
 import { useMemo, useState } from "react";
 import { useThreadMenu } from "./ArchiveThread";
 import { More, RightClick } from "./menus";
+import { Rename } from "./Rename";
 import { useWorkspaceMenu } from "./ReclaimWorkspace";
 import { Amoeba } from "./Amoeba";
 import { type Facts, factsKey } from "./useFacts";
@@ -706,9 +707,14 @@ function Row({
   // heading and has nowhere else to put it. A row under a heading does not:
   // the heading above already carries it, and one per sibling would offer to
   // archive the thread four times.
+  // Renaming from the row, which happens only where the row stands in for its
+  // whole thread — under a heading the title is the heading's, and two places
+  // offering to rename one thing is one of them being wrong about what it owns.
+  const [renaming, setRenaming] = useState(false);
   const asThread = useThreadMenu({
     thread: title === undefined ? undefined : thread,
     onChanged: onThreadsChanged,
+    onRename: title === undefined || thread === undefined ? undefined : () => setRenaming(true),
   });
   // The other half. A row under a heading can be taken back on its own —
   // `thread` is the claim that makes that expressible, and `pair` is the
@@ -744,34 +750,51 @@ function Row({
         <motion.span layoutId="sidebar-edge" {...stylex.props(styles.edge)} transition={pill} />
       )}
       <div {...stylex.props(styles.titleRow)}>
-        <button
-          type="button"
-          disabled={shut}
-          // What ctrl+j and ctrl+k step through in this column. The row's
-          // title, and not the chips or the hover controls beside it — a list
-          // that moved through those is a list nobody can predict. See
-          // navigation.ts.
-          data-nav-item
-          // The reason is the tooltip as well as line two. A row that will not
-          // say why it is disabled is worse than no row at all.
-          title={refusal ?? workspace.address}
-          onClick={() => {
-            if (primary !== undefined) {
-              onSelect(primary);
-            } else if (pair !== undefined) {
-              onOpen(pair.project, pair.workspace);
-            }
-          }}
-          {...stylex.props(
-            typeset.heading,
-            styles.title,
-            !shut && styles.stretch,
-            shut && styles.titleShut,
-          )}
-        >
-          <Dot live={live} status={facts?.status} unread={facts?.unread === true} />
-          <span {...stylex.props(styles.label)}>{shown}</span>
-        </button>
+        {renaming && thread !== undefined && title !== undefined ? (
+          <Rename thread={thread.id} title={title} onDone={() => setRenaming(false)} />
+        ) : (
+          <button
+            type="button"
+            disabled={shut}
+            // What ctrl+j and ctrl+k step through in this column. The row's
+            // title, and not the chips or the hover controls beside it — a list
+            // that moved through those is a list nobody can predict. See
+            // navigation.ts.
+            data-nav-item
+            // The reason is the tooltip as well as line two. A row that will not
+            // say why it is disabled is worse than no row at all.
+            title={refusal ?? workspace.address}
+            onClick={() => {
+              if (primary !== undefined) {
+                onSelect(primary);
+              } else if (pair !== undefined) {
+                onOpen(pair.project, pair.workspace);
+              }
+            }}
+            {...stylex.props(
+              typeset.heading,
+              styles.title,
+              !shut && styles.stretch,
+              shut && styles.titleShut,
+            )}
+          >
+            <Dot live={live} status={facts?.status} unread={facts?.unread === true} />
+            <span
+              onDoubleClick={(event) => {
+                // The row's own click opens the workspace, and a double click
+                // has already done that once. Stopping this one keeps the second
+                // from re-selecting underneath a field that is about to open.
+                event.stopPropagation();
+                if (title !== undefined && thread !== undefined) {
+                  setRenaming(true);
+                }
+              }}
+              {...stylex.props(styles.label)}
+            >
+              {shown}
+            </span>
+          </button>
+        )}
         {/* Which menu this is, is decided above — see `menu`. Every row has
             one; what differs is whether its items are the thread's or this
             one checkout's. */}
@@ -938,7 +961,14 @@ function Group({
   // The thread's own menu — its items, and the two dialogs they open. Called
   // unconditionally with a possibly-absent thread, because the loose group has
   // none and a hook cannot be skipped.
-  const menu = useThreadMenu({ thread: group.thread, onChanged: onThreadsChanged });
+  // Renaming in place, and the state lives here rather than in the hook: the
+  // field replaces the fold button, which is this component's to draw.
+  const [renaming, setRenaming] = useState(false);
+  const menu = useThreadMenu({
+    thread: group.thread,
+    onChanged: onThreadsChanged,
+    onRename: group.thread === undefined ? undefined : () => setRenaming(true),
+  });
 
   // ── the only group names nothing, so it draws no heading ────────────────
   //
@@ -1073,7 +1103,18 @@ function Group({
       >
         <CaretRightIcon size={14} weight="bold" />
       </motion.span>
-      <span {...stylex.props(typeset.subhead, styles.threadName, loose && styles.loose)}>
+      <span
+        onDoubleClick={(event) => {
+          // The fold has already had this row's single clicks, which is fine:
+          // two of them are a fold and an unfold, so the column is where it
+          // was. What must not also happen is a third from the double.
+          event.stopPropagation();
+          if (group.thread !== undefined) {
+            setRenaming(true);
+          }
+        }}
+        {...stylex.props(typeset.subhead, styles.threadName, loose && styles.loose)}
+      >
         {group.title}
       </span>
       <span {...stylex.props(styles.count)}>{group.workspaces.length}</span>
@@ -1091,7 +1132,11 @@ function Group({
   // workspaces nobody has claimed has nothing to archive, nothing to add a
   // project to, and no id to link to.
   const heading =
-    group.thread === undefined ? (
+    renaming && group.thread !== undefined ? (
+      <div {...stylex.props(styles.headingRow)}>
+        <Rename thread={group.thread.id} title={group.title} onDone={() => setRenaming(false)} />
+      </div>
+    ) : group.thread === undefined ? (
       <div {...stylex.props(styles.headingRow)}>{fold}</div>
     ) : (
       <RightClick

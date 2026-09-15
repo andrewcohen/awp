@@ -90,6 +90,7 @@ const onTheWire = (task: StoredTask): Task => ({
   source: task.source,
   tags: task.tags,
   seq: task.sourceSeq,
+  updatedAt: task.updatedAt.getTime(),
 });
 
 /**

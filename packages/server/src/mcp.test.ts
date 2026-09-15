@@ -57,6 +57,7 @@ const entry = (over: Partial<Task> = {}): Task => ({
   source: "awp",
   tags: ["project:rowan"],
   seq: undefined,
+  updatedAt: 0,
   ...over,
 });
 
@@ -415,6 +416,7 @@ const task = (over: Partial<Task> = {}): Task => ({
   source: "todo",
   tags: ["project:thicket"],
   seq: 113,
+  updatedAt: 0,
   ...over,
 });
 

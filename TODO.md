@@ -14,6 +14,14 @@ rather than the summary when what you learn changes the shape of the work.
 41 open, as of 2026-09-15. The count is taken from the entries rather than
 carried forward — it read "46 open" over 51 of them once.
 
+Closed later the same day, each against the code: #87 (the tasks panel's `N
+done` is a control now), #92 (the `+` box writes to awp's own source, which is
+what #124 made possible) and #116 (double-click a thread's title in the sidebar
+or the bar, plus `rename…` in its menu).
+
+Added the same day, out of what was asked while those landed: #132, #133 and
+#134.
+
 Hand-edited rather than regenerated, and that is now the normal way this file
 changes: the session the list was regenerated from has ended.
 
@@ -286,16 +294,6 @@ Open questions, none of them decided:
 - what happens to the task afterwards. A task started in another thread is no longer pending, but nothing here writes to the task store, and it should stay that way until there is a reason.
 - the label. "Send" and a fan-out glyph beside it, or two named buttons; the row is narrow and the second control is the rarer one.
 
-## 87. A show-completed section on the tasks panel
-
-The panel hides completed tasks and says how many there are — "24 to do · 62 done". The count is right for scanning, but it makes the finished half unreachable, and there are two reasons to want it: checking whether something was already done before asking for it again, and reading back what an agent got through while you were away.
-
-So the count becomes a control. Clicking "62 done" reveals them, below the outstanding ones and visually quieter — dimmed, and probably in the order they were completed rather than by id, since the useful reading of a done list is most-recent-first.
-
-Whether the disclosure is remembered per thread is an open question. `rememberedPanels` is the worked example of a per-thread preference, but this one is a glance rather than a mode, so it may be right for it to close again every time the panel is opened.
-
-Related: [[a second button on a task: start it in its own thread]] (#85).
-
 ## 88. Find the daemon finaliser that never completes
 
 The shutdown deadline in `main.ts` makes a stuck shutdown harmless, and while proving it a second hang turned up that it also covers.
@@ -350,38 +348,6 @@ Which bookmark gets tugged is its own question. A workspace usually has exactly 
 Related to #41, the automatic version: nothing currently moves `andrew/<name>` forward as commits land, so a bookmark sits at the _first_ commit of its branch — measured at 51 commits behind on this workspace. A manual tug is the smaller answer and may be the better one: moving a bookmark is a decision, and a button says "now" without having to pick a policy.
 
 One thing already established while doing #70, which matters here: a remote bookmark appears in a commit's `json(bookmarks)` when it disagrees with local. Measured — `andrew/awp-kit-amoeba@git` sitting one commit behind shows up on its own commit, carrying `remote: "git"`. The revision list now filters those out, so anything this reads is local; a tug must not offer to move a name that only exists on a remote.
-
-## 92. Add a task from the tasks panel
-
-The panel shows the agent's list and can hand one back. What it cannot do is put something _on_ it — so noticing a thing that needs doing while reading a diff means typing it at the agent in prose and hoping it lands as a task rather than as work started immediately.
-
-The design question is the whole task, because the panel is deliberately read-only and this is the first thing that wants to write. Two routes, and they are not close:
-
-    write the file    a new `<n>.json` in ~/.claude/tasks/<session>/
-                      immediate, exact, and makes amoeba a second writer of
-                      somebody else's store — which is the thing agent-tasks.ts
-                      says it will not be, and what claude-trust.ts needed a
-                      lock for. Also has to pick an id without colliding with
-                      one the agent is about to use.
-
-    ask the agent     send a prompt: "add this to your task list: …"
-                      no second writer, no id to invent, and it goes down the
-                      wire that already exists. Costs a round trip through a
-                      model, may reword what was typed, and does nothing at all
-                      if the agent is busy or gone.
-
-The second was the honest one before ACP landed (#91), which gives a real channel instead of a file. Worth deciding rather than drifting: a composer that sometimes writes a file and sometimes types a sentence would be two features wearing one button.
-
-Either way the panel needs a composer — a field at the head, or an "+" that opens one — and it should take a subject and an optional description, since a subject alone is what makes a task list unreadable a week later.
-
-**Both routes are now avoidable, and that is the answer.** #124 landed a store
-awp owns, so adding a task is a write to its own table — no second writer of
-somebody else's file, no id to invent, and no round trip through a model that
-may reword what was typed. What is left of this task is the composer and the
-question of what a task added _here_ is tagged with, which is a smaller
-decision than the one this entry was written about.
-
-Related: [[fuzzy search over the tasks panel]] (#89) and [[a show-completed section on the tasks panel]] (#87) are the other two things the head of this panel has to hold, and there is not room for three separate controls up there. Worth designing the head once.
 
 ## 93. The rest of the agent's face on the daemon
 
@@ -756,41 +722,6 @@ What to work out when this is picked up:
   Reduced motion means none.
 
 Base UI ships a Toast, which is the answer to whether to hand-roll one.
-
-## 116. Rename a thread from the header or the sidebar
-
-A thread's title is written once, by a model, from the sentence somebody typed into the new-thread modal. It is frequently almost right and there is no way to fix it.
-
-Two ways in, and they are the two places the title is already on screen:
-
-    the agent header    click the title — `<project>/<title>`, the title half
-                        only, since the project is not a thing to edit here
-    the sidebar         the row's ⋯ menu, beside `archive…`, and right-click
-                        on the heading as the same menu
-
-`ThreadRename` exists on the wire already — the new-thread flow writes a title
-and `threads.ts` has `setTitle` — so this is a call and an input, not a schema
-change. Check before building.
-
-Three things to decide when it is picked up:
-
-- **Edit in place, or a dialog.** In place is the better gesture and is more
-  work: the header is a flex row that truncates, and a text input in it has
-  to not resize the bar. The sidebar row is narrow enough that in-place
-  editing would be typing into a 200px box.
-- **What a workspace shows.** A row's caption falls back through display
-  name, the model's label, then the slug. Renaming a _thread_ must not look
-  like it renamed the workspace, and the sidebar draws both.
-- **Escape and blur.** Escape reverts, Return commits, and clicking away
-  should commit rather than discard — the opposite reads as losing work.
-
-The keyboard mandate applies: the control has to be reachable without a
-pointer, so the sidebar's ⋯ menu is the one that has to work, and right-click
-is the shortcut rather than the feature.
-
-Depends on nothing. Related: #114 (say so when something changed) — a rename is
-the least ambiguous case for a toast, since the row simply reads differently
-afterwards.
 
 ## 123. One thread, many repos, one agent each
 
@@ -1208,3 +1139,57 @@ this repo has already half-made in one direction or the other:
 Open: whether the TUI keeps a diff at all — reading a patch is arguably a
 pop-in-and-out act — and whether "leave" should mean detach rather than
 quit, which is a zmx question and not a UI one.
+
+## 132. Up pops the queued message back into the composer
+
+A message typed while an agent is working is queued rather than sent — it sits at the tail of the transcript with a `queued` mark, and the turn ending is what releases it. Until then it is a thing somebody wrote and cannot touch: no edit, no cancel, no way to add the sentence they thought of two seconds later.
+
+Up in an empty composer should take it back — the draft returns to the box, the queued item leaves the transcript, and the next Return re-queues it. The shape every shell has for the last command, and the reason it is Up rather than a button is that the gesture has to be cheaper than retyping or nobody uses it.
+
+Two things to decide:
+
+- **What "empty" means.** Up with something already typed should move the caret, which is what the key does in a textarea. So the pop is Up on an empty box, or Up on the first line — the second is friendlier and needs the caret's row, not just the value.
+- **Whether it can be popped after it has gone.** Once the turn ends, the message is sent and this is no longer a queue — it is history, and popping it would mean un-sending something the agent already has. So the gesture stops working the moment the mark clears, which is also the moment the row stops looking queued.
+
+Related: [[does anything say a queued message was dequeued]] (#133) — the same mark, and the same question about who knows what.
+
+## 133. Does anything say a queued message was actually dequeued
+
+Asked directly, and the answer is that the window **assumes**. `conversation.ts` clears the `queued` mark when a turn ends, under a comment saying the turn that ended is the one it was waiting behind — which is a guess about the adapter's queue rather than a reading of it.
+
+```
+  what the daemon knows    a turn started · a turn ended
+  what it does NOT know    that the adapter took THIS message off its queue
+```
+
+The adapter's queue is a rank — `now` pre-empts, `next` is the head, `later` is background traffic — and an ordinary message is built at `next`. So "the next turn is mine" holds when one message is queued and is a guess when two are, or when something else was enqueued at the same rank in between.
+
+What that costs today is small and real: a mark that says `queued` clears on a turn that was not the one it was waiting behind, so the message reads as sent while it is still waiting. Nothing is lost — it does go — but the one thing the mark exists to say is the thing it is wrong about.
+
+Worth checking against a real adapter before building anything: whether `session/prompt` for a queued message produces its own `turn started` when it is finally taken, which would make the edge readable rather than assumed. `probe:steer` already drives two overlapping turns and is where that measurement goes.
+
+Related: [[up pops the queued message back into the composer]] (#132).
+
+## 134. A thread on a project's default checkout
+
+Wanted for the wiki, and not in general: `~/wiki` is a project with one checkout — its own root — and no reason to ever have a second. Everything in this window is addressed by `(project, workspace)`, and a workspace is by construction `~/.awp/workspaces/<project>/<name>`, so the project's own root cannot be named at all.
+
+```
+  workspacePath(project, workspace)   ~/.awp/workspaces/<project>/<workspace>
+  the wiki's actual checkout          ~/wiki                 ← nothing composes this
+```
+
+Fifteen callers compose that path, and they do not all want the same answer, which is the whole of the work:
+
+    read      WorkspaceDir · the chat's cwd · a thread's checkout dir ·
+              starting a session again        → must answer the project's root
+    write     create-workspace                → must refuse the name outright
+    destroy   archive-thread                  → must refuse it twice over.
+                                                `jj workspace forget` on a
+                                                default workspace and an `rm`
+                                                of somebody's repository are
+                                                the two worst outcomes here
+
+So it is a reserved workspace name that resolves through the project record — the root is on it already — rather than a pure function gaining a branch. The refusals are the feature, not the resolution.
+
+Then a thread claiming that pair gives the wiki a sidebar row, a chat, a diff and a tasks panel with nothing else built: `ThreadAttach` takes a member that already exists, and the default checkout always does.

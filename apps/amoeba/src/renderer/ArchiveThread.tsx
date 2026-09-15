@@ -127,6 +127,7 @@ const styles = stylex.create({
 export function useThreadMenu({
   thread,
   onChanged,
+  onRename,
 }: {
   /**
    * The thread, or nothing where the row has none.
@@ -140,6 +141,16 @@ export function useThreadMenu({
   readonly thread: Thread | undefined;
   /** The thread list is out of date — something was archived or added to. */
   readonly onChanged: () => void;
+  /**
+   * Start renaming, where the caller can draw the field in place.
+   *
+   * The gesture is a double click on the title and this is the discoverable
+   * half of it: a rename with no visible affordance is a feature only somebody
+   * who already knows about it can use. The field itself is the caller's,
+   * because it replaces whatever control the title was drawn inside — see
+   * `Rename.tsx`.
+   */
+  readonly onRename?: (() => void) | undefined;
 }): {
   readonly items: Items;
   readonly onOpen: () => void;
@@ -209,6 +220,16 @@ export function useThreadMenu({
         >
           {copied === undefined ? "copy link" : copied ? "copied" : "the clipboard was refused"}
         </Menu.Item>
+
+        {/* Absent where the caller has nowhere to draw the field — a row
+    under a heading, whose title belongs to the heading above it. The
+    ellipsis says the act continues somewhere, which here is the row
+    itself rather than a dialog. */}
+        {onRename === undefined ? null : (
+          <Menu.Item onClick={onRename} {...stylex.props(menuItem)}>
+            rename…
+          </Menu.Item>
+        )}
 
         {/* ── the second repository, from here ──────────────────────
 

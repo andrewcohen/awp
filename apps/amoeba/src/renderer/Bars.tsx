@@ -1,5 +1,5 @@
 import type { Job } from "@awp-kit/jobs";
-import type { SessionInfo, WorkspaceFacts } from "@awp-kit/protocol";
+import type { SessionInfo, Thread, WorkspaceFacts } from "@awp-kit/protocol";
 import { SidebarSimpleIcon } from "@phosphor-icons/react/SidebarSimple";
 import * as stylex from "@stylexjs/stylex";
 import { Menu } from "@base-ui/react/menu";
@@ -8,6 +8,8 @@ import { FOLD_MS, type Collapsed } from "./columns";
 import { typeset } from "./typeset";
 import { colors, layer, lift, space, text } from "./tokens.stylex";
 import { tally } from "./useJobs";
+import { Rename } from "./Rename";
+import { useState } from "react";
 
 // The two strips the columns sit between.
 //
@@ -587,21 +589,56 @@ function Title({
   session,
   at,
   facts,
+  thread,
 }: {
   readonly session: SessionInfo | undefined;
   /** The workspace on screen, session or no session. */
   readonly at: { readonly project: string; readonly workspace: string } | undefined;
   readonly facts: WorkspaceFacts | undefined;
+  /** The thread this workspace belongs to, for its title and for renaming. */
+  readonly thread: Thread | undefined;
 }) {
+  // ── the thread's title, where the workspace stands in for the thread ─────
+  //
+  // The bar drew `identity.label`, which is the zmx label written when the
+  // workspace was created — a *copy* of the thread's title, frozen. Nothing
+  // has ever updated it, so renaming a thread left this bar saying the old
+  // name, and there was no reading of the bar that said which was true.
+  //
+  // The live title wins, and only where the thread holds one checkout: that
+  // is the same rule the sidebar's row already states — where a row stands in
+  // for its whole thread the title wins outright, and where it is one of
+  // several the title is somewhere else on screen and the row says which
+  // *workspace* it is. `displayName` still wins over both: it is the one name
+  // a person chose by hand.
+  const alone = thread !== undefined && thread.members.length === 1;
+  const threadName = alone && thread.title !== "" ? thread.title : undefined;
+
+  // Renaming in place. The gesture is a double click for the reason
+  // `Rename.tsx` gives: this bar is the window's drag region and its single
+  // clicks belong to moving the window.
+  const [renaming, setRenaming] = useState(false);
+  const editable = thread === undefined ? undefined : () => setRenaming(true);
+  const named = (shown: string) =>
+    renaming && thread !== undefined ? (
+      <Rename thread={thread.id} title={thread.title} onDone={() => setRenaming(false)} />
+    ) : (
+      <span
+        onDoubleClick={editable}
+        title={editable === undefined ? undefined : "double-click to rename this thread"}
+        {...stylex.props(styles.strong, styles.title)}
+      >
+        {shown}
+      </span>
+    );
+
   if (session === undefined) {
     return at === undefined ? (
       <span {...stylex.props(styles.strong, styles.title)}>no session</span>
     ) : (
       <span {...stylex.props(styles.named)}>
         <span {...stylex.props(styles.where)}>{at.project}/</span>
-        <span {...stylex.props(styles.strong, styles.title)}>
-          {facts?.displayName ?? at.workspace}
-        </span>
+        {named(facts?.displayName ?? threadName ?? at.workspace)}
       </span>
     );
   }
@@ -616,12 +653,16 @@ function Title({
   // resort. The slug is a fallback rather than a field — a workspace whose
   // display name is its slug says the slug once, not twice.
   const title =
-    facts?.displayName ?? session.identity?.label ?? session.identity?.workspace ?? session.name;
+    facts?.displayName ??
+    threadName ??
+    session.identity?.label ??
+    session.identity?.workspace ??
+    session.name;
 
   return (
     <span {...stylex.props(styles.named)}>
       <span {...stylex.props(styles.where)}>{project}/</span>
-      <span {...stylex.props(styles.strong, styles.title)}>{title}</span>
+      {named(title)}
     </span>
   );
 }
@@ -633,6 +674,7 @@ export function AgentBar({
   facts,
   connected,
   collapsed,
+  thread,
   face,
   swapping,
   onFace,
@@ -646,6 +688,14 @@ export function AgentBar({
   readonly facts: WorkspaceFacts | undefined;
   readonly connected: boolean;
   readonly collapsed: Collapsed;
+  /**
+   * The thread the open workspace belongs to, or nothing claims it.
+   *
+   * Two things come from it, and only the second is new. The title is what
+   * this bar draws for a thread holding one checkout — see `Title` — and the
+   * id is what a rename writes to.
+   */
+  readonly thread: Thread | undefined;
   /**
    * Which agent holds this workspace's work, or nothing when there is no
    * choice — a session awp did not create has no workspace to hold a
@@ -686,7 +736,7 @@ export function AgentBar({
 
           The project does not truncate and the title does. A clipped title is
           still a title; a clipped project is a different project. */}
-      <Title session={session} at={at} facts={facts} />
+      <Title session={session} at={at} facts={facts} thread={thread} />
 
       <span {...stylex.props(styles.spacer)} />
 

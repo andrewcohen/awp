@@ -239,6 +239,18 @@ export const Task = Schema.Struct({
   tags: Schema.Array(Schema.String),
   /** The source's own ordering number, where it has one. */
   seq: Schema.UndefinedOr(Schema.Number),
+  /**
+   * When this row last said something different, in epoch milliseconds.
+   *
+   * On the wire for one reader: the panel's completed section, which is read
+   * most-recent-first — "what did the agent get through while I was away" is a
+   * question about order of finishing, and `seq` answers order of writing.
+   * Ingest only touches it when a field actually changed, so for a finished
+   * task it is as close to "when it finished" as the sources can say.
+   *
+   * A number rather than a Date because this crosses JSON, which has neither.
+   */
+  updatedAt: Schema.Number,
 });
 export type Task = (typeof Task)["Type"];
 
