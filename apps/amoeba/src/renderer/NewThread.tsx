@@ -8,7 +8,7 @@ import { GitBranchIcon } from "@phosphor-icons/react/GitBranch";
 import * as stylex from "@stylexjs/stylex";
 import { useEffect, useState } from "react";
 import { FOLD_MS } from "./columns";
-import { startThread, threadBases } from "./daemon";
+import { said, startThread, threadBases } from "./daemon";
 import { ImportProject } from "./ImportProject";
 import { Chip } from "./Chip";
 import { growth, useGrow } from "./grow";
@@ -532,7 +532,7 @@ function Composer({
         // The thread may exist with some of its workspaces already building.
         // Said rather than hidden: closing the modal on a partial failure
         // would leave a person to notice the missing repository later.
-        setFailure(String(error));
+        setFailure(said(error));
         setBusy(false);
       });
   };

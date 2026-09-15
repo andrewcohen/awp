@@ -2,7 +2,7 @@ import type { Inbox } from "@awp-kit/protocol";
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { useEffect } from "react";
 import { inboxAtom, inboxFailureAtom, inboxReadingAtom } from "./atoms";
-import { listInbox, onReconnect } from "./daemon";
+import { listInbox, onReconnect, said } from "./daemon";
 
 // The inbox, held where a tab switch cannot destroy it.
 //
@@ -63,7 +63,7 @@ const load = (
       set.failure(undefined);
     })
     .catch((error: unknown) => {
-      set.failure(String(error));
+      set.failure(said(error));
     })
     .finally(() => {
       inFlight = false;

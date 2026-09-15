@@ -1,6 +1,6 @@
 import type { Thread } from "@awp-kit/protocol";
 import { useEffect, useRef, useState } from "react";
-import { listThreads, onReconnect, watchThreads } from "./daemon";
+import { listThreads, onReconnect, said, watchThreads } from "./daemon";
 
 // The threads: asked for once, and then watched.
 //
@@ -55,7 +55,7 @@ const load = (
     })
     .catch((error: unknown) => {
       if (alive.current) {
-        setFailure(String(error));
+        setFailure(said(error));
       }
     });
 };

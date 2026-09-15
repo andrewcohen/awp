@@ -2,7 +2,7 @@ import type { PullRequest } from "@awp-kit/protocol";
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { useEffect } from "react";
 import { prKey, prsAtom, prsFailureAtom, prsReadingAtom } from "./atoms";
-import { onReconnect, readPullRequest } from "./daemon";
+import { onReconnect, readPullRequest, said } from "./daemon";
 
 // One pull request, held where a tab switch cannot destroy it.
 //
@@ -73,7 +73,7 @@ const load = (
     .catch((error: unknown) => {
       // The previous answer is deliberately left in place: a failed refresh over
       // a pull request already on screen should say so beside it, not blank it.
-      set.failure((was) => ({ ...was, [key]: String(error) }));
+      set.failure((was) => ({ ...was, [key]: said(error) }));
     })
     .finally(() => {
       set.reading((was) => {

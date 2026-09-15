@@ -4,7 +4,9 @@ import { ArrowsClockwiseIcon } from "@phosphor-icons/react/ArrowsClockwise";
 import * as stylex from "@stylexjs/stylex";
 import { useState } from "react";
 import { Markdown } from "./Markdown";
-import { repair } from "./daemon";
+// Aliased: `said` is this panel's own state for the last thing it reported,
+// and the import is the function that reads a refusal's sentence out of it.
+import { repair, said as sentenceOf } from "./daemon";
 import { typeset } from "./typeset";
 import { colors, space, text } from "./tokens.stylex";
 import { usePullRequest } from "./usePullRequest";
@@ -344,7 +346,7 @@ export function Pr({
                     );
                     return done;
                   })
-                  .catch((error: unknown) => setSaid(String(error)))
+                  .catch((error: unknown) => setSaid(sentenceOf(error)))
                   .finally(() => setAsking(false));
               }}
               {...stylex.props(styles.button)}
