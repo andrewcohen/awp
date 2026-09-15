@@ -101,6 +101,61 @@ reproduce the anecdote. `naming.test.ts` checks ten real shortened session names
 read off a live `zmx ls`, because a name is an address and one character of
 disagreement would leave every shortened session unfindable.
 
+## A field nobody checks is a field that can be renamed out from under you
+
+`zmx ls` reports where a session was started. The parser switched on
+`start_dir`; the zmx on this machine says `cwd`. An unknown key falls through
+to `labels`, so **no parse ever failed** — `startDir` simply read as the empty
+string for every session, for weeks.
+
+Nothing downstream fails loudly on an empty directory either. It is a
+`Schema.String`, so it crosses the wire as `""` rather than as absent, and
+every reader of it has a guard shaped for the wrong value:
+
+```
+  allProjects()   skips a session whose directory is empty, so NOT ONE
+                  project was ever derived from a running session
+  suggestedBy()   recovers an unlabelled session's identity from its
+                  workspace path — inert, on most of the sessions here
+  App.tsx         `open?.startDir ?? elsewhere` — `??` does not catch "",
+                  and the fallback was gated on a session EXISTING, so the
+                  daemon was never asked for the workspace's directory
+```
+
+What that cost is two features that read the project list and quietly narrowed
+to whatever had been imported by hand. The tasks panel answered 51 against a
+`TODO.md` holding 42, for nine days, because `ingest` is scoped by key prefix
+and the prefixes come from that list:
+
+```
+  before   startDir   0 of 16 sessions      ProjectList  2, imported only
+  after    startDir  16 of 16               ProjectList  5, two derived
+```
+
+Three things worth keeping, and the second is the one that generalises.
+
+**The fixture suite could not have caught it.** `zmx-parse.test.ts`'s fixtures
+carry `start_dir` and are commented as real output captured on a particular
+day. So the fixture and the parser agreed with each other, and both were wrong
+about the tool. A fixture is a record of what a program said once; it is not
+evidence of what it says now.
+
+**So the guard asks the real tool, and asks for the property rather than the
+spelling.** `zmx.test.ts` already runs against a live zmx for names, labels and
+liveness — `startDir` was the one field that came from zmx and was never put
+back to it. It now asserts that every session has an absolute directory,
+whatever the field is called on the day, which is a test a rename breaks
+instead of the project list. Checked by removing the fix, which fails it.
+
+**An empty string is not an absent value, and `??` says otherwise.** The same
+shape this file already records for `ZMX_SESSION` — set on the way out, treat
+empty as absent on the way in — and for `NEVER` in the diff's fold state, where
+`undefined` was a real revision. A guard written against `undefined` on a field
+typed `string` is a guard for a case the type cannot produce.
+
+Both spellings are accepted now, because a parser that knows one has been
+silently wrong once and the second case is a line.
+
 ## A name cannot group a workspace
 
 The sidebar lists **workspaces**; zmx lists **sessions**. A workspace has one
@@ -983,6 +1038,44 @@ The candidates come from the directory convention rather than from
 `jj workspace list`: `workspacePath`'s shape is already the thing this repo
 relies on to recover a session's identity when it carries no labels, and a
 subprocess per project per sweep is a cost paid for an answer `readdir` has.
+
+### Forgetting a project lets go of its tasks, and that is not tidiness
+
+`ProjectForget` is documented as taking nothing with it — no workspace
+removed, no session killed, no thread touched — and that promise is about the
+**world**. A task row is not the world: it is this daemon's copy of a `TODO.md`
+still sitting on disk.
+
+Leaving them is what cannot be survived. `ingest` is scoped by key prefix so
+one project's read cannot delete another's, and the prefixes come from the
+project list — so a project that is not on it is a prefix **nothing will ever
+name again**:
+
+```
+  the sweep     one ingest per project on the list
+  the prefix    `<project>#`
+  off the list  frozen at whatever the last sweep said, answering every
+                read, with nothing able to correct it
+```
+
+Measured: a board reporting 51 tasks against a file holding 42, for nine days,
+with nothing in the window able to say so.
+
+Deleting is safe for a reason the store already states about itself. `taskId`
+is derived from the source and the key rather than minted — "stable across a
+wipe of the table" — so re-importing rebuilds every row under the id it had,
+and a project with a session still running in it reappears derived and is
+swept again. Nothing is lost that a sweep does not put back.
+
+**`ingest(source, prefix, [])` is the whole implementation**, because ingest
+already takes the set a source _has_ and deletes the rest — which is the same
+line that makes a finished task an absence.
+
+**It runs even when the project was not on the list.** That reads as a no-op
+and is the one repair available for rows already stranded: by the time anybody
+wants them gone, the name is exactly what `ProjectForget` answers `false` for.
+Gating the release on the reply would refuse to clean up precisely when there
+is something to clean up.
 
 ### The read answers from the store and sweeps behind it
 
@@ -2107,6 +2200,80 @@ half-finished job.** Adding the token and forgetting the forced-light and
 forced-dark themes is a window with one wrong colour in a state nobody looks at
 — which is exactly what happened to `warn` once. It is a type error now, and it
 fired within a minute of the token being added.
+
+## An animation outranks a transition, in both directions
+
+The sidebar's status mark grew a shape for `working` — an amoeba, which is
+what this window is called — and it flicked between states. Reported as
+exactly that, and the fix is not where anybody would look for it.
+
+Three separate causes, and each one is a rule worth keeping.
+
+**A conditional render has nothing to transition.** The first build swapped a
+text node `●` for an element. That is the mandate this file already states
+about `display: none`, one level up: a component that is not in the tree
+cannot move. The repair is that the *bullet is the amoeba*, at rest — a
+border-radius of 50% and a scale down to the 6.05px the glyph's ink actually
+measured, so the states are values on one element rather than two elements
+taking turns.
+
+**A CSS animation beats a transition on the same property**, so the keyframes
+imposed their 0% values on the frame the class landed:
+
+```
+  idle → working    ms  0   sx 1.060     ← already there. No transition ran
+                    ms 38   sx 1.060
+```
+
+**And removing an animation does not hand the value back to a transition.**
+This is the half that is genuinely surprising — the spec reads as though the
+computed value changing would start one, and it does not:
+
+```
+  working → idle    ms  6   sx 0.520     ← straight from 1.037, mid-wobble
+```
+
+So the two cannot share a property, and the answer is to put them on
+different elements:
+
+```
+  the span     transform     the state morph. No keyframe writes it, so it
+                             is free to spring in both directions
+  ::before     fill · radii  the wobble. An animation may win here
+  ::after      the bud       `opacity` carries it in and out — deliberately
+                             absent from its own keyframes, for this reason
+```
+
+Measured after, and the overshoot is the evidence that it interpolated at all
+rather than arriving early:
+
+```
+  idle → working   0.520 → 0.828 → 1.066 → 1.112 → 1.077 → 1.060
+  working → idle   1.060 → 0.645 → 0.483 → 0.476 → 0.514 → 0.520
+```
+
+Two details that fall out:
+
+- **The wobble is delayed by exactly the morph's duration.** The static values
+  on the crawling style *are* the 0% keyframe, so the transition's target and
+  the animation's first frame are the same shape and the handover is
+  invisible. Two movements at once on an eleven pixel mark is one movement
+  nobody can read.
+- **What is left snapping is left on purpose.** `border-radius` on the pseudo
+  still cuts — while the whole organism is scaling between six and twelve
+  pixels, which is the movement the eye is following. Buying it back would
+  mean a second animation runtime on a mark this size.
+
+**A shape at twelve pixels is its silhouette.** Two attempts were squircles:
+`border-radius` only rounds the corners of the box it is given, so a square
+one never leaves a circle by more than a pixel however far the percentages
+are pushed. The bud is what makes the union lopsided, and it travels on its
+own slower clock so the shape changes rather than the pair merely moving.
+
+**One state, deliberately.** Not every running row — most workspaces on a real
+machine have no reported status and fall back to "something is live", so
+spending the shape there would put it on the baseline. The same arithmetic as
+the accent and the inbox's leading icon.
 
 ## StyleX fails quietly, twice
 

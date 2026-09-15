@@ -11,7 +11,7 @@ rather than the summary when what you learn changes the shape of the work.
 
 `bun run fmt` reflows this file, so the sequence is edit, then format, then commit; skipping the format leaves a diff that turns up under somebody else's change.
 
-44 open, as of 2026-09-15. The header said "46 open" while 51 entries were in
+43 open, as of 2026-09-15. The header said "46 open" while 51 entries were in
 the file, so the count is now taken from the entries rather than carried
 forward.
 
@@ -28,7 +28,9 @@ viewed marks) and #110 (the bug in them, fixed by the same state).
 
 Added on 2026-09-15, out of what closing the nine turned up: #130 (the panel
 has no way to learn a task changed) and #131 (a project off the list strands
-its tasks).
+its tasks). #131 was done the same day and its entry has left, which is how a
+task finishes here — the measurements live in AGENTS.md, under "A field nobody
+checks" and "Forgetting a project lets go of its tasks".
 
 In progress: #124.
 
@@ -1305,55 +1307,3 @@ that cost the sidebar a thread row during a socket outage.
 
 Related: #87 and #89 make this list long enough that a stale one is harder to
 notice, not easier.
-
-## 131. A project off the list strands its tasks, and nothing sweeps them
-
-Found underneath #130, and it is the half that made the panel wrong for nine
-days rather than for a moment.
-
-`ingest(source, keyPrefix, tasks)` is scoped by prefix so that reading one
-project's file cannot delete another's rows — which is right, and has a
-consequence nothing handles:
-
-    the sweep      one ingest per project in `allProjects()`
-    the prefix     `<project>#`
-    a project NOT  nothing ever names its prefix again, so its rows are
-    on that list   frozen at whatever the last sweep said — forever, and
-                   invisible, because they still answer every read
-
-Measured on 2026-09-15:
-
-    TODO.md          42 entries
-    tasks table      51 rows tagged project:awp
-    ProjectList      orchard · lantern          ← no awp
-    probe:tasks      cold 51 · warm 51     ← the sweep ran and changed nothing
-
-Importing `awp` fixed it in one call — `cold 42 · warm 42` on the next read —
-which is the repair for the symptom and not for the shape. The shape is that
-**a project leaving the list is a silent data event**, and `ProjectForget`'s
-own doc says forgetting "takes nothing with it", which is the right promise for
-workspaces and sessions and is currently a lie about tasks: it strands them.
-
-Three ways out, and they are genuinely different claims:
-
-    forget the rows too   ProjectForget deletes `<name>#` rows. Honest, and it
-                          throws away ids `awp_task` hands out
-    keep sweeping them    remember every prefix ever ingested and sweep it,
-                          which makes a forgotten project still read its file
-    mark them orphaned    the rows stay and the panel says so. The most work,
-                          and the only one that does not decide on a person's
-                          behalf
-
-**And the derived half is not producing anything**, which is how `awp` came to
-be off the list at all while its own session was running. Four sessions carry
-`awp_project=thicket` labels and `thicket` is not in `ProjectList` either:
-
-    zmx ls          awp.thicket.pr-2340.agent   awp_project=thicket  …  ×4
-    ProjectList     awp · orchard · lantern          ← imported only
-
-`allProjects()` derives a project from a session's `startDir` through
-`jj.sourceRoot`, and AGENTS.md's own argument for that path is that "a project
-with sessions still running simply reappears, derived". It does not. Whether
-that is `identities()` failing to recover the project, an empty `startDir`, or
-`sourceRoot` refusing the directory is unmeasured — and it is worth measuring
-first, because every one of those is a different file.
