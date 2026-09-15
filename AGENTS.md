@@ -1278,6 +1278,87 @@ Measured in a browser at `#/`, which attaches to no session:
   panel scroll    280 = 280, with 2327 characters of somebody's markdown in it
 ```
 
+### The count of what is finished is the way to it
+
+The panel hid completed tasks and said how many — `24 to do · 62 done`. That is
+right for scanning and it made the finished half **unreachable**, which costs
+the two readings people actually want: whether a thing was done already, and
+what an agent got through while nobody was watching.
+
+So the count is a button, and the section it opens is ordered by something the
+list above it is not:
+
+```
+  outstanding   what is underway, then an agent's live queue above what is
+                merely written down          ← a reading order
+  done          newest first                 ← "what got done while I was
+                                                away" is a question about when
+```
+
+`updatedAt` is on the wire for that one reader. Ingest only touches it when a
+field actually changed — the upsert carries a `where` — so for a finished task
+it is as close to "when it finished" as a file-backed source can say.
+
+**The dot cycles back to `pending` from `completed`.** A finished row was
+otherwise a row whose control did nothing, which is the lie this panel already
+refuses to tell for a copied row. Putting it back is the one act a done list
+is for.
+
+**Not remembered.** `rememberedPanels` is the worked example of a per-thread
+preference; this is a glance, and a section that came back open would make the
+panel's first screen a list of work nobody has to think about.
+
+### A rename is a double click, in the two places the title is drawn
+
+A thread's title is written once by a model, out of the sentence somebody typed
+into the new-thread modal — frequently almost right, and until now unfixable.
+`ThreadRename` had been on the wire since threads landed with **no caller at
+all**.
+
+```
+  the sidebar heading   double-click the title · `rename…` in its ⋯ menu
+  the sidebar row       same, but only where the row stands in for its whole
+                        thread — under a heading the title belongs to the
+                        heading, and two controls for one name is one of them
+                        being wrong about what it owns
+  the agent bar         double-click the title
+```
+
+**The field replaces the control rather than sitting inside it.** Both sites
+draw their title inside something interactive — a fold button, the window's
+drag region — and an input nested in either is an input whose clicks belong to
+its parent. Escape is unambiguous for the same reason: there is nothing else on
+the row to give the key to.
+
+**And the bar was showing a copy.** Its title came from `identity.label`, the
+zmx label written when the workspace was created, which is the thread's title
+frozen at that moment — so a rename left the bar saying the old name with
+nothing on screen to say which was true. The live title wins now, and only
+where the thread holds one checkout: that is the sidebar row's own rule, which
+this file already states one paragraph up.
+
+```
+  displayName   a name a person chose by hand            ← still wins
+  thread title  where the thread holds one checkout      ← new, and live
+  identity.label / workspace / session name              ← as before
+```
+
+Nothing is re-read after a write: every thread write announces itself on the
+store's own feed, so this window and any other are told by the daemon. "The
+reply is the update" is the rule for calls with **no** feed, and this one has
+had one since `watchThreads`.
+
+### cmd+B folds a column, cmd+shift+B the other one
+
+The toggles in the top bar are the discoverable half; these are the half that
+works from inside the pane, where the pointer is not. Both write through the
+same `fold`, so the remembered state and the animation are the ones a press of
+the button produces — and `menu.ts` claims nothing on B, which is what leaves
+the key reachable at all.
+
+`event.code` earns its keep twice here: the two chords are told apart by shift,
+and `key` arrives upper-case whenever shift is down.
+
 ### A plain fence must scroll, not wrap
 
 Found by the above, and it had been wrong since `Fence.tsx` was written —
@@ -1447,6 +1528,67 @@ The general shape, which this file records twice already in other words:
 **a subscription answers what changes, and a question answers what is.**
 Anything that resubscribes has to ask again as well, or it is up to date on
 everything except what it missed.
+
+### And a feed does not die the way a failure dies
+
+The section above is right and was not enough. Both faces wrapped every feed in
+`Effect.retry`, under a comment saying an rpc stream is a request and its fiber
+dies with the connection — which is true. What neither of them survived is
+_how_ it dies. Measured against a real daemon, killed with two feeds open on
+it:
+
+```
+  threads   Die("Expected never at [\"cause\"][\"failures\"][1][\"error\"]")
+  facts     Interrupt(7)
+```
+
+One outage, two feeds, and **neither arrives as a failure**. The client writes
+an `RpcClientError` into every request it still holds, and a feed whose
+contract declares no error at all has nowhere to put one — so it dies as a
+defect; whatever the socket's scope closes out from under instead dies as an
+interrupt. `Effect.retry` acts on failures, so it stepped over both, and the
+`catchCause` behind it swallowed them.
+
+What that cost is every feed in both faces, for the life of the window:
+
+```
+  after a restart, before   SessionList · JobList · ThreadList · ProjectList
+                            └─ the calls came back. Not one feed did
+  after a restart, after    + PageChanges · JobChanges · ThreadChanges ·
+                              WorkspaceFactsChanges
+```
+
+Read off the frames the window actually sent, which is the only place the two
+are distinguishable: the status bar said the daemon was fine and the lists were
+correct **once**, so nothing on screen says a job has stopped reporting
+progress, a sidebar dot has stopped moving, or an agent's `awp_browse` will
+never arrive.
+
+**The loop stops on one thing, and it is not a shape of cause.** Unsubscribing
+is an interruption too, so no reading of the cause can tell it from a dropped
+connection — an attempt to keep `Cause.hasInterrupts` as the test passed the
+threads feed and left the facts feed exactly as dead as before. `stopped` is a
+flag set by the returned closer, which is the only witness that knows _why_ the
+fiber was interrupted, because it is the one function that decides.
+
+**And the probe that existed for this could not fail.** `probe:reconnect` had
+three faults, each of which alone makes every line it prints a report on the
+first connection:
+
+```
+  bun run daemon is 3 processes   `.kill()` reached the script runner; the
+                                  daemon went on listening and answering
+  a squatter on 5284              a daemon left over from six days earlier
+                                  held the port, so the probe's own never
+                                  bound and it measured a stranger
+  no feed was watched at all      only the edges and a call
+```
+
+It spawns the entry point rather than the script, refuses to start beside
+anything already answering on the port, exits if the kill produced no edge, and
+watches `watchFacts` across the restart. Facts rather than threads because its
+first push is the whole table — a resubscribe produces one immediately, where a
+feed of genuine edges can answer "no push" by having nothing to say.
 
 ### Anything that appears or disappears is animated
 

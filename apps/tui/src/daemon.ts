@@ -111,13 +111,37 @@ const runtime = ManagedRuntime.make(
 const RESUBSCRIBE = Schedule.min([Schedule.exponential(500, 1.5), Schedule.spaced(5000)]);
 
 const subscribe = <E>(run: (rpc: AwpClientShape) => Effect.Effect<void, E>): (() => void) => {
+  let stopped = false;
   const fiber = runtime.runFork(
     Effect.flatMap(AwpClient, run).pipe(
+      // A dropped connection does not reach a feed as a *failure*, and
+      // `Effect.retry` only retries those. Measured against a real daemon,
+      // killed while two feeds were open on it:
+      //
+      //   threads   Die("Expected never at [\"cause\"][\"failures\"][1][\"error\"]")
+      //   facts     Interrupt(7)
+      //
+      // Two feeds, one outage, and neither arrives as a failure. The client
+      // writes an `RpcClientError` into every request it still holds, and a
+      // feed whose contract declares no error has nowhere to put one — so it
+      // dies as a defect; whatever the socket's scope closes out from under
+      // instead dies as an interrupt. The retry saw neither, `catchCause`
+      // swallowed both, and the feed was gone for the life of the window
+      // while the status bar said the daemon was fine. Every feed: threads,
+      // jobs, facts, pages, the attach, the chat.
+      //
+      // So the loop stops on one thing only, and it is not a shape of cause:
+      // **the caller asked it to.** Unsubscribing is also an interruption, so
+      // no reading of the cause can tell the two apart — `stopped` is the
+      // only witness that knows why, because it is set by the one function
+      // that decides.
+      Effect.catchCause((cause) => (stopped ? Effect.void : Effect.fail(cause))),
       Effect.retry(RESUBSCRIBE),
       Effect.catchCause(() => Effect.void),
     ),
   );
   return () => {
+    stopped = true;
     runtime.runFork(Fiber.interrupt(fiber));
   };
 };
