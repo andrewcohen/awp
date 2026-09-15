@@ -506,6 +506,31 @@ describe("awp_task_add", () => {
     });
   });
 
+  it("tags the thread as well, when one claims this checkout", () => {
+    // What makes the store answer "this piece of work" rather than only "this
+    // project". Applied rather than asked for: the agent has no way to know
+    // the id, and an argument for it would be a second thing to get wrong.
+    const got = call(
+      "awp_task_add",
+      { subject: "measure the sweep" },
+      {
+        threadAt: () =>
+          Effect.succeed(
+            here({
+              thread: {
+                id: "20260915-ab12",
+                title: "tasks",
+                parent: undefined,
+                prs: [],
+                checkouts: [],
+              },
+            } as Partial<ThreadHere>),
+          ),
+      },
+    );
+    expect(JSON.stringify(got.asked)).toContain("thread:20260915-ab12");
+  });
+
   it("starts pending unless asked otherwise", () => {
     const got = call("awp_task_add", { subject: "x", status: "in_progress" });
     expect(got.asked).toContainEqual(expect.objectContaining({ addTask: expect.anything() }));

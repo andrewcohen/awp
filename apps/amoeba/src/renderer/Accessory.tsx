@@ -151,8 +151,8 @@ const panels: ReadonlyArray<Panel> = [
   {
     id: "tasks",
     label: "tasks",
-    render: ({ dir, project, workspace }) => (
-      <Tasks dir={dir} project={project} workspace={workspace} />
+    render: ({ dir, project, workspace, thread }) => (
+      <Tasks dir={dir} project={project} workspace={workspace} thread={thread} />
     ),
   },
   // The pair, and nothing else. The page itself is not per-workspace — a

@@ -748,6 +748,28 @@ export const listBoard = (tags?: ReadonlyArray<string>): Promise<ReadonlyArray<T
   );
 
 /**
+ * Write a task down here, in the project the panel is scoped to.
+ *
+ * The only tasks this window may write. Everything else on the board is a copy
+ * of a file somebody else keeps, and `TaskStatus` refuses one by name — see the
+ * contract's `TaskRefused`.
+ */
+export const addTask = (task: {
+  readonly subject: string;
+  readonly description: string;
+  readonly status: string;
+  readonly tags: ReadonlyArray<string>;
+}): Promise<Task> => runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.TaskAdd(task)));
+
+/** Move a task awp owns. Rejects with `TaskRefused` for one it only copied. */
+export const setTaskStatus = (id: string, status: string): Promise<Task> =>
+  runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.TaskStatus({ id, status })));
+
+/** Forget a task awp owns. Rejects with `TaskRefused` for one it only copied. */
+export const forgetTask = (id: string): Promise<void> =>
+  runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.TaskForget({ id })));
+
+/**
  * Every sweep of the task sources that changed something, from now.
  *
  * A nudge and not a listing — the daemon does not know which tags this panel is

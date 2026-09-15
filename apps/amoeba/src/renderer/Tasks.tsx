@@ -1,7 +1,9 @@
 import type { Task } from "@awp-kit/protocol";
 import * as stylex from "@stylexjs/stylex";
+import { AnimatePresence, motion } from "motion/react";
+import { useArriving, useSpring } from "./springs";
 import { useEffect, useRef, useState } from "react";
-import { listBoard, onReconnect, sendTask, watchTasks } from "./daemon";
+import { addTask, listBoard, onReconnect, sendTask, setTaskStatus, watchTasks } from "./daemon";
 import { Markdown } from "./Markdown";
 import { type Listed, merge } from "./tasklist";
 import { typeset } from "./typeset";
@@ -224,16 +226,82 @@ const styles = stylex.create({
   },
   said: { color: colors.live },
   failed: { color: colors.warn },
+
+  // The add line. A box that is not there until it is asked for, so it opens
+  // by height — `overflow: hidden` is what makes that animatable at all, and
+  // the padding is inline-only for the same reason the chat's ledge is: block
+  // padding on a box animating to nothing leaves a gap that never closes.
+  opening: { overflow: "hidden", flexShrink: 0 },
+  writing: {
+    display: "flex",
+    alignItems: "center",
+    gap: "0.4rem",
+    padding: "0.35rem 0.6rem",
+    borderBottomWidth: 1,
+    borderBottomStyle: "solid",
+    borderBottomColor: colors.border,
+  },
+  field: {
+    flex: 1,
+    minWidth: 0,
+    padding: "0.15rem 0.3rem",
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderStyle: "solid",
+    borderColor: colors.border,
+    borderRadius: "0.2rem",
+    color: colors.text,
+    // No `font: inherit` and no size: `typeset.label` is applied beside this
+    // and holds both. A form control does not inherit the family on its own,
+    // which is the whole reason the role has to be on it.
+    ":focus-visible": { borderColor: colors.accent, outlineStyle: "none" },
+  },
+  // A dot that is a control, for the rows this window owns. Everything about
+  // it matches the span it replaces — see `dot` — so the list does not shift
+  // by a pixel between a task awp wrote and one it copied.
+  toggle: {
+    width: "0.85rem",
+    flexShrink: 0,
+    padding: 0,
+    backgroundColor: "transparent",
+    borderStyle: "none",
+    fontSize: 10,
+    lineHeight: 1,
+    cursor: "pointer",
+    color: colors.muted,
+  },
 });
+
+/**
+ * What a press on the dot does next.
+ *
+ * Three states and not four: `completed` leaves the list — it is counted in the
+ * header rather than drawn — so the cycle is how a task awp owns is finished,
+ * and pressing the dot of a finished one is not a gesture that exists.
+ */
+const NEXT_STATUS: Record<string, string> = {
+  pending: "in_progress",
+  in_progress: "completed",
+  blocked: "in_progress",
+};
 
 interface RowProps {
   readonly task: Listed;
   /** Absent for a session awp did not make: there is no agent to address. */
   readonly onSend: (() => void) | undefined;
+  /**
+   * Move it, for the rows awp wrote.
+   *
+   * Absent for every copied row, which is the honest shape: ingest writes the
+   * source's status back over anything set here, so a `TODO.md` task marked
+   * done in this panel would be pending again within ten seconds. The dot for
+   * one of those stays a mark rather than becoming a control that lies.
+   */
+  readonly onMove: (() => void) | undefined;
   readonly state: "idle" | "sending" | "sent" | "failed";
 }
 
-function Row({ task, onSend, state }: RowProps) {
+function Row({ task, onSend, onMove, state }: RowProps) {
   const [open, setOpen] = useState(false);
   // Hover is React state rather than a CSS descendant selector, because StyleX
   // writes atomic rules for one element and has no way to say "while my parent
@@ -255,9 +323,21 @@ function Row({ task, onSend, state }: RowProps) {
       onPointerLeave={() => setHovered(false)}
       {...stylex.props(styles.row)}
     >
-      <span aria-hidden {...stylex.props(styles.dot, doing ? styles.doing : styles.todo)}>
-        {doing ? "●" : "○"}
-      </span>
+      {onMove === undefined ? (
+        <span aria-hidden {...stylex.props(styles.dot, doing ? styles.doing : styles.todo)}>
+          {doing ? "●" : "○"}
+        </span>
+      ) : (
+        <button
+          type="button"
+          data-nav-item
+          title={doing ? "mark it done" : `start it — this one is awp's own, so it moves from here`}
+          onClick={onMove}
+          {...stylex.props(styles.toggle, doing ? styles.doing : styles.todo)}
+        >
+          {doing ? "●" : "○"}
+        </button>
+      )}
 
       <div {...stylex.props(styles.body)}>
         <button
@@ -315,9 +395,18 @@ export interface TasksProps {
   readonly dir: string | undefined;
   readonly project: string | undefined;
   readonly workspace: string | undefined;
+  /**
+   * The thread the open workspace belongs to, or nothing claims it.
+   *
+   * What a task written here is tagged with, beside its project — which is what
+   * makes the store able to answer "this piece of work" later. Most checkouts
+   * on a real machine predate threads, so its absence is ordinary and costs the
+   * task nothing but that one tag.
+   */
+  readonly thread: string | undefined;
 }
 
-export function Tasks({ dir, project, workspace }: TasksProps) {
+export function Tasks({ dir, project, workspace, thread }: TasksProps) {
   const [board, setBoard] = useState<ReadonlyArray<Task>>([]);
   const [asked, setAsked] = useState(false);
   const [states, setStates] = useState<Record<string, RowProps["state"]>>({});
@@ -328,7 +417,14 @@ export function Tasks({ dir, project, workspace }: TasksProps) {
   // narrows to this checkout, which is what the agent's own list used to be,
   // and widens to everywhere, which is the reason the store exists at all.
   const [scope, setScope] = useState<Scope>("project");
+  // The add line: absent until asked for, and Escape throws it away. A panel
+  // that always showed a composer would spend a row of a 280px column on the
+  // rarest thing done here.
+  const [writing, setWriting] = useState(false);
+  const [draft, setDraft] = useState("");
   const held = useRef<ReadonlyArray<Task>>([]);
+  const arriving = useArriving();
+  const spring = useSpring();
 
   // Which tags that scope is, and the fallback when there is nothing to scope
   // by: a window with no session open has no project, and the honest answer
@@ -391,6 +487,59 @@ export function Tasks({ dir, project, workspace }: TasksProps) {
 
   const { rows, done } = merge(board);
 
+  /**
+   * Write one down here.
+   *
+   * Tagged with the project and, when one claims this checkout, the thread —
+   * which is what lets the store answer "this piece of work" later. The
+   * description is deliberately not asked for: a one-line box is what makes
+   * writing a task down cost nothing, and the body is what `awp_task_add` and
+   * the file are for.
+   */
+  const write = () => {
+    const subject = draft.trim();
+    if (subject === "" || project === undefined) {
+      return;
+    }
+    setDraft("");
+    void addTask({
+      subject,
+      description: "",
+      status: "pending",
+      tags: [`project:${project}`, ...(thread === undefined ? [] : [`thread:${thread}`])],
+    })
+      // Re-read rather than splicing the answer in: the row has to land under
+      // whatever scope is showing, and the store's order is the store's.
+      .then((made) => {
+        held.current = [...held.current, made];
+        setBoard(held.current);
+      })
+      .catch(() => {
+        // The bar says when the daemon is gone, and the draft is already
+        // cleared — putting it back would fight somebody typing the next one.
+      });
+  };
+
+  /** Move a task awp owns to the next status, or nothing for a copied row. */
+  const move = (task: Listed) => {
+    if (task.source !== "awp") {
+      return undefined;
+    }
+    return () => {
+      const next = NEXT_STATUS[task.status] ?? "completed";
+      // Painted here and confirmed by the answer, because the sweep that
+      // would otherwise carry it is a sweep of sources this row is not in.
+      held.current = held.current.map((one) =>
+        one.id === task.task.id ? { ...one, status: next } : one,
+      );
+      setBoard(held.current);
+      void setTaskStatus(task.task.id, next).catch(() => {
+        // Refused, which for an awp row means the daemon is gone or the task
+        // has been removed elsewhere. The next nudge corrects the paint.
+      });
+    };
+  };
+
   const send = (task: Listed) => {
     if (project === undefined || workspace === undefined) {
       return;
@@ -410,6 +559,18 @@ export function Tasks({ dir, project, workspace }: TasksProps) {
           {rows.length === 0 ? "nothing to do" : `${rows.length} to do`}
           {done === 0 ? "" : ` · ${done} done`}
         </span>
+        {project === undefined ? undefined : (
+          <button
+            type="button"
+            data-nav-item
+            aria-expanded={writing}
+            title={writing ? "put the box away" : "write a task down here"}
+            onClick={() => setWriting((was) => !was)}
+            {...stylex.props(typeset.control, styles.button)}
+          >
+            +
+          </button>
+        )}
         {project === undefined ? undefined : (
           <button
             type="button"
@@ -440,15 +601,55 @@ export function Tasks({ dir, project, workspace }: TasksProps) {
         )}
       </div>
 
+      <AnimatePresence initial={false}>
+        {writing ? (
+          <motion.div
+            key="writing"
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={spring}
+            {...stylex.props(styles.opening)}
+          >
+            <div {...stylex.props(styles.writing)}>
+              <input
+                // Focused on the way in, because the press that opened this
+                // row is the same gesture as starting to type in it.
+                autoFocus
+                data-nav-item
+                value={draft}
+                placeholder="what needs doing"
+                onChange={(event) => setDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    write();
+                  }
+                  if (event.key === "Escape") {
+                    // Both faces throw a draft away on Escape, and silently.
+                    event.preventDefault();
+                    setDraft("");
+                    setWriting(false);
+                  }
+                }}
+                {...stylex.props(typeset.label, styles.field)}
+              />
+            </div>
+          </motion.div>
+        ) : undefined}
+      </AnimatePresence>
+
       <div {...stylex.props(styles.list)}>
         {rows.length > 0 ? (
           rows.map((task) => (
-            <Row
-              key={task.key}
-              task={task}
-              onSend={send(task)}
-              state={states[task.key] ?? "idle"}
-            />
+            <motion.div key={task.key} layout="position" {...arriving}>
+              <Row
+                task={task}
+                onSend={send(task)}
+                onMove={move(task)}
+                state={states[task.key] ?? "idle"}
+              />
+            </motion.div>
           ))
         ) : asked ? (
           // Two situations now, and they want different sentences. An empty

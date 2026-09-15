@@ -704,12 +704,21 @@ export const answer = (
             if (!Result.isSuccess(where)) {
               return reply(said(where.failure.reason, true));
             }
+            // And the thread, when one claims this checkout. That is what
+            // makes the store answer "what is this piece of work" rather than
+            // only "what is this project" — and it is applied here rather than
+            // asked for, because the agent has no way to know the id and a
+            // tool argument for it would be a second thing to get wrong.
+            const thread = where.success.thread;
             const made = yield* Effect.result(
               daemon.addTask({
                 subject,
                 description: text(args, "description") ?? "",
                 status: text(args, "status") ?? "pending",
-                tags: [`project:${where.success.project}`],
+                tags: [
+                  `project:${where.success.project}`,
+                  ...(thread === undefined ? [] : [`thread:${thread.id}`]),
+                ],
               }),
             );
             return reply(
