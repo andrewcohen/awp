@@ -98,7 +98,7 @@ const program = Effect.gen(function* () {
           Stream.runForEach(updates, (update) => Ref.update(seen, (all) => [...all, update])),
         ),
       );
-      yield* chat.send("Read notes.txt with Bash and tell me the word it names.", MINE);
+      yield* chat.send("Read notes.txt with Bash and tell me the word it names.", MINE, false);
       yield* Effect.sleep("40 seconds");
       return yield* Ref.get(seen);
     }),
@@ -208,7 +208,11 @@ const program = Effect.gen(function* () {
       );
       yield* Effect.sleep("5 seconds");
       const replayed = spoken(yield* Ref.get(seen)).length;
-      yield* copy.send("What word did the file name? Reply with just that word.", "probe-fork");
+      yield* copy.send(
+        "What word did the file name? Reply with just that word.",
+        "probe-fork",
+        false,
+      );
       yield* Effect.sleep("30 seconds");
       return { id: copy.sessionId, replayed, seen: yield* Ref.get(seen) };
     }),
@@ -318,6 +322,7 @@ const program = Effect.gen(function* () {
       yield* chat.send(
         `Use the Edit tool once to change the word in notes.txt from ${WORD} to lantern. Say nothing else.`,
         "probe-edit",
+        false,
       );
       yield* Effect.sleep("45 seconds");
       return yield* Ref.get(seen);

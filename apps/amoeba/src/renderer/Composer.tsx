@@ -410,8 +410,15 @@ export const Composer = ({
 }: {
   readonly draft: string;
   readonly onDraft: (draft: string) => void;
-  /** Enter, or the button. What a message *does* is the caller's. */
-  readonly onSend: () => void;
+  /**
+   * Enter, or the button. What a message *does* is the caller's.
+   *
+   * `interrupt` is cmd+Return: stop the agent where it is rather than waiting
+   * for it to finish. Return does *not* set it, and that is a correction —
+   * every message used to interrupt, which aborts the answer being written.
+   * See `ChatSend.interrupt`.
+   */
+  readonly onSend: (interrupt?: boolean) => void;
   /**
    * Stop the turn the agent is in.
    *
@@ -476,13 +483,23 @@ export const Composer = ({
   // new-thread brief is the same box.
   const hold = useGrow(draft);
 
-  /** What the next keypress does, when that is not obvious. */
+  /**
+   * What the next keypress does, when that is not obvious.
+   *
+   * The interrupt is said only while the agent is working, which is the only
+   * moment it means anything — and it is the one line here that describes a
+   * key somebody has no other way to find out about. Return's own behaviour
+   * is not said: waiting is what every other chat does, so it is the one that
+   * needs no announcement.
+   */
   const said =
     commands.length > 0
       ? "tab to complete, return to run"
       : draft.includes("\n")
         ? "shift+return for a new line"
-        : "";
+        : working && draft !== ""
+          ? "return waits for the answer · cmd+return interrupts"
+          : "";
 
   /**
    * One element, two holders.
@@ -660,9 +677,15 @@ export const Composer = ({
               // The same rule the pane has: Return sends, shift+Return is a
               // newline. A composer where Return inserts a line is one where
               // every message needs a second gesture to leave.
+              //
+              // cmd+Return is the interrupt. It is a separate key because it
+              // is a separate act: it aborts the answer the agent is part way
+              // through writing, where Return waits for it. Both send — the
+              // difference is what happens to work already in flight, which
+              // is exactly the sort of thing that should need saying.
               if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault();
-                onSend();
+                onSend(event.metaKey);
               }
             }}
           />
@@ -704,7 +727,12 @@ export const Composer = ({
                   : "send (return)"
             }
             {...stylex.props(styles.send, !working && draft.trim() === "" && styles.shut)}
-            onClick={working ? onStop : onSend}
+            // Wrapped, not passed: `onSend` takes `interrupt` first and a
+            // click handler is handed a MouseEvent, which is truthy — so
+            // pressing the button would have interrupted every time. tsc
+            // caught it, which is the argument for the flag being a named
+            // boolean rather than an optional anything.
+            onClick={working ? onStop : () => onSend()}
             disabled={!working && draft.trim() === ""}
           >
             <AnimatePresence initial={false} mode="popLayout">

@@ -85,7 +85,7 @@ const program = Effect.gen(function* () {
       );
       yield* Effect.ignore(chat.set("mode", "bypassPermissions"));
 
-      yield* chat.send(SLOW, "probe-slow");
+      yield* chat.send(SLOW, "probe-slow", false);
       // Long enough that the turn is certainly underway and the tool call is
       // running — a steer sent before the agent has started is not a steer.
       yield* Effect.sleep("12 seconds");
@@ -95,7 +95,11 @@ const program = Effect.gen(function* () {
       // had waited on. The answer is in the updates: a refused steer ends its
       // turn with a reason, and a second `turn started` with no `turn ended`
       // after it is a window that says "working" for the rest of the session.
-      const how = yield* chat.send(STEER, "probe-steer");
+      // `true`, because this probe exists to measure what an interrupt does.
+      // It is no longer what an ordinary send asks for — see
+      // `ChatSend.interrupt` — so the probe has to say so out loud, which is
+      // the honest shape: the aggressive path is the one with a name on it.
+      const how = yield* chat.send(STEER, "probe-steer", true);
       console.log(`  delivered as  ${how}\n`);
       yield* Effect.sleep("60 seconds");
       return yield* Ref.get(collected);

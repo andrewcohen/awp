@@ -287,7 +287,12 @@ interface Conversation {
    *            be steered
    *   queued   held, because a compaction is running. Sent when it is over
    */
-  readonly send: (text: string, key: string) => Effect.Effect<ChatDelivery, ChatError>;
+  readonly send: (
+    text: string,
+    key: string,
+    /** Stop the agent where it is. See `ChatSend.interrupt`. */
+    interrupt: boolean,
+  ) => Effect.Effect<ChatDelivery, ChatError>;
   /**
    * Every session the adapter sees in this directory.
    *
@@ -494,6 +499,50 @@ export const commandsOf = (raw: ReadonlyArray<unknown>): ReadonlyArray<ChatComma
  * under the composer already shows it; a second copy on this row would be
  * the one that drifts.
  */
+/**
+ * Whether a message should cut the agent off, rather than wait its turn.
+ *
+ * Exported because it is a *rule* and not a branch: it decides whether an
+ * answer a person is reading gets thrown away, and that is worth stating in
+ * one place and testing rather than reading out of an `if`.
+ *
+ * ── every message used to do this ────────────────────────────────────────
+ *
+ * The daemon tried `_session/steering` on every send, and the adapter
+ * delivers a steer at priority `now` — which its own comment spells out:
+ * *"Pre-empting means ABORTING."* So the ordinary act of typing while an
+ * agent was working destroyed the answer in flight. Reported as steering too
+ * aggressively.
+ *
+ * The CLI's own input queue settles what the default should be. It ranks
+ * `{ now: 0, next: 1, later: 2 }`, builds an ordinary user message at `next`,
+ * and reads an absent priority as `next` — so waiting for the next boundary
+ * is what a person's message does everywhere except here. `later` is not a
+ * third choice for a person: it is what the model's own background traffic
+ * uses, task notifications and poll events.
+ *
+ * Three conditions, and each rules it out for a different reason:
+ */
+export const interrupts = ({
+  /** Somebody asked for it — `cmd+Return`. Absent means no. */
+  asked,
+  /** The adapter advertises `_session/steering`. An older one does not. */
+  capable,
+  /**
+   * A compaction is running.
+   *
+   * The one case where the intent is honoured by ignoring it: compacting is
+   * a turn like any other, so a steer aimed at it is injected into the very
+   * turn rewriting the context — which loses the compaction *and* delivers
+   * the message into a turn going nowhere. The daemon holds it instead.
+   */
+  compacting,
+}: {
+  readonly asked: boolean;
+  readonly capable: boolean;
+  readonly compacting: boolean;
+}): boolean => asked && capable && !compacting;
+
 export const compactionOf = (text: string): ChatUpdate | undefined => {
   const said = text.trim();
   if (/^compacting\.\.\.$/i.test(said)) {
@@ -1159,10 +1208,23 @@ export const conversation = (
      * by the time the second runs, the row has been on screen for a minute
      * marked `queued`, and emitting it again would draw it twice.
      */
-    const deliver = (text: string): Effect.Effect<ChatDelivery, ChatError> =>
+    const deliver = (
+      text: string,
+      /**
+       * Stop the agent where it is, rather than waiting for it to finish.
+       *
+       * Off by default, and that is the correction. Every send used to try
+       * steering, which the adapter delivers at priority `now` — and `now`
+       * *aborts* the generation in flight. Meanwhile the CLI's own input
+       * queue ranks `{ now: 0, next: 1, later: 2 }` and builds an ordinary
+       * user message at `next`, so waiting for the boundary is what a human
+       * message does everywhere else. See `ChatSend.interrupt`.
+       */
+      interrupt: boolean,
+    ): Effect.Effect<ChatDelivery, ChatError> =>
       Effect.gen(function* () {
-        // Steer first, when the agent can be steered and there is nothing
-        // being compacted to steer into.
+        // Steer only when somebody asked to, the agent can be steered, and
+        // there is nothing being compacted to steer into.
         //
         // **`idleBehavior: "promptRequired"`, and it is the whole reason this
         // is one call rather than two.** Without it, a steer sent when no
@@ -1178,7 +1240,13 @@ export const conversation = (
         // gap" — which is a race this side could not have avoided. The
         // compaction is the one thing this side knows and the adapter will
         // not tell it.
-        if (steering && !(yield* Ref.get(compacting))) {
+        if (
+          interrupts({
+            asked: interrupt,
+            capable: steering,
+            compacting: yield* Ref.get(compacting),
+          })
+        ) {
           const steered = yield* Effect.result(
             request("_session/steering", {
               ...promptOf(text),
@@ -1230,7 +1298,12 @@ export const conversation = (
     flushWaiting = Effect.ignore(
       Effect.gen(function* () {
         for (const text of yield* Ref.getAndSet(waitingToSend, [])) {
-          yield* deliver(text);
+          // Never an interrupt, whatever the sender asked for. This runs when
+          // a compaction has just ended, and what it is flushing has been on
+          // screen marked `queued` for a minute — the moment to cut a turn
+          // short is the moment somebody pressed the key, not a minute later
+          // against whatever happens to be running by then.
+          yield* deliver(text, false);
         }
       }),
     );
@@ -1270,7 +1343,7 @@ export const conversation = (
       // update, so nothing the adapter sends marks either edge. Without them a
       // window cannot tell an agent that is working from one that answered
       // with nothing — both are an empty space.
-      send: (text: string, key: string) =>
+      send: (text: string, key: string, interrupt: boolean) =>
         Effect.gen(function* () {
           // ── what somebody typed, on the stream ──────────────────────────
           //
@@ -1296,7 +1369,7 @@ export const conversation = (
             return "queued" as const;
           }
 
-          return yield* deliver(text);
+          return yield* deliver(text, interrupt);
         }),
 
       /** Every session the adapter sees here, by id. Asked for by the probe. */
@@ -1448,6 +1521,8 @@ export class Chat extends Context.Service<
       text: string,
       /** The client's name for this message. See `ChatSend.key`. */
       key: string,
+      /** Stop the agent where it is rather than waiting. See `ChatSend.interrupt`. */
+      interrupt: boolean,
     ) => Effect.Effect<ChatDelivery, ChatError>;
 
     /**
@@ -1912,9 +1987,9 @@ export const make = Effect.gen(function* () {
     open: (project: string, workspace: string) =>
       Effect.flatMap(RcMap.get(conversations, keyOf(project, workspace)), (one) => one.updates),
 
-    send: (project: string, workspace: string, text: string, key: string) =>
+    send: (project: string, workspace: string, text: string, key: string, interrupt: boolean) =>
       Effect.tap(
-        held(project, workspace, (one) => one.send(text, key)),
+        held(project, workspace, (one) => one.send(text, key, interrupt)),
         // After the send rather than before it: a refusal has no turn to hold
         // open, and a holder waiting 30 seconds for one that will never start
         // would keep a dead conversation alive for exactly as long.
@@ -1927,7 +2002,10 @@ export const make = Effect.gen(function* () {
           // A key of its own, because there is no client to have minted one:
           // a brief is a job talking, and the only thing that reads the key is
           // the dedupe in whatever window opens the conversation later.
-          one.send(text, `brief-${crypto.randomUUID()}`),
+          // Never an interrupt: a brief is the *first* thing said to a new
+          // conversation, so there is nothing running to cut short, and a job
+          // is in no position to decide to stop somebody's agent.
+          one.send(text, `brief-${crypto.randomUUID()}`, false),
           settled(keyOf(project, workspace)),
         ),
       ),

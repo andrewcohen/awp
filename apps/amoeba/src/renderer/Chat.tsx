@@ -247,7 +247,12 @@ const Panel = ({
    * message like any other — see the note in `run`.
    */
   const deliver = useCallback(
-    (words: string) => {
+    /**
+     * @param interrupt stop the agent where it is, rather than waiting for it
+     * to finish. `cmd+Return`. See `ChatSend.interrupt` — it *aborts* the
+     * answer being written, which is why it is not what Return does.
+     */
+    (words: string, interrupt = false) => {
       // A name for the message, given here because only the sender can give
       // one. The reply that says how it was delivered arrives while the list
       // is still growing, so a position in the list would name a different
@@ -269,7 +274,7 @@ const Panel = ({
       // See the note there: dressing it up as an update is what put a steer
       // above the rest of a reply that was still arriving.
       setHeld((current) => mine(current, words, key));
-      void chatSend(project, workspace, words, key)
+      void chatSend(project, workspace, words, interrupt, key)
         .then((how) => {
           // Only a message that started a turn of its own while the agent was
           // already working has to wait for it. A steer is being read now, and
@@ -277,6 +282,11 @@ const Panel = ({
           // `queued` says the daemon is holding it until a compaction is
           // over, which is the one case where the wait is certain rather than
           // inferred — so it does not consult `working`.
+          //
+          // Which is now the ordinary case rather than the rare one: Return
+          // waits, so a message typed mid-turn is a `prompt` and wears the
+          // mark. That is the honest reading — the agent has it and has not
+          // read it yet.
           if (how === "queued" || (how === "prompt" && working)) {
             setHeld((current) => waiting(current, key));
           }
@@ -605,31 +615,34 @@ const Panel = ({
     box.current?.focus();
   }, [focus]);
 
-  const say = useCallback(() => {
-    const words = draft.trim();
-    if (words === "") {
-      return;
-    }
-    // ── the window's commands are intercepted, and narrowly ──────────────
-    //
-    // Exact match on the whole draft: `/new` is a command and `/tmp/build.log
-    // is missing` is a message about a path. Sent as text these would reach
-    // the agent as a sentence *about* a command, and the agent would answer
-    // it — which is the failure this catch prevents. See commands.ts.
-    const command = commandOf(words);
-    if (command !== undefined) {
-      run(command);
-      return;
-    }
-    setDraft("");
-    // Sending is asking to be at the tail, wherever the reader had scrolled
-    // to — the message about to appear is theirs, and the answer to it is
-    // the thing they are now waiting for. Set rather than scrolled: the row
-    // does not exist yet, and the effect that follows `grown` is what puts
-    // the view there once it does.
-    stuck.current = true;
-    deliver(words);
-  }, [draft, deliver, run]);
+  const say = useCallback(
+    (interrupt = false) => {
+      const words = draft.trim();
+      if (words === "") {
+        return;
+      }
+      // ── the window's commands are intercepted, and narrowly ──────────────
+      //
+      // Exact match on the whole draft: `/new` is a command and `/tmp/build.log
+      // is missing` is a message about a path. Sent as text these would reach
+      // the agent as a sentence *about* a command, and the agent would answer
+      // it — which is the failure this catch prevents. See commands.ts.
+      const command = commandOf(words);
+      if (command !== undefined) {
+        run(command);
+        return;
+      }
+      setDraft("");
+      // Sending is asking to be at the tail, wherever the reader had scrolled
+      // to — the message about to appear is theirs, and the answer to it is
+      // the thing they are now waiting for. Set rather than scrolled: the row
+      // does not exist yet, and the effect that follows `grown` is what puts
+      // the view there once it does.
+      stuck.current = true;
+      deliver(words, interrupt);
+    },
+    [draft, deliver, run],
+  );
 
   return (
     <div {...stylex.props(styles.chat)} data-column-part="chat">

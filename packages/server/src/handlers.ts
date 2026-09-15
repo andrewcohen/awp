@@ -518,7 +518,10 @@ export const layer = AwpRpcs.toLayer(
     ): Effect.Effect<void, NoAgent> =>
       Effect.flatMap(faces.face(project, workspace).pipe(Effect.orDie), (face) =>
         face === "chat"
-          ? chat.send(project, workspace, prompt, `awp-${crypto.randomUUID()}`).pipe(
+          ? // Waiting, never interrupting. This is awp itself talking — a
+            // review to look at, a page note, a task — and none of it is
+            // urgent enough to throw away an answer a person is reading.
+            chat.send(project, workspace, prompt, `awp-${crypto.randomUUID()}`, false).pipe(
               // `ChatError` is a sentence — no adapter installed, no `claude` on
               // the PATH — and `NoAgent` carries one now so it survives the trip.
               // Flattened to the tag it would reach the window as the word
@@ -948,9 +951,11 @@ export const layer = AwpRpcs.toLayer(
             .pipe(Effect.mapError((error) => new ChatUnavailable({ reason: error.reason }))),
         ),
 
-      ChatSend: ({ project, workspace, text, key }) =>
+      ChatSend: ({ project, workspace, text, key, interrupt }) =>
         chat
-          .send(project, workspace, text, key)
+          // Absent means wait, which is what every caller that has not thought
+          // about it should get. See `ChatSend.interrupt`.
+          .send(project, workspace, text, key, interrupt === true)
           .pipe(Effect.mapError((error) => new ChatUnavailable({ reason: error.reason }))),
 
       ChatCancel: ({ project, workspace }) =>

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   MODE,
   compactionOf,
+  interrupts,
   hanging,
   migrations,
   optionsOf,
@@ -850,5 +851,32 @@ describe("one at a time, per conversation", () => {
       ),
     );
     expect(held).toBe(2);
+  });
+});
+
+describe("whether a message cuts the agent off", () => {
+  // The rule this file exists to pin. A steer is delivered at the adapter's
+  // `now` priority, which aborts the generation in flight — so the question
+  // "did anybody ask for that" has to be answered before the other two.
+  const asking = { asked: true, capable: true, compacting: false };
+
+  it("waits unless somebody asked to interrupt", () => {
+    expect(interrupts({ ...asking, asked: false })).toBe(false);
+  });
+
+  it("interrupts when asked, and the adapter can", () => {
+    expect(interrupts(asking)).toBe(true);
+  });
+
+  it("waits when the adapter cannot be steered at all", () => {
+    expect(interrupts({ ...asking, capable: false })).toBe(false);
+  });
+
+  // Not a failure and not the caller being overruled for its own sake: a
+  // steer aimed at a compaction is injected into the turn rewriting the
+  // context, which loses the compaction and delivers the message into a turn
+  // going nowhere. The daemon holds it and sends it after.
+  it("waits through a compaction, however it was asked for", () => {
+    expect(interrupts({ ...asking, compacting: true })).toBe(false);
   });
 });

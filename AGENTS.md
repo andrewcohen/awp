@@ -2212,7 +2212,7 @@ Three separate causes, and each one is a rule worth keeping.
 **A conditional render has nothing to transition.** The first build swapped a
 text node `●` for an element. That is the mandate this file already states
 about `display: none`, one level up: a component that is not in the tree
-cannot move. The repair is that the *bullet is the amoeba*, at rest — a
+cannot move. The repair is that the _bullet is the amoeba_, at rest — a
 border-radius of 50% and a scale down to the 6.05px the glyph's ink actually
 measured, so the states are values on one element rather than two elements
 taking turns.
@@ -2255,7 +2255,7 @@ rather than arriving early:
 Two details that fall out:
 
 - **The wobble is delayed by exactly the morph's duration.** The static values
-  on the crawling style *are* the 0% keyframe, so the transition's target and
+  on the crawling style _are_ the 0% keyframe, so the transition's target and
   the animation's first frame are the same shape and the handover is
   invisible. Two movements at once on an eleven pixel mark is one movement
   nobody can read.
@@ -4594,6 +4594,68 @@ local copy is not something the daemon said, and dressing it up as an update is
 what let it be placed by arrival order in a list arrival order does not
 describe. A queued message floats at the tail, everything the agent is still
 producing is inserted **above** it, and a turn ending un-queues it.
+
+### And steering is an interrupt, so it is not what Return does
+
+The section above is right about the mechanism and was wrong about the
+default. Every message went through `_session/steering`, gated only on the
+capability and on a compaction — so the ordinary act of typing while an agent
+was working destroyed the answer in flight. Reported as steering too
+aggressively, and as _"i thought steering was queueing"_, which is the whole
+misreading in one sentence: the word sounds like a nudge.
+
+The adapter says what it is, in its own comment, in capitals:
+
+```
+  priority "now"   pre-empts the current generation
+  Pre-empting means ABORTING: the interrupted cycle emits a `result` of its
+  own and the steered message runs as a second one
+```
+
+**The CLI settles what the default should be, and it is not ours.** Its input
+queue is a rank, and a person's message is not at the top of it:
+
+```
+  pRe = { now: 0, next: 1, later: 2 }      lowest wins
+
+  now     jump the queue AND abort the generation   ← the adapter hard-codes
+                                                       this for steering
+  next    head of the queue, taken at the next boundary
+          └─ an ordinary user message is built at `next`, and an absent
+             priority READS as `next`. This is the default everywhere else
+  later   the model's own background traffic — task notifications, poll
+          events. Nothing constructs a person's message at `later`
+```
+
+So waiting is not a fallback for adapters that cannot steer; it is what a
+human message does, and awp was the exception. `interrupts()` is the rule now,
+pure and tested, and `ChatSend.interrupt` carries the intent — **optional, so
+that absent means the safe one**: an older client, a replayed call or a caller
+that has not thought about it must not stop somebody's agent.
+
+```
+  return        session/prompt        the agent finishes, then reads this
+  cmd+return    _session/steering     the agent stops where it is
+```
+
+Three things worth keeping.
+
+**The window says which, and it did not.** A steer got no mark at all, so a
+pre-empted answer and an ordinary one looked identical — the sentence simply
+stopped and a different one began, which reads as a glitch rather than as a
+consequence of typing. Being `prompt` now, a message typed mid-turn wears the
+`queued` mark the panel already had.
+
+**`onClick={onSend}` would have interrupted every time.** A click handler is
+handed a MouseEvent, which is truthy, and `interrupt` is the first parameter.
+`tsc` caught it — which is the argument for the flag being a named boolean
+rather than an optional anything.
+
+**Every daemon-side sender passes `false` explicitly.** A brief is the first
+thing said to a new conversation, so there is nothing to cut short; an
+`AgentSend` is awp itself talking, and a review to look at is not worth
+throwing away an answer somebody is reading; and the compaction flush runs a
+minute after the keypress, against whatever happens to be running by then.
 
 ### Steering is a request of its own, and a capability
 

@@ -898,11 +898,19 @@ export const chatSend = (
   project: string,
   workspace: string,
   text: string,
+  /**
+   * Stop the agent where it is, instead of waiting for it to finish.
+   *
+   * `cmd+Return`, and nothing else in this window sets it. See
+   * `ChatSend.interrupt`: an interrupt *aborts* the answer being written, so
+   * it is a thing somebody asks for rather than what every message does.
+   */
+  interrupt: boolean,
   /** This window's name for the message. See `ChatSend.key` in the contract. */
   key: string,
 ): Promise<ChatDelivery> =>
   runtime.runPromise(
-    Effect.flatMap(AwpClient, (rpc) => rpc.ChatSend({ project, workspace, text, key })),
+    Effect.flatMap(AwpClient, (rpc) => rpc.ChatSend({ project, workspace, text, key, interrupt })),
   );
 
 /**

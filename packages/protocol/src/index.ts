@@ -2284,6 +2284,35 @@ export class AwpRpcs extends RpcGroup.make(
       workspace: Schema.String,
       text: Schema.String,
       key: Schema.String,
+      /**
+       * Stop what the agent is doing and read this instead.
+       *
+       * ── waiting is the default, and that is a correction ─────────────────
+       *
+       * Every message used to be an interrupt. The daemon tried
+       * `_session/steering` on every send, which the adapter delivers at
+       * priority `now` — and its own comment is unambiguous about what that
+       * means: *"Pre-empting means ABORTING: the interrupted cycle emits a
+       * `result` of its own and the steered message runs as a second one."*
+       * The answer on screen stopped mid-sentence and a different one began.
+       *
+       * Reported as steering too aggressively, and the giveaway is what the
+       * CLI itself does with a person's message. Its input queue is ranked
+       * `{ now: 0, next: 1, later: 2 }`, an ordinary user message is built at
+       * `next`, and an absent priority reads as `next` — so waiting for the
+       * boundary is not a fallback, it is the default everywhere except here.
+       *
+       * So the two are a choice now, and the destructive one is the one you
+       * have to ask for:
+       *
+       *   absent   the agent finishes, then reads this        session/prompt
+       *   true     the agent stops where it is                _session/steering
+       *
+       * Optional rather than a required boolean, because absent has to mean
+       * the safe one: an older client, a replayed call, or a caller that has
+       * not thought about it must not interrupt anybody.
+       */
+      interrupt: Schema.optional(Schema.Boolean),
     },
     success: ChatDelivery,
     error: ChatUnavailable,
