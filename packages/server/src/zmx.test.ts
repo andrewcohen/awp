@@ -85,6 +85,31 @@ describe("list", () => {
     }
   });
 
+  // ── the field that comes from zmx and nothing checked ───────────────────
+  //
+  // `startDir` read as the empty string for every session for weeks. The
+  // parser switched on `start_dir`, which is what the fixtures in
+  // `zmx-parse.test.ts` were captured with; this zmx says `cwd`, an unknown
+  // key falls through to `labels`, and so no parse ever failed.
+  //
+  // Nothing in the fixture suite could have caught it — the fixture agrees
+  // with the parser by construction, and both were wrong about the tool. What
+  // it cost was `allProjects()`, which skips a session with no directory, so
+  // not one project was ever derived from a running session.
+  //
+  // So this asks the real zmx, and asks for the property rather than the
+  // spelling: whatever the field is called on the day, a session has a
+  // directory. A rename breaks this test instead of the project list.
+  test("every session says which directory it was started in", async () => {
+    const sessions = await withMultiplexer((mux) => mux.list());
+    for (const session of sessions) {
+      expect(session.startDir).not.toBe("");
+      // Absolute, because every caller hands it to a tool as a `cwd` or to
+      // `jj -R`, and neither walks up from a relative one.
+      expect(session.startDir.startsWith("/")).toBe(true);
+    }
+  });
+
   test("reports live and ended sessions without conflating them", async () => {
     const sessions = await withMultiplexer((mux) => mux.list());
     for (const session of sessions) {

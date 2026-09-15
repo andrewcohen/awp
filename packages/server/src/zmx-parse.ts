@@ -93,7 +93,25 @@ export const parseSessionLine = (line: string): Session | undefined => {
       case "clients":
         clients = toInt(value);
         break;
+      // ── two spellings, and only one of them is what zmx says today ──────
+      //
+      // The fixtures in `zmx-parse.test.ts` were captured on 2026-08-25 and
+      // carry `start_dir`. The zmx on this machine emits `cwd`, and nothing
+      // between the two said so: an unknown key falls through to `labels`, so
+      // the field simply read as the empty string for every session and no
+      // parse ever failed.
+      //
+      // What that cost is not in this file. `allProjects()` skips a session
+      // whose `startDir` is empty, so *no project was ever derived from a
+      // running session* — measured on 2026-09-15, with four labelled
+      // `thicket` sessions live and `thicket` absent from the project list.
+      // Tasks and the inbox both read that list, so both quietly narrowed to
+      // whatever had been imported by hand.
+      //
+      // Both are accepted, because a parser that knows one spelling has now
+      // been silently wrong once, and the cost of the second case is a line.
       case "start_dir":
+      case "cwd":
         startDir = value;
         break;
       case "ended":
