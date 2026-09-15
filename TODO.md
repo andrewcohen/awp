@@ -11,9 +11,8 @@ rather than the summary when what you learn changes the shape of the work.
 
 `bun run fmt` reflows this file, so the sequence is edit, then format, then commit; skipping the format leaves a diff that turns up under somebody else's change.
 
-43 open, as of 2026-09-15. The header said "46 open" while 51 entries were in
-the file, so the count is now taken from the entries rather than carried
-forward.
+41 open, as of 2026-09-15. The count is taken from the entries rather than
+carried forward — it read "46 open" over 51 of them once.
 
 Hand-edited rather than regenerated, and that is now the normal way this file
 changes: the session the list was regenerated from has ended.
@@ -28,11 +27,15 @@ viewed marks) and #110 (the bug in them, fixed by the same state).
 
 Added on 2026-09-15, out of what closing the nine turned up: #130 (the panel
 has no way to learn a task changed) and #131 (a project off the list strands
-its tasks). #131 was done the same day and its entry has left, which is how a
-task finishes here — the measurements live in AGENTS.md, under "A field nobody
-checks" and "Forgetting a project lets go of its tasks".
+its tasks). All three of those are done and their entries have left, which is
+how a task finishes here — the measurements live in AGENTS.md, under "A field
+nobody checks", "Forgetting a project lets go of its tasks" and "Tasks awp
+owns".
 
-In progress: #124.
+#124 went with them. Its three remaining halves landed together, because each
+made the next one worth having: Claude Code's own lists as a second source, a
+source awp owns so there is something to write, and `thread:` tags — which
+needed the sweep to stop deleting what a person applied.
 
 ---
 
@@ -420,52 +423,6 @@ moves, where the flag is resolved fresh each start.
 Related: #91 is the same gap from the other side and is done. ACP gives amoeba
 a channel _to_ the agent's conversation; MCP gives the agent a channel _to_
 amoeba.
-
-## 124. Tasks are the first thing the MCP server should offer · in progress
-
-Anthropic's position is that the task tool has stopped earning its place. That
-is not the experience here: the tasks panel is one of the most-used things in
-this window, and the Send button that briefs an agent from a task is the
-feature that made it so.
-
-So task management is the first set of actions on the awp MCP server, and the
-point of putting it there rather than leaving it in Claude Code's own store is
-scope. Today a task list belongs to a _session_, found by its transcript
-directory — see `agent-tasks.ts` — which means a task cannot outlive the
-session that wrote it and cannot be seen from anywhere else.
-
-    now       one list per Claude Code session, on disk, found by mtime
-    wanted    tasks awp owns, with a scope, visible across the whole window
-
-**Landed: the read half, and the panel.** `tasks.ts` is the store, `todo-tasks.ts` reads a
-project's `TODO.md`, `task-feed.ts` answers from the store and sweeps behind
-the answer, `TaskBoard` is on the wire, and `awp_tasks` / `awp_task` are the
-two MCP tools. Measured against the real daemon — 46 tasks, this file's own,
-with #91 correctly in progress and the longest body at 6722 characters. The
-panel draws it beside the session's own list as one queue, with a scope
-control for this project or everywhere. See AGENTS.md, which records those
-decisions and the one only a probe could have found: a project's root is its
-_default_ jj workspace, so reading the root reads whatever revision that
-checkout is parked on.
-
-**Left, in the order it is worth doing:**
-
-- **Claude Code's own lists as a second source.** `agent-tasks.ts` is already
-  the reader; what is missing is the ingest call and a key shaped like
-  `<session>/<n>`. The panel already draws both sources and deliberately does
-  not deduplicate — see `tasklist.ts` — so what is left here is the ingest,
-  and the question of whether a task in both places should ever become one
-  row. Probably not: the two have different statuses and the agent's copy is
-  the one it is working from.
-- **Writing.** `add`, a status change, and a tag applied by a person — which
-  needs the tag table to distinguish a tag ingest derived from one somebody
-  applied, or a sweep will delete it. The note above the migration says so.
-- **`thread:` tags**, which is what makes the store answer "what is this
-  thread's work" rather than only "what is this project's".
-
-Related: #92 is the same store from the other side, and the store is what
-removes its dilemma — neither of its two routes has to be chosen once awp owns
-a table of its own.
 
 ## 94. A sent message sometimes lands without its Return
 
@@ -1251,59 +1208,3 @@ this repo has already half-made in one direction or the other:
 Open: whether the TUI keeps a diff at all — reading a patch is arguably a
 pop-in-and-out act — and whether "leave" should mean detach rather than
 quit, which is a zmx question and not a UI one.
-
-## 130. The tasks panel has no way to learn that a task changed
-
-Reported while closing nine finished tasks: the file said 42 and the pane went
-on saying 51. Half of that was #131 below; the other half is that **nothing
-tells this panel anything**.
-
-    jobs      JobChanges           a stream. A job changes on its own, so a
-                                   client that only asks misses everything
-    threads   no stream, on purpose A thread changes when a person changes it,
-                                   in this window, so the reply IS the update
-    tasks     no stream, by default ← and tasks are the jobs case, not the
-                                   threads case
-
-A task changes because **an agent edited `TODO.md` in a checkout**, which is
-neither this window nor anything it asked for. So the reply-is-the-update
-argument does not reach here, and the panel's only trigger today is being
-mounted — Base UI unmounts a hidden tab, so "look at the diff and come back"
-is the entire refresh mechanism.
-
-Two things are missing and they are not the same thing:
-
-    the trigger   the sweep runs BEHIND a read and nowhere else. With the panel
-                  open and an agent writing TODO.md beside it, no read happens,
-                  so no sweep happens, so there is nothing for a stream to
-                  carry. A stream added without this is a stream that is always
-                  silent
-    the stream    a `TaskChanges` the panel subscribes to. `ingest` already
-                  answers `{added, changed, removed}`, so the daemon already
-                  knows whether a sweep was worth announcing — push only when
-                  one of the three is non-zero, or every project's sweep is a
-                  push that redraws a list nobody changed
-
-For the trigger, the candidates and what each costs:
-
-    watch the files   `watch.ts` is the worked example. A watcher per project
-                      root plus per workspace, and TODO.md is a working-copy
-                      file so the set of paths moves
-    sweep on a timer  simplest, and wrong at both ends: too slow to feel live,
-                      too fast to be free when it is a disk read per project
-    sweep on the ACP  a turn ending is when a file an agent edited has settled.
-    turn boundary     Cheap — the daemon already folds that edge for the status
-                      dot — and it covers the case this was reported from,
-                      which is an agent in this window rewriting the list
-
-The third is the one worth measuring first: it is the only trigger that fires
-_because of the thing that changed the file_, rather than in spite of it.
-
-And the rule that AGENTS.md already states twice applies here before any of it
-is built: **a stream carries changes from now, so it is not a substitute for
-asking.** Whatever subscribes has to re-read on `onReconnect` as well, or it is
-up to date on everything except what it missed — which is exactly the shape
-that cost the sidebar a thread row during a socket outage.
-
-Related: #87 and #89 make this list long enough that a stale one is harder to
-notice, not easier.

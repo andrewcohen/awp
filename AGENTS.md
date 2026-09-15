@@ -1100,17 +1100,31 @@ project with no `TODO.md`. `probe:tasks` reads twice for that reason alone:
 two are deliberately different calls: that one asks what the agent in one
 checkout is doing, this one asks what is written down anywhere.
 
-### The MCP surface is two tools, and the split is the size of the answer
+### The MCP surface is two readers and three writers
 
 ```
-  awp_tasks   subjects, statuses and ids       scanned, and read to plan from
-  awp_task    one entry in full                where the argument actually is
+  awp_tasks        subjects, statuses and ids   scanned, and read to plan from
+  awp_task         one entry in full            where the argument actually is
+  awp_task_add     write one down               awp's own source, swept by none
+  awp_task_status  move one awp owns            refused for a copy, by name
+  awp_task_tag     label any task at all        it outlives every sweep
 ```
 
 One tool answering both would put 46 tasks' worth of argument into a context
 window to answer "what is already written down". A task here is an argument
 rather than a ticket — `TODO.md` says so in its own preamble — so the body is
 the valuable half and has to be asked for one at a time.
+
+**An id is the one argument that could name another checkout, so it is
+checked.** The three writing tools arrived after the two readers, and
+`awp_task_status` / `awp_task_tag` take an id — which names a task in any
+project. Every other tool here is bound by the _absence_ of an argument;
+these are bound by `ownTask`, which reads the project's own board and refuses
+anything not on it. The Go implementation filing seven findings into the wrong
+repository is what that is for. `awp_task_add` takes no project either: it
+tags with the checkout's own, and with its thread when one claims it, because
+the agent has no way to know that id and an argument for it would be a second
+thing to get wrong.
 
 **`scope` is not a project name.** The binding rule holds — no tool here can
 name another checkout — but the cross-cutting read is the reason the store
@@ -1122,12 +1136,64 @@ and the same refusal `awp_thread` uses.
 set is named — `pending`, `in_progress`, `blocked` — because a negative filter
 would quietly include a status this window has never seen.
 
-### The panel draws two lists as one
+### Two sources go in the same door, and then there is one reader
+
+The panel used to make two calls on a four second timer: a session's own list,
+read off disk by directory, and the board. The second source closed that —
+`task-feed.ts` ingests Claude Code's own per-workspace lists as the `claude`
+source, so an agent's queue _is_ a board row, and reading it twice drew it
+twice.
 
 ```
-  the session's   what the agent in this checkout wrote for itself, off disk.
-                  Dies with the session
-  the board       what awp holds — a project's TODO.md, tagged, durable
+  before   listTasks(dir) + listBoard(tags)   one file read by two readers
+  after    listBoard(tags)                    `source` says which file it was
+```
+
+**Sweeping every checkout is affordable, and that was measured rather than
+assumed.** The candidates are the project root plus each directory under
+`~/.awp/workspaces/<project>` — the same convention `todo-tasks.ts` reads by:
+
+```
+  59 workspaces   11ms serially   2ms concurrently   4 of them keeping a list
+```
+
+**The key carries the workspace**, because two checkouts of one project each
+have an agent numbering its tasks from one. The prefix is still the project's,
+which is what an ingest's sweep is scoped by — so `ProjectForget` has to
+release **both** sources, or the one it left behind sits under a prefix nothing
+will ever name again.
+
+### Subscribing is what makes the sweep run
+
+The sources are files nothing here writes. There is no event to hang a refresh
+on, so the old arrangement was a timer per open panel, each reading every
+project's files for itself.
+
+```
+  nobody watching   no timer at all — a closed panel costs nothing
+  one watching      a sweep every 10s, serving every client at once
+  a turn ends       `nudge()` — the files an agent was editing have settled
+```
+
+`TaskChanges` carries **counts, not rows**, because the daemon does not know
+which tags a given client is narrowing by; a push carrying rows is a push most
+clients would have to correct. And the rule this file states twice already
+applies: a stream carries changes from _now_, so the panel re-asks on
+`onReconnect` as well.
+
+**The turn edge is the one trigger that fires because of the thing that changed
+the file.** `settled()` is that edge, and the case worth writing down is the
+one an equality check would lose: a workspace that was `working` and is now
+**absent** — a conversation released mid-turn — has settled too. `waiting`
+counts as well; a turn that stopped to ask a question has stopped writing.
+
+### The panel draws every source as one list
+
+```
+  claude   what an agent in a checkout wrote for itself, copied in before the
+           session that wrote it ends
+  todo     a project's TODO.md, in whichever checkout wrote it last
+  awp      written here, and swept by nothing
 ```
 
 One list with the source as a mark, not two headed sections. Somebody scanning
@@ -1153,6 +1219,37 @@ and the project by the panel's scope.
 default is this project, because a column beside a checkout is usually asked
 about that checkout; `everywhere` is the reason the store exists at all, so it
 cannot be the thing nobody can reach. It only appears when a project is known.
+A third width — this checkout — is what the second read used to be, and it had
+no name while it was a separate call.
+
+### A copied row's dot is a mark; an awp row's is a control
+
+The store has a writer that is not ingest now, and everything about the panel's
+one act follows from which rows it may touch.
+
+```
+  awp      written here. Swept by nothing, so there is no later reading of a
+           file that could decide it had been finished    ← the dot moves it
+  todo     ingest's upsert writes the source's status back over anything set
+  claude   here, so a task marked done in this panel is pending again within
+           ten seconds, with nothing on screen to say why  ← the dot is a mark
+```
+
+A control that lies is worse than no control, and the refusal already exists
+one layer down — `TaskNotOurs`, republished as `TaskRefused`, whose sentence
+names where that task is actually written.
+
+**A tag is the exception, and it needed a column.** `task_tags.applied`
+separates what a person applied from what a source implies, because ingest
+replaces a task's tags wholesale — a source that stops implying
+`project:thicket` must stop carrying it. Without the flag, a `thread:<id>` on a
+`TODO.md` task is a write silently undone by the next reading of the file it
+came from. Checked by removing the `applied = 0` from the sweep's delete, which
+fails two tests.
+
+An untag of a tag the source still implies is honest about being temporary: the
+next sweep puts it back. That is the same shape as the status, one layer
+smaller.
 
 Measured in a browser at `#/`, which attaches to no session:
 
