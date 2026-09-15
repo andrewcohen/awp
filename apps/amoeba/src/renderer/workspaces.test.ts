@@ -1,6 +1,14 @@
 import type { SessionInfo, Thread, WorkspaceStatus } from "@awp-kit/protocol";
 import { describe, expect, it, test } from "vitest";
-import { type Workspace, groupByThread, groupByWorkspace, openable, prIn } from "./workspaces";
+import {
+  type ThreadGroup,
+  type Workspace,
+  groupByThread,
+  groupByWorkspace,
+  headingless,
+  openable,
+  prIn,
+} from "./workspaces";
 
 // The grouping is where the sidebar's one real decision lives, so it is tested
 // away from the markup. Every fixture below is shaped like something `zmx ls`
@@ -190,6 +198,43 @@ const inProject = (project: string, workspace: string): SessionInfo =>
     kind: "agent",
     label: undefined,
   });
+
+const loose = (): ThreadGroup => ({
+  key: "\u0000loose",
+  title: "not in a thread",
+  thread: undefined,
+  workspaces: [],
+});
+const owned = (id: string): ThreadGroup => ({
+  key: id,
+  title: id,
+  thread: { id } as unknown as ThreadGroup["thread"],
+  workspaces: [],
+});
+
+describe("headingless", () => {
+  // The case reported: nothing has ever been claimed, so every row is loose
+  // and `not in a thread` is a category with nothing outside it.
+  test("the loose group alone draws no heading", () => {
+    expect(headingless([loose()])).toBe(true);
+  });
+
+  // A lone thread keeps its heading: the title is the name of the work, which
+  // is a thing its rows do not say. Only the derived group has no name to lose.
+  test("a lone thread keeps its heading", () => {
+    expect(headingless([owned("a")])).toBe(false);
+  });
+
+  test("a loose group beside a thread keeps its heading", () => {
+    expect(headingless([owned("a"), loose()])).toBe(false);
+  });
+
+  // Nothing at all is the sidebar's own empty state, which says "no
+  // workspaces" rather than drawing a group with no rows in it.
+  test("no groups is not a heading decision", () => {
+    expect(headingless([])).toBe(false);
+  });
+});
 
 describe("groupByThread", () => {
   test("a thread shows the workspaces it claimed", () => {

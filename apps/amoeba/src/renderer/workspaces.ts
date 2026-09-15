@@ -440,6 +440,29 @@ export const groupByThread = (
 };
 
 /**
+ * Whether the sidebar should draw a group's heading at all.
+ *
+ * `not in a thread` is a distinction, and a distinction needs something to be
+ * distinct *from*. With no threads anywhere every workspace is loose, so the
+ * heading, the count and the caret are three pieces of chrome over a list that
+ * is simply the sidebar — and the words read as a fault rather than as a
+ * category, because there is no thread to be in.
+ *
+ * The same argument as the one-workspace thread drawing no heading, one level
+ * up: the grouping is drawn where there is grouping to see.
+ *
+ * Only ever the derived group. A lone *thread* keeps its heading, because a
+ * title is the name of the work and says something its rows cannot; the loose
+ * group has no name of its own to lose.
+ *
+ * Here rather than in the component for the reason everything else in this
+ * file is: it is a pure question about the records, and the one place a test
+ * can pin it.
+ */
+export const headingless = (groups: ReadonlyArray<ThreadGroup>): boolean =>
+  groups.length === 1 && groups[0]?.thread === undefined;
+
+/**
  * The pull request the open workspace is about, if its thread names one.
  *
  * Here rather than in App for the reason everything else in this file is: it is

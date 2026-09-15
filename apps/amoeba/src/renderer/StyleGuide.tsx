@@ -7,6 +7,7 @@ import { FileTextIcon } from "@phosphor-icons/react/FileText";
 import { XCircleIcon } from "@phosphor-icons/react/XCircle";
 import * as stylex from "@stylexjs/stylex";
 import { type ReactNode, useEffect, useRef, useState } from "react";
+import { Amoeba } from "./Amoeba";
 import { AppearanceToggle } from "./Appearance";
 import type { ChatConfigOption } from "@awp-kit/protocol";
 import { Transcript, Working } from "./Chat";
@@ -365,6 +366,10 @@ const styles = stylex.create({
   picked: { borderLeftColor: colors.accent, backgroundColor: colors.border },
   dot: { flexShrink: 0, width: "0.5rem", height: "0.5rem", borderRadius: "50%" },
   onLive: { backgroundColor: colors.live },
+  // The amoeba draws itself in `currentColor`, so what it wants here is ink
+  // and not the fill the dot swatches beside it are painted with.
+  mark: { display: "inline-flex", alignItems: "center", color: colors.live },
+  markWaiting: { display: "inline-flex", alignItems: "center", color: colors.waiting },
   onWaiting: { backgroundColor: colors.waiting },
   onReady: { backgroundColor: colors.ready },
   slot: { display: "flex", width: "1rem", justifyContent: "center", flexShrink: 0 },
@@ -1067,6 +1072,10 @@ export function StyleGuide() {
   const system = useColorScheme();
   const scheme = appearance === "system" ? system : appearance;
   const [chosen, setChosen] = useState<"opus" | "sonnet">("opus");
+  // The amoeba's two states, so the *transition* between them can be looked
+  // at. Every other specimen on this page is a still thing drawn at rest; the
+  // one thing this mark is for is what it does on the way between.
+  const [crawling, setCrawling] = useState(true);
 
   return (
     <div {...stylex.props(themeFor(appearance), typeset.prose, styles.screen)}>
@@ -1294,6 +1303,34 @@ export function StyleGuide() {
                     placeholder="address"
                     {...stylex.props(styles.field)}
                   />
+                </Case>
+
+                {/* The one mark in the window that cannot be a screenshot, and
+                    therefore the one most worth having a fixture for: `working`
+                    needs an agent mid-turn to see at all, and `working, unread`
+                    needs one that answered while somebody was looking away. */}
+                <Case name="amoeba" wide>
+                  <button
+                    type="button"
+                    // Pressable, because the whole of what was asked for here
+                    // is the *transition* between two of these — and a page
+                    // that draws both at rest shows every state and none of
+                    // the movement between them.
+                    onClick={() => setCrawling((on) => !on)}
+                    {...stylex.props(styles.quiet)}
+                  >
+                    {crawling ? "settle" : "set to work"}
+                  </button>
+                  <span {...stylex.props(styles.mark)}>
+                    <Amoeba crawling={crawling} unread={false} />
+                  </span>
+                  <span {...stylex.props(styles.t14)}>{crawling ? "working" : "idle"}</span>
+                  <span {...stylex.props(styles.markWaiting)}>
+                    <Amoeba crawling={crawling} unread />
+                  </span>
+                  <span {...stylex.props(styles.t14)}>
+                    {crawling ? "working, unread" : "waiting, unread"}
+                  </span>
                 </Case>
 
                 <Case name="status dot">

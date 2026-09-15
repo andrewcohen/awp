@@ -7,6 +7,7 @@ import { useMemo, useState } from "react";
 import { useThreadMenu } from "./ArchiveThread";
 import { More, RightClick } from "./menus";
 import { useWorkspaceMenu } from "./ReclaimWorkspace";
+import { Amoeba } from "./Amoeba";
 import { type Facts, factsKey } from "./useFacts";
 import {
   rememberFolded,
@@ -21,6 +22,7 @@ import {
   type ThreadGroup,
   type Workspace,
   groupByThread,
+  headingless,
   groupByWorkspace,
   openable,
   prIn,
@@ -349,7 +351,19 @@ const styles = stylex.create({
   // A bullet rather than text, so it is sized by eye against the row's name
   // rather than from the type scale — but it still has to move when that scale
   // does, which is why this number changed with it.
-  dot: { width: "0.85rem", flexShrink: 0, fontSize: 10, color: colors.muted },
+  dot: {
+    width: "0.85rem",
+    flexShrink: 0,
+    fontSize: 10,
+    color: colors.muted,
+    // The hue is the state, so a state change is a hue change — and five
+    // colours that cut straight to one another is the flick this strip was
+    // reported for. It is the one property here the mark itself cannot carry:
+    // `Amoeba` draws in `currentColor` precisely so this stays the caller's.
+    transitionProperty: "color",
+    transitionDuration: { default: timing.enter, "@media (prefers-reduced-motion: reduce)": "0s" },
+    transitionTimingFunction: timing.ease,
+  },
   // One per state, and named for the state rather than the colour so a theme
   // can move them. `exited` deliberately has none: a session that ended is what
   // the muted default already says, and giving it a hue would put a colour on
@@ -359,13 +373,18 @@ const styles = stylex.create({
   /**
    * A dot that is doing something, breathing.
    *
-   * ── the two states that are about *now* ────────────────────────────────
+   * ── waiting only, since `working` grew a body ──────────────────────────
    *
    * This strip is a set of hues that are all equally still, so `working`
-   * and `idle` differ only by a colour somebody has to have learned. A dot
-   * that moves is the one thing on the strip that cannot be a screenshot —
-   * and the two states worth spending it on are the two that will change on
-   * their own: an agent working, and an agent waiting for a person.
+   * and `idle` differed only by a colour somebody has to have learned. A
+   * mark that moves is the one thing on the strip that cannot be a
+   * screenshot, and it was spent on both of the states that change on their
+   * own — an agent working, and an agent waiting for a person.
+   *
+   * Which made the two of them move *identically*, so the thing that could
+   * not be a screenshot still could not be told apart. `working` is an
+   * `Amoeba` now and this is what is left: a person is being waited on, and
+   * that is the one state on the strip somebody has to act on.
    *
    * Opacity and scale rather than a colour cycle: the hue is already
    * carrying the state, and a hue that changes would be a second claim.
@@ -457,19 +476,15 @@ const styles = stylex.create({
   reason: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
 });
 
-/**
- * The glyph for a state, and the state's own name for a screen reader.
- *
- * Two facts on one mark: the *hue* is the state, and the *shape* is whether it
- * has been read. That pairing is deliberate — a colour alone excludes anyone
- * who cannot see the difference between the amber and the green, and a shape
- * alone would need five of them, which is a legend nobody has.
- *
- *   ● working · idle · exited      seen
- *   ◉ waiting · error, unread      not seen, and drawn as a ring so it is
- *                                  distinguishable without the hue
- */
-const GLYPH = { seen: "●", unseen: "◉" } as const;
+// Two facts on one mark: the *hue* is the state, and the *shape* is whether it
+// has been read. That pairing is deliberate — a colour alone excludes anyone
+// who cannot see the difference between the amber and the green, and a shape
+// alone would need five of them, which is a legend nobody has.
+//
+// Both are `Amoeba` now, and there is no glyph table left. `●` and `◉` were
+// literals here for as long as the mark was text; a state change was then a
+// change of *text node*, which nothing can transition. The same two shapes are
+// a border-radius and a fill on one element, which can.
 
 const DOT: Record<WorkspaceStatus, { readonly style: stylex.StyleXStyles; readonly say: string }> =
   {
@@ -497,9 +512,12 @@ const Dot = ({
   const known = status === undefined ? undefined : DOT[status];
   const style = known?.style ?? (live ? styles.dotWorking : styles.dotIdle);
   const say = known?.say ?? (live ? "running" : "not running");
-  // The two states that are about *now* rather than about how a checkout
-  // was left. See `breathing`.
-  const moving = status === "working" || status === "waiting";
+  // An agent working right now, and only that. A workspace nothing has
+  // reported on falls back to "something is live", which is most rows on a
+  // real machine — see `Amoeba` on why the shape is not spent there.
+  const crawling = status === "working";
+  // What is left of the pair that used to move. See `breathing`.
+  const moving = status === "waiting";
 
   return (
     <span
@@ -514,7 +532,7 @@ const Dot = ({
         known === undefined && unread && styles.dotUnknownUnread,
       )}
     >
-      {unread ? GLYPH.unseen : GLYPH.seen}
+      <Amoeba crawling={crawling} unread={unread} />
     </span>
   );
 };
@@ -871,6 +889,7 @@ function Group({
   onOpen,
   folded,
   onFold,
+  alone,
   onThreadsChanged,
 }: {
   readonly group: ThreadGroup;
@@ -890,6 +909,13 @@ function Group({
    * fold with no heading has no control to live on.
    */
   readonly onFold: (() => void) | undefined;
+  /**
+   * The only group there is, so its heading names nothing.
+   *
+   * See the note over the loose heading: a grouping is a statement about which
+   * of several a row is in, and with one group there is no several.
+   */
+  readonly alone: boolean;
 }) {
   // Hover on the heading, tracked here for the same reason `Row` tracks its
   // own: the control is in a child component, and `:hover` on a parent cannot
@@ -913,6 +939,46 @@ function Group({
   // unconditionally with a possibly-absent thread, because the loose group has
   // none and a hook cannot be skipped.
   const menu = useThreadMenu({ thread: group.thread, onChanged: onThreadsChanged });
+
+  // ── the only group names nothing, so it draws no heading ────────────────
+  //
+  // `not in a thread` is a distinction, and a distinction needs something to
+  // be distinct *from*. With no threads at all every workspace is loose, so
+  // the heading, the count and the caret are three pieces of chrome over a
+  // list that is simply the sidebar — and `not in a thread` reads as a fault
+  // rather than as a category, because there is no thread anywhere to be in.
+  //
+  // The same argument as the rule below it, one level up: the grouping is
+  // drawn where there is grouping to see. A single thread keeps its heading —
+  // a title is the name of the work and says something a row cannot — and this
+  // is only ever the derived group, which has no name of its own.
+  //
+  // **Forced open, and that is not a detail.** The loose group is shut until
+  // opened and remembers that across launches, so dropping its heading without
+  // this hides every row behind a control that is no longer drawn: an empty
+  // sidebar, on the one machine state where it holds everything. The caller
+  // passes `folded={false}` for the same reason; both halves are needed
+  // because either alone is the bug.
+  if (alone) {
+    return (
+      <div {...stylex.props(styles.group)}>
+        {group.workspaces.map((workspace) => (
+          <Row
+            key={workspace.key}
+            workspace={workspace}
+            facts={factsFor(facts, workspace)}
+            title={undefined}
+            selected={selected}
+            at={at}
+            onSelect={onSelect}
+            onOpen={onOpen}
+            thread={undefined}
+            onThreadsChanged={onThreadsChanged}
+          />
+        ))}
+      </div>
+    );
+  }
 
   // ── one workspace is not a group ─────────────────────────────────────────
   //
@@ -1150,6 +1216,8 @@ export function Sidebar({
     (workspace) => factsFor(facts, workspace)?.status,
     when,
   );
+  // Whether the one group there is draws a heading — see `headingless`.
+  const bare = headingless(groups);
   const [looseOpen, setLooseOpen] = useState(rememberedLooseOpen);
 
   // ── the folded threads, by id ────────────────────────────────────────────
@@ -1190,7 +1258,10 @@ export function Sidebar({
               onSelect={onSelect}
               onOpen={onOpen}
               onThreadsChanged={onThreadsChanged}
-              folded={isLoose ? !looseOpen : folded.has(id)}
+              alone={bare}
+              // Never folded when it is the only group: its heading is not
+              // drawn, so there would be no control left to open it with.
+              folded={isLoose ? !bare && !looseOpen : folded.has(id)}
               onFold={
                 isLoose
                   ? () =>
