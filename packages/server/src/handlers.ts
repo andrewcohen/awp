@@ -38,7 +38,7 @@ import {
 } from "@awp-kit/protocol";
 import { homedir } from "node:os";
 import { basename } from "node:path";
-import { Clock, Effect, FileSystem, Option, Path, Schema, Stream } from "effect";
+import { Clock, Effect, FileSystem, Option, Path, Ref, Schema, Stream } from "effect";
 import { Chat } from "./chat";
 import { Faces } from "./faces";
 import { InboxFeed } from "./inbox-feed";
@@ -58,7 +58,7 @@ import { Reviews, commentId } from "./reviews";
 import { WorkspaceState } from "./workspace-state";
 import { Threads } from "./threads";
 import { type Task as StoredTask, Tasks } from "./tasks";
-import { make as taskFeedOf, todoPrefix } from "./task-feed";
+import { make as taskFeedOf, projectPrefix, settled } from "./task-feed";
 
 /**
  * A stored task, as the contract has it.
@@ -786,6 +786,35 @@ export const layer = AwpRpcs.toLayer(
           Effect.orElseSucceed(() => []),
         ),
     });
+
+    /**
+     * A turn ending is when the files an agent was editing have settled.
+     *
+     * The one trigger that fires *because of* the thing that changed the list,
+     * rather than in spite of it: a `TODO.md` rewritten mid-turn is rewritten
+     * again a moment later, and a sweep taken then reads a half-written file.
+     * The sweep behind a read and the timer behind a watcher both still exist —
+     * this covers the case the panel was reported from, which is an agent in
+     * this window rewriting the list while somebody watches it.
+     *
+     * Forked and detached, because it outlives every request: it is a property
+     * of the daemon, not of whoever happened to ask first. A workspace leaving
+     * `working` is the edge — `waiting` is a turn stopping to ask a question,
+     * which is also a moment the files have settled.
+     */
+    const lastStatuses = yield* Ref.make<ReadonlyMap<string, WorkspaceStatus>>(new Map());
+    yield* Effect.forkDetach(
+      Effect.ignore(
+        Stream.runForEach(chat.statuses(), (now) =>
+          Effect.gen(function* () {
+            const before = yield* Ref.getAndSet(lastStatuses, now);
+            if (settled(before, now)) {
+              yield* taskFeed.nudge();
+            }
+          }),
+        ),
+      ),
+    );
 
     return {
       // No declared error, so a failure here is a defect. That is the honest
@@ -1983,6 +2012,16 @@ export const layer = AwpRpcs.toLayer(
       TaskBoard: ({ tags, statuses }) =>
         taskFeed.read({ tags, statuses }).pipe(Effect.map((all) => all.map(onTheWire))),
 
+      /**
+       * A nudge whenever a sweep found the sources saying something different.
+       *
+       * Subscribing is also what starts the sweeping — see `task-feed.ts`. That
+       * is why this has no payload: the timer is one per daemon and serves every
+       * client at once, where the old arrangement was a four second poll per
+       * open panel, each of them reading every project's files for itself.
+       */
+      TaskChanges: () => taskFeed.changes(),
+
       ProjectList: () => allProjects(),
 
       /**
@@ -2118,7 +2157,14 @@ export const layer = AwpRpcs.toLayer(
           // way, and a store that would not let go of its rows is not a reason
           // to report that it was not. The next sweep cannot reach them, which
           // is the condition this is preventing rather than one it creates.
-          yield* tasks.ingest("todo", todoPrefix(name), []).pipe(Effect.ignore);
+          // Once per source: a project's rows are written by the `TODO.md`
+          // reader and by Claude Code's per-workspace lists, and ingest is
+          // scoped by `(source, prefix)`. Releasing one of the two would leave
+          // the other's rows behind under a prefix nothing will name again,
+          // which is the condition this exists to prevent.
+          for (const source of ["todo", "claude"] as const) {
+            yield* tasks.ingest(source, projectPrefix(name), []).pipe(Effect.ignore);
+          }
           return had;
         }),
 

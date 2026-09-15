@@ -8,6 +8,7 @@ import {
 import type {
   AgentTask,
   Task,
+  TaskChange,
   ChatConfigOption,
   ChatDelivery,
   ChatUpdate,
@@ -744,6 +745,20 @@ export const listTasks = (from: string): Promise<ReadonlyArray<AgentTask>> =>
 export const listBoard = (tags?: ReadonlyArray<string>): Promise<ReadonlyArray<Task>> =>
   runtime.runPromise(
     Effect.flatMap(AwpClient, (rpc) => rpc.TaskBoard(tags === undefined ? {} : { tags })),
+  );
+
+/**
+ * Every sweep of the task sources that changed something, from now.
+ *
+ * A nudge and not a listing — the daemon does not know which tags this panel is
+ * narrowing by, so what arrives is "something moved" and the panel re-asks with
+ * its own filter. Holding this is also what makes the daemon sweep at all: the
+ * sources are files nothing here writes, so nobody watching means nothing to
+ * look for. See `task-feed.ts`.
+ */
+export const watchTasks = (onChange: (change: TaskChange) => void): (() => void) =>
+  subscribe((rpc) =>
+    Stream.runForEach(rpc.TaskChanges(), (change) => Effect.sync(() => onChange(change))),
   );
 
 /**

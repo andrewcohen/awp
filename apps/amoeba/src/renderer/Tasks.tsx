@@ -1,7 +1,7 @@
-import type { AgentTask, Task } from "@awp-kit/protocol";
+import type { Task } from "@awp-kit/protocol";
 import * as stylex from "@stylexjs/stylex";
 import { useEffect, useRef, useState } from "react";
-import { listBoard, listTasks, sendTask } from "./daemon";
+import { listBoard, onReconnect, sendTask, watchTasks } from "./daemon";
 import { Markdown } from "./Markdown";
 import { type Listed, merge } from "./tasklist";
 import { typeset } from "./typeset";
@@ -41,12 +41,22 @@ import { colors, space, text } from "./tokens.stylex";
 // clicked. That makes the panel a list of titles, which is what it should have
 // been, and the reading of one task a deliberate act.
 //
-// ── two sources, one list ──────────────────────────────────────────────────
+// ── one read, and a stream instead of a poll ───────────────────────────────
 //
-// The session's list is not the only one any more. `TaskBoard` answers what
-// awp itself holds — a project's TODO.md, tagged and durable — and the two are
-// drawn as one queue with the source as a mark on the row. `tasklist.ts` says
-// why one list rather than two sections, and why nothing is deduplicated.
+// This panel used to make two reads on a four second timer: the session's own
+// list by directory, and the board. Both halves are gone.
+//
+//   the second read   the daemon ingests Claude Code's lists now, so an
+//                     agent's queue IS a board row — read twice, it drew twice
+//   the timer         `TaskChanges`. The sources are files nothing here
+//                     writes, so the sweep belongs where one timer can serve
+//                     every client rather than one per open panel
+//
+// Subscribing is also what makes the daemon sweep at all, which is why the
+// subscription is the panel's own rather than the window's: a hidden tab is
+// unmounted, and a panel nobody is looking at should not be paying for a disk
+// read of every project. The opposite of `usePages`, and for the opposite
+// reason — nothing arrives here that somebody is not already looking at.
 //
 // The board needs no directory, which changes what an empty panel means: a
 // workspace with nothing running still has tasks written down about it, so
@@ -60,11 +70,25 @@ import { colors, space, text } from "./tokens.stylex";
 // under everything that no longer does. The header says how many there are,
 // which is the whole of what a completed task is still good for.
 
-/** How often the list is taken again while the panel is open. */
-const POLL_MS = 4000;
+/**
+ * How wide the question is.
+ *
+ * Three, and the middle one is the default for the reason it always was: a
+ * column beside a checkout is usually asked about that checkout's project.
+ * `checkout` is new and is what the session's own list used to be — the agent
+ * in *this* directory and nothing else — which had no name while it was a
+ * separate read.
+ */
+type Scope = "checkout" | "project" | "everywhere";
+
+const NEXT: Record<Scope, Scope> = {
+  checkout: "project",
+  project: "everywhere",
+  everywhere: "checkout",
+};
 
 /** Whether two listings differ in anything that would change a pixel. */
-const same = (a: ReadonlyArray<AgentTask>, b: ReadonlyArray<AgentTask>): boolean =>
+const same = (a: ReadonlyArray<Task>, b: ReadonlyArray<Task>): boolean =>
   a.length === b.length &&
   a.every((one, at) => {
     const other = b[at];
@@ -294,89 +318,78 @@ export interface TasksProps {
 }
 
 export function Tasks({ dir, project, workspace }: TasksProps) {
-  const [tasks, setTasks] = useState<ReadonlyArray<AgentTask>>([]);
   const [board, setBoard] = useState<ReadonlyArray<Task>>([]);
   const [asked, setAsked] = useState(false);
   const [states, setStates] = useState<Record<string, RowProps["state"]>>({});
-  // ── scoped to this project, or everywhere ────────────────────────────────
+  // ── how wide the question is ─────────────────────────────────────────────
   //
-  // Both are real questions and the store answers both with one argument, so
-  // this is a control rather than a fixed choice. `project` is the default
-  // because a column beside a checkout is usually asked about that checkout —
-  // and `everywhere` is the reason the store exists at all, so it cannot be
-  // the thing nobody can reach.
-  const [everywhere, setEverywhere] = useState(false);
-  const held = useRef<ReadonlyArray<AgentTask>>([]);
+  // A control rather than a fixed choice, because all three are real questions
+  // and the store answers them with one argument. `project` is the default; it
+  // narrows to this checkout, which is what the agent's own list used to be,
+  // and widens to everywhere, which is the reason the store exists at all.
+  const [scope, setScope] = useState<Scope>("project");
+  const held = useRef<ReadonlyArray<Task>>([]);
 
-  // Read on mount, then again on a timer.
+  // Which tags that scope is, and the fallback when there is nothing to scope
+  // by: a window with no session open has no project, and the honest answer
+  // there is everything rather than nothing.
+  const tags =
+    scope === "everywhere" || project === undefined
+      ? undefined
+      : scope === "checkout" && workspace !== undefined
+        ? [`workspace:${project}/${workspace}`]
+        : [`project:${project}`];
+
+  // Read on mount and on a nudge, never on a timer.
   //
-  // A poll, unlike the diff panel next door, and the difference is what the
-  // thing being watched is. A diff changes when the *workspace* changes, which
-  // the daemon already watches and pushes. A task list changes because the
-  // agent decided something — there is nothing on disk to watch that is not
-  // this same directory, and no event to subscribe to. So it is asked again.
+  // `watchTasks` is a stream of "a sweep changed something", and holding it is
+  // what makes the daemon sweep — so a panel nobody is looking at is a panel
+  // that costs nothing, which a timer in here could not manage.
   //
-  // Only while the panel is mounted, which Base UI makes cheap: a hidden tab
-  // is unmounted, so a panel nobody is looking at is not polling.
-  //
-  // The board is asked on the same tick and is nearly free: the daemon answers
-  // from its store and forks the re-read of the files behind the reply, which
-  // is the whole reason `TaskBoard` is shaped that way.
+  // And a stream carries changes from *now*, so the socket coming back has to
+  // re-ask: everything that moved while it was down was carried nowhere at
+  // all. The same rule the jobs hook learned the expensive way.
   useEffect(() => {
     let live = true;
     const take = () => {
-      const scope = everywhere || project === undefined ? undefined : [`project:${project}`];
-      listBoard(scope)
-        .then((got) => {
-          if (live) {
-            setBoard(got);
-            setAsked(true);
-          }
-        })
-        .catch(() => {
-          // An older daemon has no `TaskBoard` at all, and the session's list
-          // is still worth drawing. The bar says when the daemon is gone.
-          if (live) {
-            setAsked(true);
-          }
-        });
-
-      if (dir === undefined) {
-        setTasks([]);
-        setAsked(true);
-        return;
-      }
-      listTasks(dir)
+      listBoard(tags)
         .then((got) => {
           if (!live) {
             return;
           }
           setAsked(true);
-          // Compared before it is stored, or every tick replaces the array and
-          // re-renders a list that has not changed — which on an open row also
-          // costs the description's layout.
+          // Compared before it is stored, or every nudge replaces the array
+          // and re-renders a list that has not changed — which on an open row
+          // also costs the description's layout.
           if (!same(held.current, got)) {
             held.current = got;
-            setTasks(got);
+            setBoard(got);
           }
         })
         .catch(() => {
-          // The daemon is gone. The bar already says so, and the last good
-          // list is better than an error in its place.
+          // An older daemon has no `TaskBoard` at all, and the bar already
+          // says when the daemon is gone. The last good list beats an error
+          // drawn in its place.
           if (live) {
             setAsked(true);
           }
         });
     };
     take();
-    const timer = setInterval(take, POLL_MS);
+    const stop = watchTasks(() => take());
+    const again = onReconnect(take);
     return () => {
       live = false;
-      clearInterval(timer);
+      stop();
+      again();
     };
-  }, [dir, project, everywhere]);
+    // `tags` is derived from the three below and rebuilt every render, so it
+    // is deliberately not a dependency: listing it would resubscribe the
+    // stream on every render of the panel.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project, workspace, scope]);
 
-  const { rows, done } = merge(tasks, board);
+  const { rows, done } = merge(board);
 
   const send = (task: Listed) => {
     if (project === undefined || workspace === undefined) {
@@ -401,16 +414,28 @@ export function Tasks({ dir, project, workspace }: TasksProps) {
           <button
             type="button"
             data-nav-item
-            aria-pressed={everywhere}
             title={
-              everywhere
-                ? `show only ${project}'s tasks`
-                : "show every project's tasks, not just this one"
+              scope === "checkout"
+                ? `showing this checkout's own list — press for all of ${project}`
+                : scope === "project"
+                  ? `showing ${project} — press for every project`
+                  : "showing every project — press for this checkout"
             }
-            onClick={() => setEverywhere((was) => !was)}
+            onClick={() =>
+              setScope((was) =>
+                // A checkout to scope to is not always there: with nothing
+                // open there is no workspace, and a scope naming one would
+                // answer nothing with no way to say why.
+                NEXT[was] === "checkout" && workspace === undefined ? "project" : NEXT[was],
+              )
+            }
             {...stylex.props(typeset.address, styles.scope)}
           >
-            {everywhere ? "everywhere" : project}
+            {scope === "checkout"
+              ? (workspace ?? project)
+              : scope === "project"
+                ? project
+                : "everywhere"}
           </button>
         )}
       </div>
@@ -433,7 +458,7 @@ export function Tasks({ dir, project, workspace }: TasksProps) {
           <p {...stylex.props(styles.note)}>
             {dir === undefined
               ? "Nothing written down yet. A project's TODO.md is read into this list."
-              : "No outstanding tasks — neither the agent's own list nor anything written down."}
+              : "No outstanding tasks — neither an agent's own list nor anything written down."}
           </p>
         ) : undefined}
       </div>

@@ -242,6 +242,22 @@ export const Task = Schema.Struct({
 });
 export type Task = (typeof Task)["Type"];
 
+/**
+ * What a sweep of the task sources changed.
+ *
+ * Counts rather than rows — see {@link Rpc TaskChanges} for why the listing is
+ * asked for rather than pushed. `at` is on it for the same reason `Page.at` is:
+ * two sweeps that changed the same number of rows are two events, and a client
+ * that could not tell them apart would treat a second one as no news.
+ */
+export const TaskChange = Schema.Struct({
+  added: Schema.Number,
+  changed: Schema.Number,
+  removed: Schema.Number,
+  at: Schema.Number,
+});
+export type TaskChange = (typeof TaskChange)["Type"];
+
 export const Project = Schema.Struct({
   /**
    * The repository directory's basename, and the project's whole identity.
@@ -2674,6 +2690,34 @@ export class AwpRpcs extends RpcGroup.make(
       statuses: Schema.optional(Schema.Array(Schema.String)),
     },
     success: Schema.Array(Task),
+  }),
+
+  /**
+   * A sweep found the sources saying something different.
+   *
+   * A nudge and not a listing, deliberately. The panel narrows by tag and by
+   * status and the daemon does not know which filter a given client is holding,
+   * so a push carrying rows would be a push most clients would have to correct.
+   * What is carried instead is what changed and how much, which is enough to
+   * decide whether to re-ask — and the counts make a silent stream tellable
+   * from a stream nothing is listening to.
+   *
+   * Nothing is replayed. This is an event, the same argument
+   * {@link Rpc PageChanges} makes: what a client that has just connected wants
+   * is the listing, which it asks for. And the rule that goes with it — a
+   * stream carries changes from *now* — means a client has to re-ask on
+   * reconnect as well, or it is up to date on everything except what it missed.
+   *
+   * **Subscribing is also what makes the sweep run.** The sources are files
+   * nothing here writes: a `TODO.md` an agent edited in some checkout, and
+   * Claude Code's own per-session lists. There is no event to hang this on, so
+   * the daemon sweeps on a slow timer for as long as anybody is watching, and
+   * once more whenever a turn ends — which is the moment the files an agent was
+   * editing have settled.
+   */
+  Rpc.make("TaskChanges", {
+    success: TaskChange,
+    stream: true,
   }),
 
   /**

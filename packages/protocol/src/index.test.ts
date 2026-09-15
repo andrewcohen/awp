@@ -258,6 +258,7 @@ const handlers = AwpRpcs.toLayer({
   JobLog: () => Effect.succeed(["a line"]),
   TaskList: () => Effect.succeed([task]),
   TaskBoard: () => Effect.succeed([]),
+  TaskChanges: () => Stream.empty,
   TaskSend: () => Effect.succeed("— a task from this workspace's list"),
   JobRetry: () => Effect.succeed(job),
   JobCancel: () => Effect.void,
