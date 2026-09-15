@@ -7,13 +7,17 @@
 // *behind* the answer, so a cold first read is legitimately empty and looks
 // exactly like a failure.
 //
+// Two sources now, and the count per source is the line worth reading: a
+// machine where Claude Code keeps no list anywhere and a reader that finds
+// none of them produce exactly the same board.
+//
 //     bun run probe:tasks                      the default daemon
 //     bun run probe:tasks ws://127.0.0.1:5284  a second instance
 //
 // Every call is a question. The sweep it starts writes to the tasks tables and
 // to nothing else, and what it writes is whatever the files already say.
 
-import { Effect } from "effect";
+import { Effect, Result } from "effect";
 import * as client from "@awp-kit/protocol/client";
 
 const url = process.argv[2] ?? client.DEFAULT_DAEMON_URL;
@@ -43,6 +47,17 @@ const program = Effect.gen(function* () {
     console.log(`    ${task.id}  [${task.status}]  ${task.subject.slice(0, 60)}`);
   }
 
+  // Per source, because `todo` working and `claude` finding nothing is a
+  // board that looks entirely healthy. Counted on this machine when the second
+  // source landed: 59 workspaces swept, four of them keeping a list.
+  const bySource = new Map<string, number>();
+  for (const task of warm) {
+    bySource.set(task.source, (bySource.get(task.source) ?? 0) + 1);
+  }
+  console.log(
+    `  by source     ${[...bySource].map(([source, n]) => `${source} ${n}`).join(" · ") || "none"}`,
+  );
+
   const tagged = yield* rpc.TaskBoard({ tags: ["project:awp"] });
   console.log(`  project:awp   ${tagged.length} task(s)`);
 
@@ -58,6 +73,35 @@ const program = Effect.gen(function* () {
   console.log(
     `  longest body  ${longest === undefined ? "none" : `${longest.description.length} chars on ${longest.id}`}`,
   );
+
+  // The writing half, end to end and cleaned up after. Written, moved, tagged,
+  // then forgotten — so running this twice does not leave a row behind in
+  // somebody's board, which is the rule `probe:mcp` follows for the finding it
+  // files.
+  const made = yield* rpc.TaskAdd({
+    subject: "probe: written by probe:tasks",
+    description: "removed again before this probe exits",
+    status: "pending",
+    tags: ["project:awp"],
+  });
+  const moved = yield* rpc.TaskStatus({ id: made.id, status: "in_progress" });
+  const held = yield* rpc.TaskTag({ id: made.id, tag: "probe", on: true });
+  console.log(`  wrote         ${made.id}  [${moved.status}]  tags ${held.tags.join(", ")}`);
+
+  // The refusal, against a row that came from a file. It is the whole reason
+  // the panel's dot is a mark rather than a button for those, so a probe that
+  // never saw it would be checking the easy half.
+  const copied = warm.find((task) => task.source !== "awp");
+  if (copied !== undefined) {
+    const refused = yield* Effect.result(rpc.TaskStatus({ id: copied.id, status: "completed" }));
+    console.log(
+      `  refused       ${Result.isSuccess(refused) ? "NOT REFUSED — a copied task moved" : refused.failure.reason}`,
+    );
+  }
+
+  yield* rpc.TaskForget({ id: made.id });
+  const after = yield* rpc.TaskBoard({ tags: ["probe"] });
+  console.log(`  cleaned up    ${after.length === 0 ? "yes" : `NO — ${after.length} left`}`);
 });
 
 await Effect.runPromise(Effect.scoped(program).pipe(Effect.provide(client.layerClient(url))));
