@@ -9,15 +9,28 @@ paragraphs — what was measured, what was tried and did not work, and which
 choice is the one that matters. Read the body before starting, and update it
 rather than the summary when what you learn changes the shape of the work.
 
-Regenerated wholesale. Do not hand-edit a single entry expecting it to survive — change the task, then write this out again. `bun run fmt` reflows this file, so the sequence is regenerate, then format, then commit; skipping the format leaves a diff that turns up under somebody else's change.
+`bun run fmt` reflows this file, so the sequence is edit, then format, then commit; skipping the format leaves a diff that turns up under somebody else's change.
 
-46 open, 75 finished, as of 2026-09-08.
+44 open, as of 2026-09-15. The header said "46 open" while 51 entries were in
+the file, so the count is now taken from the entries rather than carried
+forward.
 
-Hand-edited rather than regenerated, for #111, #115, #118, #121, #124, #128, #129
-and the two #91 bullets they closed: the list they are regenerated from lives in a session that
-has ended. The next regeneration will overwrite this.
+Hand-edited rather than regenerated, and that is now the normal way this file
+changes: the session the list was regenerated from has ended.
 
-In progress: #91.
+Closed on 2026-09-15 as already finished, against the code rather than against
+memory: #57 (cmd+P, `Switcher.tsx`), #60 (the diff splitter's icon and its
+ease), #68 (a dropped file's path, `dropped.ts`), #74 (the Web Inspector
+collapse — obsolete, the shell is Electron), #81 (the new-thread brief grows,
+`grow.ts`), #84 (the style guide, at `#/styleguide`), #91 (the agent under ACP,
+whose own Left section already said "nothing of its own"), #96 (the diff's
+viewed marks) and #110 (the bug in them, fixed by the same state).
+
+Added on 2026-09-15, out of what closing the nine turned up: #130 (the panel
+has no way to learn a task changed) and #131 (a project off the list strands
+its tasks).
+
+In progress: #124.
 
 ---
 
@@ -87,31 +100,13 @@ The hard part is NOT the canvas. It is that a tldraw snapshot is shape records w
 
 Open questions recorded in the conversation: where the file lives, and how the agent is told the path.
 
-## 57. cmd+P: pick a thread
-
-A palette that jumps straight to a thread, and to a workspace within it. The sidebar already nests workspaces under threads, so the list exists; what is missing is a way to reach one without a pointer and without scrolling. Base UI's dialog and the existing address (/w/$project/$workspace/$kind) are both already there, so this is mostly a filter and a keyboard contract. Note the ctrl vs cmd split: cmd is free because the pane wants ctrl.
-
-**The first row is the thread you were last on, so cmd+P then Return is a
-toggle back.** That is the behaviour every editor's file picker has and the
-reason people press it without reading: the most likely destination is the one
-you just came from, not the one nearest the top of an alphabetical list.
-
-Which means the picker's default order is by recency of visit, not by name, and
-the window has to remember the previous address as well as the current one —
-one more value beside the route, and it has to survive a reload the way the
-current address already does.
-
 ## 58. cmd+shift+P: run an action
 
-The command half of the palette — everything the window can do, by name, with the keyboard: fold a column, start a thread, send a review, clear finished jobs, switch appearance, open a panel. Shares the dialog and the filtering with the thread picker (#57) and differs in what it lists and what choosing one does. Worth deciding early whether actions are a registry each feature adds to, or a list assembled in one place; the first is the only one that stays correct as features land.
+The command half of the palette — everything the window can do, by name, with the keyboard: fold a column, start a thread, send a review, clear finished jobs, switch appearance, open a panel. Shares the dialog and the filtering with the thread picker (`Switcher.tsx`, #57, done) and differs in what it lists and what choosing one does. Worth deciding early whether actions are a registry each feature adds to, or a list assembled in one place; the first is the only one that stays correct as features land.
 
 ## 59. cmd+comma: a configurator for settings that exist
 
 Settings are read from a config file by the daemon (Settings in packages/server) and there is no way to see or change one from the window. bookmark_prefix is the worked example: it decides what a thread branches from, it is invisible, and its absence silently changes behaviour (baseOfThread falls back to <name>@). A settings surface needs the contract to carry the settings both ways, which does not exist yet — so the first question is which settings are genuinely a person's to set, rather than building a form over whatever the file happens to hold.
-
-## 60. Give the diff's splitter the pane's icon, and let it animate
-
-The revision-list boundary in Diff.tsx uses CaretUp/CaretDown on its peg, where the column folds use SidebarSimpleIcon (mirrored for the other edge). Two controls that do the same job — fold the thing next to me — should read the same, so this wants the sidebar glyph turned ninety degrees. And it should move: folding a column eases over FOLD_MS with a reduced-motion opt-out (styles.eased in App.tsx), and the revision list snaps. Reuse the same duration and curve rather than picking new ones.
 
 ## 63. Run a workspace's services, and know which port each one took
 
@@ -228,30 +223,6 @@ So: a panel in the accessory column that reads the log for the selected session.
 
 Wanted alongside the services work — a dev server that exited on its own is exactly the case where the scrollback says nothing and the log says why.
 
-## 68. Dropping a file on the pane types its path
-
-Drag an image (or any file) onto the terminal and its path should arrive at the program, the way it does in every other terminal. Today the drop does nothing — or worse, the webview navigates to the file, which replaces the window with the image.
-
-Screenshots are the case this is actually wanted for, and they have a wrinkle of their own — see the last point.
-
-Three things this needs, and the third is the one that bites:
-
-- **`dragover` must be cancelled**, on the pane's host and probably on the window. A webview's default action for a dropped file is to navigate to it. Without `preventDefault` on `dragover` the drop event never fires at all, and without it on the window a miss outside the pane throws the whole renderer away.
-- **The path, not the contents.** `DataTransfer.files` gives a `File` with no path — the browser deliberately hides it. Electrobun's preload may expose one (`webkitRelativePath` is not it); if not, this needs a small addition on the native side, which is exactly what `apps/amoeba/src/bun` is for. Worth checking `event.dataTransfer.items` for a `text/uri-list` entry first, which carries a `file://` URL that resolves to a real path with no native help at all.
-- **Quote it.** A dropped path routinely has spaces — `~/Desktop/Screenshot 2026-08-27 at 16.04.11.png` — and typing that unquoted into a shell is two arguments. Shell-quote before sending, the same way a terminal that supports this does.
-
-**A macOS screenshot may not be a file yet.** Dragged from the floating thumbnail that appears in the corner after cmd+shift+4, it is a _promised_ file: the drag carries a promise the receiver has to accept before anything exists on disk, and there is no path to read. Dragged from Finder or the desktop after it has saved, it is an ordinary file and the routes above work.
-
-That is worth knowing before the feature is called broken. Two honest options: handle only real files and say nothing when there is no path — which quietly fails exactly the gesture somebody most wants — or accept the promise, write the bytes somewhere, and type _that_ path. The second means the window is now creating files on a person's disk, which needs a decided location and a decided lifetime, so it is a bigger question than it looks. Find out which kind of drag arrives before designing for either.
-
-Delivered through `Terminal.paste`, not `write`: paste wraps the text in bracketed-paste markers when the program has turned them on, which is what stops a path with a newline in it being run. Same reason `clipboard.ts` uses it. (Claude Code does enable bracketed paste — measured, `ESC[?2004h` is in the first line it writes.)
-
-Several paths at once is a real case (drag three screenshots) — join with spaces, each quoted.
-
-`packages/pane/src/` is where it goes, beside `clipboard.ts` and `dictation`, and for the same reason those are separate files: it is its own subject and does not belong in `terminal.ts`.
-
-Measured the way dictation was, because both failure modes are invisible from outside: a probe that dispatches a real `DragEvent` with a `DataTransfer` and counts what the emulator received. A drop that does nothing and a drop that navigated away look identical in a screenshot taken afterwards.
-
 ## 73. Get React DevTools attached to the window
 
 Yes, and the route is the one React Native uses rather than the browser extension — there is no extension mechanism in a WKWebView.
@@ -270,20 +241,6 @@ Two things to get right:
 Also worth having alongside, and cheaper: **Safari's Web Inspector can attach to the WKWebView** if the view is created inspectable. That gives DOM, console, network and the profiler — everything except the component tree — and needs no script and no dependency. Check whether electrobun sets `isInspectable` on the view and expose it in dev if it does not; on macOS 13.3+ it is off by default and nothing works without it.
 
 The two are complementary: Web Inspector for what the page is doing, React DevTools for what the tree is.
-
-## 74. The window collapses when Safari's Web Inspector docks
-
-Opening the Web Inspector against the app makes the whole window shrink and go very short. Devtools-only, so it blocks nothing that ships — but it blocks _inspecting_, which is the tool for everything else, so it is worth understanding rather than working around by leaving the inspector undocked.
-
-Candidates, in the order worth checking:
-
-- **The inspector docks inside the window and the layout is correct.** `html`, `body` and `#root` are `height: 100%`, so a shorter viewport gives a shorter app — which is right, and would look like this. Rule it out first by measuring `document.documentElement.clientHeight` with the inspector open and closed: if it dropped by roughly the inspector's height, nothing is wrong except the expectation.
-- **`100%` resolving against something that collapsed.** `100%` needs a definite height on every ancestor. `global.css` pins all three, so this should hold — but the moment one of them is `auto`, the chain resolves to content height and the window "gets really short" exactly as described. Check the computed height of each of the three, not just the root.
-- **Electrobun positioning the WKWebView by frame.** The window is `hiddenInset` and the native view is placed by the host. If the inspector changes the content bounds and nothing re-lays-out, the view keeps its old frame — which is the same class of bug as `OverlaySyncController.sync()` returning early on a zero rect, already documented for the web panel.
-
-Related and worth doing alongside: nothing exposes `isInspectable` today, so check how the inspector is being attached at all — on macOS 13.3+ a WKWebView is not inspectable unless the flag is set, and if electrobun sets it only in dev that is the switch to find. See #73.
-
-Measure with the probe rather than by eye: `page.evaluate` the computed heights of `html`, `body`, `#root` and the window's own `innerHeight`, since three of those can disagree and only one of them is what a screenshot shows.
 
 ## 75. Give every button a hover tip
 
@@ -311,31 +268,6 @@ Rules for what a tip says, so they are worth having:
 The catch is the patch, not the library. `jj diff --git` emits three lines of context, so expansion has nothing beyond that to reveal unless `loadDiffFiles: FileDiffContentsLoader` is supplied — a callback that fetches both whole sides of a changed file. That is a new RPC (file contents at a revision, both sides) plus the loader wiring, and it is the actual work here. Without it, expansion only reaches the ends of what the patch already carries.
 
 Also check whether the default `collapsedContextThreshold` already draws separators we are simply not noticing in a 200px column.
-
-## 81. Let the new-thread modal grow with the prompt
-
-The cmd+N dialog's textarea is a fixed height, so a long prompt scrolls inside a small box while most of the modal is empty. It should grow with the content, to a point.
-
-Bounded, not unbounded — a dialog taller than the window has nowhere to go, and Base UI's dialog does not scroll the viewport (see the no-top-level-scrollbar rule). So: `min-height` for the empty state, grow with content, `max-height` as a fraction of the window, and the textarea scrolls only past that.
-
-Autosizing a textarea has one honest implementation and several that look right and are not: measure `scrollHeight` after resetting `height` to `auto`, on input. A CSS-only approximation (a grid with a mirrored `::after` holding the same text) avoids the layout thrash and is worth trying first since the composer is already a controlled component with the text in hand.
-
-Was raised alongside "the modal a little small btw" — that one was fixed by widening to 46rem, and this is the other half.
-
-## 84. A style-guide panel, roughly a small Storybook
-
-A tab in the accessory column showing this window's own components in isolation: the sidebar row in each of its states, the buttons, the tab strip, the dialog, the error fallback, the tokens themselves.
-
-Why it fits here better than a real Storybook: the whole argument of `tokens.stylex.ts` is that a colour is only meaningful against the ground it is painted on, and this window paints two grounds (light and dark) and a third the pane draws for itself. A style guide rendered _in_ the window sees the real ones. A separate Storybook process would need the theme rebuilt beside it, which is a second copy of the thing being documented.
-
-It also gives the contrast measurements a home. `bun run` has no gate for them and the probe that found "our white theme is soo white" lives in a scratch directory — a panel that lists each token against its ground with the computed ratio would put that on screen instead, and would have shown the failure without anyone thinking to look.
-
-Notes before starting:
-
-- A hidden Base UI tab unmounts, so anything expensive must not live in the panel's own tree (the worker pool learned this).
-- Every state worth showing needs a fixture, and `fixture.ts` is already the model for that — it is built so each block fails visibly when a specific renderer fix is missing, which is the property to copy.
-- The pane cannot be shown here: one Terminal per window, and a second writes into freed memory (see the note at the top of `terminal.ts`).
-- Related: #75 wants a lint rule for button tooltips, and a panel that lists every button is where a person would notice one missing.
 
 ## 85. A second button on a task: start it in its own thread
 
@@ -414,53 +346,6 @@ Related to #41, the automatic version: nothing currently moves `andrew/<name>` f
 
 One thing already established while doing #70, which matters here: a remote bookmark appears in a commit's `json(bookmarks)` when it disagrees with local. Measured — `andrew/awp-kit-amoeba@git` sitting one commit behind shows up on its own commit, carrying `remote: "git"`. The revision list now filters those out, so anything this reads is local; a tug must not offer to move a name that only exists on a remote.
 
-## 91. Run the agent under ACP, not only in a terminal · in progress
-
-Today amoeba could reach an agent exactly one way: bytes down a pty. That is why the tasks panel reads files off disk rather than asking, why "what is the agent doing" (#42) is inferred from the process table, and why a workspace whose window is closed loses everything but a scrollback. A terminal is a picture of a conversation, not the conversation.
-
-## The spike, 2026-08-28
-
-Four throwaway sessions in temp directories. Both questions carried over from #37 are answered, and two more were found.
-
-**A session is a file, not a process.** SIGKILL twelve seconds into a running Bash loop; a fresh process, given the same id, replayed the history and answered from it.
-
-    process A   session/new → "remember chartreuse"   SIGKILL
-    process B   session/load  → replays 2 updates → "chartreuse"
-    process C   session/fork  → a NEW id, also "chartreuse"
-    process D   session/resume → replays 0 updates → "chartreuse"
-
-    descendants of the dead pid   0        nothing orphaned
-    the loop                      killed with it
-    the transcript                tool call started, never completed
-    asked afterwards              "it was never actually executed"
-
-So a restart costs the turn in flight, not the thread; there is nothing to daemonize under zmx, and a pty is the wrong pipe for line-delimited JSON-RPC anyway.
-
-**load replays, resume does not.** `load` sends the conversation back in the same update shape a live turn uses, so one renderer draws history and present alike.
-
-**Do not guess the transcript path — ask.** `agent-tasks.ts` composes `~/.claude/projects/<slug>/` from the path handed in; the real slug is built from the **resolved** path, so on macOS the guess missed `/private` and found nothing while the session sat plainly in `session/list`.
-
-**Tools are approved by a model unless the mode says otherwise.** `session/new` opens in `auto` — a classifier approving on the client's behalf. Six modes; in `default` (Manual) a read was not referred to the client and `rm` was, with reject_once / allow_once / allow_always.
-
-**A tool call is five updates sharing one id**, not one — pending with a generic title, then the command, then the output, then completed.
-
-## Landed
-
-`packages/server/src/chat.ts` — one adapter per workspace through an `RcMap`, released when the last window goes; `session/list` to find the session for a directory, `session/load` to open it, Manual mode set explicitly; permission requests carried out to a person and answered by id. `ChatOpen` / `ChatSend` / `ChatAnswer` on the wire, the first a stream. `bun run probe:chat` proves it against a real adapter: the word came back, five tool updates merged to one id, and a second process replayed what the first had said.
-
-`Chat.tsx` and `conversation.ts` — the panel and the fold, split because a file importing StyleX cannot be loaded by vitest. A toggle in the new-thread modal sets what a workspace opens as; one in the agent bar switches the workspace on screen. Both halves are always made, so the toggle chooses a view and never a capability.
-
-## Left
-
-Nothing of its own. What was here has landed: the turn boundary is on the wire,
-`chat_sessions` records one session per workspace, the panel renders markdown,
-`bun run acp:install` puts the adapter on a machine, and the terminal's own
-conversation can be opened in the chat by forking it — see the fork note in
-AGENTS.md, which is mostly a record of the two ways that goes wrong.
-
-One gap remains and it belongs to #102 rather than here: a fenced code block in
-the chat has no highlighting at all (`pre span` is 0 in a real window).
-
 ## 92. Add a task from the tasks panel
 
 The panel shows the agent's list and can hand one back. What it cannot do is put something _on_ it — so noticing a thing that needs doing while reading a diff means typing it at the agent in prose and hoping it lands as a task rather than as work started immediately.
@@ -480,7 +365,7 @@ The design question is the whole task, because the panel is deliberately read-on
                       model, may reword what was typed, and does nothing at all
                       if the agent is busy or gone.
 
-The second is the honest one today and the first becomes reasonable the moment #91 lands, because ACP would give a real channel instead of a file. Worth deciding rather than drifting: a composer that sometimes writes a file and sometimes types a sentence would be two features wearing one button.
+The second was the honest one before ACP landed (#91), which gives a real channel instead of a file. Worth deciding rather than drifting: a composer that sometimes writes a file and sometimes types a sentence would be two features wearing one button.
 
 Either way the panel needs a composer — a field at the head, or an "+" that opens one — and it should take a subject and an optional description, since a subject alone is what makes a task list unreadable a week later.
 
@@ -616,20 +501,6 @@ Still unexplained, and the next things to try:
 - whether a longer gap helps at all. Cheap to test now that there is a
   harness that does not lie: 0, 50, 150ms, twenty trials each.
 
-## 96. The diff panel should remember what has been viewed
-
-Reviewing fifteen files means losing your place fifteen times. The panel already knows which files are folded and which revision that was true of; what it does not know is which ones have been _read_, so coming back to a patch after an agent has pushed a change means starting from the top with no way to tell what is new.
-
-The mark itself: a per-file "viewed" state, shown on the file header, with a way to clear it. GitHub's checkbox is the shape everybody already knows, and the useful half is not the tick — it is that a viewed file auto-folds, so the list collapses down to what is left.
-
-Two decisions with real consequences:
-
-**What invalidates it.** A file marked viewed and then _changed by the agent_ is not viewed any more, and this is the whole value of the feature — it is what turns a diff panel into a review queue that drains. So the mark has to be keyed by content, not by path: the blob id from the patch's `index` line, or a hash of the file's hunks. Keyed by path alone it goes stale silently, which is worse than not having it, because it hides exactly the change a person needed to see.
-
-**Where it lives.** The fold state is already remembered per revision in the renderer (`remembered.ts`), and this could ride along — but a review survives a restart and a fold does not need to, and it is a claim about work rather than a UI preference. The threads store is where a durable one would go, alongside `ReviewComment`, which is already keyed by revision, path and side.
-
-Related: the existing `foldsFor(revision)` machinery is the thing to extend rather than duplicate, and #69 (diff the whole stack) changes what "a revision" means here, so the key should be able to survive that.
-
 ## 98. An open-or-create PR button in the diff head
 
 A diff is read to decide whether the work is ready, and the next thing after deciding it is is opening a pull request. Today that means leaving the window.
@@ -661,7 +532,7 @@ Open questions:
   a branch is a PR with one commit in it, which is the state this workspace
   was measured in at 51 commits behind.
 
-Related: the head row is now wanted by [[a side-by-side toggle on the diff panel]] (#95), [[the diff panel should remember what has been viewed]] (#96) and [[a pop-out file tree beside the patch]] (#97). This is the fourth, and it is the widest of them — a button with words in it rather than an icon. The row needs designing once, for all four.
+Related: the head row is now wanted by [[a side-by-side toggle on the diff panel]] (#95) and [[a pop-out file tree beside the patch]] (#97) — the viewed marks (#96) already landed in it. This is the fourth, and it is the widest of them — a button with words in it rather than an icon. The row needs designing once, for all four.
 
 ## 99. Separate with space and fill, not with rules
 
@@ -882,22 +753,6 @@ Two things particular to this panel:
                                   those are different features
 
 Per the keyboard mandate: cmd+F has to be claimed in the menu bar as well, or it is a key equivalent nothing owns — the same shape as the paste finding.
-
-## 110. A re-render reopens a file marked viewed
-
-Reported from a real window: marking a file viewed collapses it, and then a re-render expands it again.
-
-The collapse is a property of the rendered item, so anything that rebuilds the item takes it back to the renderer's default — which is the same shape as the finding already written down about a gesture:
-
-    a re-render is cheap
-    a re-render that changes an item's `version` is a REBUILD
-    a rebuild is what a collapsed item cannot survive
-
-So the fix is the same as the drag's: viewed-ness has to be state the panel holds and re-applies, not a side effect of one render. What makes this one worse than the drag is that the diff is pushed — a change in the workspace re-reads the patch — so the reopening happens on its own, without anybody touching the panel.
-
-To settle: whether "viewed" survives a change to the file itself. Marking a file viewed and then the agent editing it should probably un-mark it, since what was read is no longer what is there. That is the same question GitHub answers by dropping the viewed mark on a new commit.
-
-Related to the pending task about the diff panel remembering what has been viewed — this is the bug in what exists, that one is the persistence.
 
 ## 113. Dragging a divider near the top moves the window
 
@@ -1153,7 +1008,7 @@ Do not start this before the permission path has been exercised by hand: this
 moves execution into the daemon, and the daemon is the process holding a
 person's repositories.
 
-Related: #91 (the chat), #115 (config strip), #63 (running a
+Related: #91 (the chat, done), #115 (config strip), #63 (running a
 workspace's services — a different long-running-process problem with some of
 the same answers).
 
@@ -1394,3 +1249,111 @@ this repo has already half-made in one direction or the other:
 Open: whether the TUI keeps a diff at all — reading a patch is arguably a
 pop-in-and-out act — and whether "leave" should mean detach rather than
 quit, which is a zmx question and not a UI one.
+
+## 130. The tasks panel has no way to learn that a task changed
+
+Reported while closing nine finished tasks: the file said 42 and the pane went
+on saying 51. Half of that was #131 below; the other half is that **nothing
+tells this panel anything**.
+
+    jobs      JobChanges           a stream. A job changes on its own, so a
+                                   client that only asks misses everything
+    threads   no stream, on purpose A thread changes when a person changes it,
+                                   in this window, so the reply IS the update
+    tasks     no stream, by default ← and tasks are the jobs case, not the
+                                   threads case
+
+A task changes because **an agent edited `TODO.md` in a checkout**, which is
+neither this window nor anything it asked for. So the reply-is-the-update
+argument does not reach here, and the panel's only trigger today is being
+mounted — Base UI unmounts a hidden tab, so "look at the diff and come back"
+is the entire refresh mechanism.
+
+Two things are missing and they are not the same thing:
+
+    the trigger   the sweep runs BEHIND a read and nowhere else. With the panel
+                  open and an agent writing TODO.md beside it, no read happens,
+                  so no sweep happens, so there is nothing for a stream to
+                  carry. A stream added without this is a stream that is always
+                  silent
+    the stream    a `TaskChanges` the panel subscribes to. `ingest` already
+                  answers `{added, changed, removed}`, so the daemon already
+                  knows whether a sweep was worth announcing — push only when
+                  one of the three is non-zero, or every project's sweep is a
+                  push that redraws a list nobody changed
+
+For the trigger, the candidates and what each costs:
+
+    watch the files   `watch.ts` is the worked example. A watcher per project
+                      root plus per workspace, and TODO.md is a working-copy
+                      file so the set of paths moves
+    sweep on a timer  simplest, and wrong at both ends: too slow to feel live,
+                      too fast to be free when it is a disk read per project
+    sweep on the ACP  a turn ending is when a file an agent edited has settled.
+    turn boundary     Cheap — the daemon already folds that edge for the status
+                      dot — and it covers the case this was reported from,
+                      which is an agent in this window rewriting the list
+
+The third is the one worth measuring first: it is the only trigger that fires
+_because of the thing that changed the file_, rather than in spite of it.
+
+And the rule that AGENTS.md already states twice applies here before any of it
+is built: **a stream carries changes from now, so it is not a substitute for
+asking.** Whatever subscribes has to re-read on `onReconnect` as well, or it is
+up to date on everything except what it missed — which is exactly the shape
+that cost the sidebar a thread row during a socket outage.
+
+Related: #87 and #89 make this list long enough that a stale one is harder to
+notice, not easier.
+
+## 131. A project off the list strands its tasks, and nothing sweeps them
+
+Found underneath #130, and it is the half that made the panel wrong for nine
+days rather than for a moment.
+
+`ingest(source, keyPrefix, tasks)` is scoped by prefix so that reading one
+project's file cannot delete another's rows — which is right, and has a
+consequence nothing handles:
+
+    the sweep      one ingest per project in `allProjects()`
+    the prefix     `<project>#`
+    a project NOT  nothing ever names its prefix again, so its rows are
+    on that list   frozen at whatever the last sweep said — forever, and
+                   invisible, because they still answer every read
+
+Measured on 2026-09-15:
+
+    TODO.md          42 entries
+    tasks table      51 rows tagged project:awp
+    ProjectList      orchard · lantern          ← no awp
+    probe:tasks      cold 51 · warm 51     ← the sweep ran and changed nothing
+
+Importing `awp` fixed it in one call — `cold 42 · warm 42` on the next read —
+which is the repair for the symptom and not for the shape. The shape is that
+**a project leaving the list is a silent data event**, and `ProjectForget`'s
+own doc says forgetting "takes nothing with it", which is the right promise for
+workspaces and sessions and is currently a lie about tasks: it strands them.
+
+Three ways out, and they are genuinely different claims:
+
+    forget the rows too   ProjectForget deletes `<name>#` rows. Honest, and it
+                          throws away ids `awp_task` hands out
+    keep sweeping them    remember every prefix ever ingested and sweep it,
+                          which makes a forgotten project still read its file
+    mark them orphaned    the rows stay and the panel says so. The most work,
+                          and the only one that does not decide on a person's
+                          behalf
+
+**And the derived half is not producing anything**, which is how `awp` came to
+be off the list at all while its own session was running. Four sessions carry
+`awp_project=thicket` labels and `thicket` is not in `ProjectList` either:
+
+    zmx ls          awp.thicket.pr-2340.agent   awp_project=thicket  …  ×4
+    ProjectList     awp · orchard · lantern          ← imported only
+
+`allProjects()` derives a project from a session's `startDir` through
+`jj.sourceRoot`, and AGENTS.md's own argument for that path is that "a project
+with sessions still running simply reappears, derived". It does not. Whether
+that is `identities()` failing to recover the project, an empty `startDir`, or
+`sourceRoot` refusing the directory is unmeasured — and it is worth measuring
+first, because every one of those is a different file.
