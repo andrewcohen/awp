@@ -388,9 +388,23 @@ function Window() {
   // second tab per pull request is a strip nobody asked for.
   const openPr = prOf(here, threads);
 
-  // The checkout's directory when no session is carrying it. Asked only then —
+  // ── the session's directory, when it actually has one ───────────────────
+  //
+  // `open.startDir` and not `open !== undefined`, and the difference is a bug
+  // that shipped. A session reports its directory as a *string*, so a session
+  // without one reports `""` — and `??` does not catch an empty string, so
+  // `open?.startDir ?? elsewhere` handed the accessory column `dir=""` and the
+  // fallback never ran. The gate below made that unrecoverable: with a session
+  // open it said the answer was not needed, so nothing asked the daemon either.
+  //
+  // It was every session until `zmx-parse.ts` was taught which field zmx
+  // reports. That is fixed, and the guard stays: what this needs is a
+  // directory, and "a session exists" was always a proxy for it.
+  const carried = open?.startDir === "" ? undefined : open?.startDir;
+
+  // The checkout's directory when nothing is carrying one. Asked only then —
   // see `useWorkspaceDir`.
-  const elsewhere = useWorkspaceDir(here?.project, here?.workspace, open === undefined);
+  const elsewhere = useWorkspaceDir(here?.project, here?.workspace, carried === undefined);
 
   // The preference belongs to the workspace, and what is open changes under
   // it. Read on selection rather than kept in a map: localStorage already
@@ -859,7 +873,7 @@ function Window() {
                 // The session's own directory when there is one, and the
                 // workspace's otherwise — see `useWorkspaceDir`. A diff is a
                 // question about a checkout and needs no terminal in it.
-                dir={open?.startDir ?? elsewhere}
+                dir={carried ?? elsewhere}
                 project={here?.project}
                 workspace={here?.workspace}
                 scheme={scheme}
