@@ -58,7 +58,7 @@ import { Reviews, commentId } from "./reviews";
 import { WorkspaceState } from "./workspace-state";
 import { Threads } from "./threads";
 import { type Task as StoredTask, Tasks } from "./tasks";
-import { make as taskFeedOf } from "./task-feed";
+import { make as taskFeedOf, todoPrefix } from "./task-feed";
 
 /**
  * A stored task, as the contract has it.
@@ -720,23 +720,47 @@ export const layer = AwpRpcs.toLayer(
         const all = yield* mux.list().pipe(Effect.orDie);
         const found = identities(all);
 
-        // One entry per project, so the jj call below happens once per
-        // project rather than once per session — a machine with thirty
-        // sessions has perhaps four projects.
-        const dirs = new Map<string, string>();
+        // ── every candidate directory, not the first one ──────────────────
+        //
+        // One jj call per project was the point of collapsing these to a
+        // single directory, and it cost a whole project whenever the first
+        // session's directory happened not to resolve. Measured: five sessions
+        // in one project, the alphabetically first reporting its directory as
+        // a `file://` URL — so `sourceRoot` refused, the project was dropped,
+        // and every call that names it answered `awp knows no project called
+        // <name>` while four perfectly good checkouts sat in the listing.
+        //
+        // What that looked like from the window is two rooms away from the
+        // cause: a PR panel refusing to open, and a review that could not be
+        // started at all.
+        //
+        // So the candidates are kept in listing order and asked in turn, and
+        // the *first that resolves* wins. The cost is bounded by the same
+        // argument as before — a resolution ends the loop for that project, so
+        // the ordinary case is still one call each and only a project whose
+        // directories are broken pays for more.
+        const dirs = new Map<string, string[]>();
         for (const session of all) {
           const project = found.get(session.name)?.project;
           const from = session.startDir;
           if (project === undefined || from === undefined || from === "") continue;
-          if (recorded.has(project) || dirs.has(project)) continue;
-          dirs.set(project, from);
+          if (recorded.has(project)) continue;
+          const held = dirs.get(project) ?? [];
+          // The same checkout twice — an agent and an editor in one workspace
+          // — is one candidate: it resolves or refuses identically.
+          if (!held.includes(from)) {
+            dirs.set(project, [...held, from]);
+          }
         }
 
         const derived: Project[] = [];
-        for (const [name, from] of dirs) {
-          const root = yield* jj.sourceRoot(from).pipe(Effect.option);
-          if (Option.isSome(root)) {
-            derived.push({ name, root: root.value, importedAt: undefined });
+        for (const [name, candidates] of dirs) {
+          for (const from of candidates) {
+            const root = yield* jj.sourceRoot(from).pipe(Effect.option);
+            if (Option.isSome(root)) {
+              derived.push({ name, root: root.value, importedAt: undefined });
+              break;
+            }
           }
         }
 
@@ -2052,7 +2076,46 @@ export const layer = AwpRpcs.toLayer(
           );
         }),
 
-      ProjectForget: ({ name }) => projects.forget(name).pipe(Effect.orDie),
+      /**
+       * Forget a project, and let go of the tasks read out of it.
+       *
+       * ── why the tasks go, when nothing else does ────────────────────────
+       *
+       * Forgetting is documented as taking nothing with it — no workspace
+       * removed, no session killed, no thread touched — and that is about the
+       * *world*. A task row is not the world: it is this daemon's copy of a
+       * `TODO.md` that is still on disk, and `taskId` is derived from the
+       * source and the key rather than minted, so re-importing the project
+       * rebuilds every row under the id it had. Nothing is lost that a sweep
+       * does not put back.
+       *
+       * What is not survivable is leaving them. `ingest` is scoped by key
+       * prefix so one project's read cannot delete another's, and the prefixes
+       * come from this list — so a project that is not on it is a prefix
+       * nothing will ever name again. Its rows then answer every read forever,
+       * frozen at whatever the last sweep said, with nothing able to correct
+       * them. Measured on 2026-09-15: a board answering 51 against a file with
+       * 42 entries in it, for nine days, and no way to tell from the window.
+       *
+       * The empty list is the whole implementation — ingest already takes the
+       * *set* a source has, and deletes what is missing from it, because that
+       * is how a task finishes here.
+       *
+       * A project with a session still running in it reappears derived, and
+       * the next sweep reads its file again. That is self-healing rather than
+       * a hole: forgetting says "stop tracking this", and running something in
+       * it says the opposite, out loud.
+       */
+      ProjectForget: ({ name }) =>
+        Effect.gen(function* () {
+          const had = yield* projects.forget(name).pipe(Effect.orDie);
+          // Ignored, and deliberately: the project has been forgotten either
+          // way, and a store that would not let go of its rows is not a reason
+          // to report that it was not. The next sweep cannot reach them, which
+          // is the condition this is preventing rather than one it creates.
+          yield* tasks.ingest("todo", todoPrefix(name), []).pipe(Effect.ignore);
+          return had;
+        }),
 
       // ── archived threads do not come back on this call ──────────────────
       //

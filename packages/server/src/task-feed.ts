@@ -50,7 +50,19 @@ export const projectTag = (project: string): string => `project:${project}`;
  * The project first, because ingest sweeps by prefix: a read of one project's
  * file must not delete another's rows, and the prefix is what scopes it.
  */
-export const todoKey = (project: string, number: number): string => `${project}#${number}`;
+export const todoKey = (project: string, number: number): string =>
+  `${todoPrefix(project)}${number}`;
+
+/**
+ * The prefix every one of a project's keys carries, and the scope of its sweep.
+ *
+ * Beside `todoKey` and composed by it, for the reason `reviewKey` and
+ * `reviewOf` sit together: a format written in one file and read in another
+ * drifts by a character, and this one decides which rows an ingest deletes.
+ * `ProjectForget` is the second reader — it hands this an empty set to let a
+ * forgotten project's rows go.
+ */
+export const todoPrefix = (project: string): string => `${project}#`;
 
 export const make = (options: {
   readonly tasks: Tasks["Service"];
@@ -71,7 +83,7 @@ export const make = (options: {
         yield* options.tasks
           .ingest(
             "todo",
-            `${source.name}#`,
+            todoPrefix(source.name),
             found.map((task) => ({
               source: "todo" as const,
               sourceKey: todoKey(source.name, task.number),

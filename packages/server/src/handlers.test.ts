@@ -211,6 +211,16 @@ interface Fakes {
   /** Somewhere for the fake multiplexer to write down what it was handed. */
   readonly zmx?: { readonly start: unknown[]; readonly labels: unknown[] } | undefined;
   /**
+   * Somewhere for the fake task store to write down every ingest.
+   *
+   * The only assertion available for `ProjectForget` letting a project's tasks
+   * go: the reply is a boolean about the project list and says nothing about
+   * the store, and a fake that held rows would be `tasks.test.ts` a second
+   * time. What is being checked here is the seam — that the handler names the
+   * right prefix and hands over the empty set.
+   */
+  readonly ingested?: { source: string; prefix: string; count: number }[] | undefined;
+  /**
    * Where a prompt actually went.
    *
    * The four calls that hand something to an agent — a review, a note, a task,
@@ -284,7 +294,11 @@ const run = <A>(body: (rpc: Client) => Effect.Effect<A, unknown, Scope.Scope>, f
         Layer.provide(
           Layer.succeed(Tasks)({
             list: () => Effect.succeed([]),
-            ingest: () => Effect.succeed({ added: 0, changed: 0, removed: 0 }),
+            ingest: (source, prefix, incoming) =>
+              Effect.sync(() => {
+                fakes.ingested?.push({ source, prefix, count: incoming.length });
+                return { added: 0, changed: 0, removed: incoming.length === 0 ? 1 : 0 };
+              }),
           }),
         ),
         // A conversation nobody has. The chat calls are exercised by
@@ -2049,6 +2063,48 @@ describe("projects over the contract", () => {
       }),
     );
     expect(answers).toEqual([true, false]);
+  });
+
+  // ── forgetting a project lets go of the tasks read out of it ────────────
+  //
+  // Not tidiness. `ingest` is scoped by key prefix so one project's read
+  // cannot delete another's, and the prefixes come from the project list — so
+  // a project that is not on it is a prefix nothing will ever name again, and
+  // its rows answer every read forever, frozen at whatever the last sweep
+  // said. Measured on a real daemon: a board reporting 51 tasks against a file
+  // holding 42, for nine days, with nothing in the window able to say so.
+  //
+  // Asserted on the empty set rather than on a count, because the empty set is
+  // the mechanism: `ingest` takes what a source *has* and deletes the rest.
+  it("forgetting a project releases the tasks swept out of it", async () => {
+    const ingested: { source: string; prefix: string; count: number }[] = [];
+    const { root } = repo("thicket");
+    await run(
+      (rpc) =>
+        Effect.gen(function* () {
+          yield* rpc.ProjectImport({ path: root });
+          yield* rpc.ProjectForget({ name: "thicket" });
+        }),
+      { ingested },
+    );
+    expect(ingested).toContainEqual({ source: "todo", prefix: "thicket#", count: 0 });
+  });
+
+  // ── and it releases them for a name that is not on the list ─────────────
+  //
+  // Which reads like a no-op and is the one repair available for rows already
+  // stranded. A project only got into that state by leaving the list, so by
+  // the time anybody wants the rows gone the name is exactly what
+  // `ProjectForget` answers `false` for. Gating the release on the reply would
+  // make the daemon refuse to clean up precisely when there is something to
+  // clean up — and the release is scoped to that name's own prefix either way,
+  // so the cost of asking when there is nothing is a statement with no rows
+  // under it.
+  it("releases stranded rows for a name the list never had", async () => {
+    const ingested: { source: string; prefix: string; count: number }[] = [];
+    const had = await run((rpc) => rpc.ProjectForget({ name: "orchard" }), { ingested });
+    expect(had).toBe(false);
+    expect(ingested).toContainEqual({ source: "todo", prefix: "orchard#", count: 0 });
   });
 
   it("no configured roots is an empty candidate list, not a failure", async () => {
