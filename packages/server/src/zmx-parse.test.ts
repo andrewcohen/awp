@@ -66,6 +66,49 @@ describe("parseSessionLine", () => {
     expect(parseSessionLine(OBSIDIAN)?.startDir).toBe("/Users/acohen/Documents/Obsidian Vault");
   });
 
+  // ── a directory is not always a path ─────────────────────────────────────
+  //
+  // Measured on a real listing: one session in seventeen answered its
+  // directory as macOS's URL form, authority and all. `sourceRoot` refuses a
+  // URL, and `allProjects` took the first session per project — so one odd
+  // session dropped a whole project, and every call naming it answered "awp
+  // knows no project called <name>". From the window that was a PR panel that
+  // would not open and a review that could not be started.
+  test("reads a file:// directory back as a path", () => {
+    const line = t(
+      "  name=awp.thicket.pr-2455.agent",
+      "pid=9685",
+      "clients=0",
+      "created=1789491791",
+      "cwd=file://Studio-Mini/Users/acohen/.awp/workspaces/thicket/pr-2455",
+      "awp_kind=agent",
+    );
+    expect(parseSessionLine(line)?.startDir).toBe("/Users/acohen/.awp/workspaces/thicket/pr-2455");
+  });
+
+  // The space that the plain form has its own test for, arriving encoded —
+  // which is the shape a URL puts it in.
+  test("decodes a percent-escaped directory", () => {
+    const line = t(
+      "  name=awp.Field_Notes.default.agent",
+      "pid=1",
+      "clients=0",
+      "cwd=file://Studio-Mini/Users/acohen/Documents/Field%20Notes",
+    );
+    expect(parseSessionLine(line)?.startDir).toBe("/Users/acohen/Documents/Field Notes");
+  });
+
+  // `cwd` is what this zmx emits and `start_dir` is what the fixtures above
+  // were captured with. A parser that knows one has been silently wrong once.
+  test("reads both spellings of the directory field", () => {
+    const one = t("  name=a", "start_dir=/w/one");
+    const two = t("  name=b", "cwd=/w/two");
+    expect([parseSessionLine(one)?.startDir, parseSessionLine(two)?.startDir]).toEqual([
+      "/w/one",
+      "/w/two",
+    ]);
+  });
+
   test("keeps a cmd containing spaces and quotes", () => {
     expect(parseSessionLine(QUOTED_CMD)?.cmd).toBe("sh -c 'pnpm dev'");
   });

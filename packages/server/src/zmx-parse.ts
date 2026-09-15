@@ -27,12 +27,56 @@ const KNOWN_FIELDS = new Set([
   "name",
   "pid",
   "clients",
+  // Both spellings, for the reason the switch below takes both: this zmx says
+  // `cwd` and the fixtures were captured when it said `start_dir`. A known
+  // field left out of this set is read as a label.
   "start_dir",
+  "cwd",
   "ended",
   "exit_code",
   "created",
   "cmd",
 ]);
+
+/**
+ * A session's directory as a path, whatever shape zmx reports it in.
+ *
+ * Measured on a real listing: one session in seventeen answered
+ *
+ *     cwd=file://<host>/Users/.../.awp/workspaces/<project>/pr-2455
+ *
+ * which is macOS's URL form, authority and all. Every consumer of this field
+ * hands it to a tool — as a `cwd` for a child process, or to `jj -R` — and
+ * both refuse a URL, so the one session started from somewhere that resolved
+ * its directory as one was a row nothing could act on.
+ *
+ * The host is dropped rather than checked. If it named another machine the
+ * path would be wrong either way and there is nothing better available; the
+ * URL form carries an authority whether or not anybody wanted one.
+ *
+ * Percent-decoded, because a URL is where `Field Notes` becomes
+ * `Field%20Notes` — and a space in a directory name is the awkward case this
+ * parser already has a test for in the plain form.
+ *
+ * Anything that is not a `file:` URL comes back as it went in. This is a
+ * repair for one observed shape rather than a general parser: a path that
+ * merely looks odd is still the truth about where a session was started.
+ */
+export const asPath = (value: string): string => {
+  if (!value.startsWith("file://")) {
+    return value;
+  }
+  try {
+    // `pathname` and not `href`: the authority is already gone from it, and it
+    // is the half every caller means.
+    return decodeURIComponent(new URL(value).pathname);
+  } catch {
+    // An unparseable URL is not a reason to lose the field. `suggestedBy`
+    // recovers an identity from the `workspaces/<project>/<workspace>` shape,
+    // which survives an unexpected prefix.
+    return value;
+  }
+};
 
 /**
  * A numeric field, or 0 if it is not one.
@@ -112,7 +156,7 @@ export const parseSessionLine = (line: string): Session | undefined => {
       // been silently wrong once, and the cost of the second case is a line.
       case "start_dir":
       case "cwd":
-        startDir = value;
+        startDir = asPath(value);
         break;
       case "ended":
         // Presence is the signal, whatever the value.
