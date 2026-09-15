@@ -11,7 +11,7 @@ import { type Command, completed, matching } from "@awp-kit/protocol/commands";
 import { growth, useGrow } from "./grow";
 import { acceptsFiles } from "./dropped";
 import { typeset } from "./typeset";
-import { colors, glaze, lift, timing } from "./tokens.stylex";
+import { colors, glaze, lift, space, timing } from "./tokens.stylex";
 
 // What you type at an agent, and everything under it.
 //
@@ -350,7 +350,12 @@ const styles = stylex.create({
     display: "flex",
     alignItems: "center",
     gap: "0.35rem",
-    paddingBlock: "0.4rem 0.5rem",
+    // The same floor the sidebar's own footer stands at, so the 1px rule
+    // above each of them is one line across the window rather than two that
+    // nearly agree. Padding as well as a floor, because the chips wrap at a
+    // narrow column and the strip then grows past it. See `space.strip`.
+    minHeight: space.strip,
+    paddingBlock: "0.15rem",
     paddingInline: "1.25rem",
     backgroundColor: colors.page,
     borderTopStyle: "solid",

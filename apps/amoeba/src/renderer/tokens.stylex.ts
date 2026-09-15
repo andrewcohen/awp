@@ -129,12 +129,18 @@ export const hue = stylex.defineConsts({
   macchiatoBase: "#1e2030",
   macchiatoSurface: "#24273a",
   macchiatoRaised: "#363a4f",
-  /** Catppuccin's crust: the deepest of the greys, and the mirror of white. */
-  macchiatoPage: "#181926",
+  // Catppuccin's *base* — the colour the palette publishes as its background,
+  // and the one the pane already draws for itself. Crust, `#181926`, was here
+  // first on the argument that a document should be the deepest thing in a
+  // dark window; on screen it read as black beside the chrome rather than as
+  // ink, which is a different claim from the one that was intended.
+  macchiatoPage: "#24273a",
   // Deeper than the page it sits over rather than lighter, and that is not
   // symmetry with Latte: a light blur *lightens* what is behind it and a dark
   // one has to darken, or the transcript reads through as a bright smear.
-  macchiatoGlass: "rgba(20, 21, 32, 0.62)",
+  // Mantle, so the step down from the page is the same one the window ground
+  // already stands at.
+  macchiatoGlass: "rgba(30, 32, 48, 0.62)",
   macchiatoText: "#cad3f5",
   // Overlay1 rather than surface2. The old value was 2.60 against the base,
   // which is below the mark threshold let alone the text one — and this is the
@@ -186,11 +192,18 @@ export const colors = stylex.defineVars({
   /**
    * A page: something long enough to be read rather than glanced at.
    *
-   * The one role whose two values are not a step in the same direction. In
-   * Latte it is white — the lightest surface there is — and in Macchiato it is
-   * the deepest. That is the point: a document reads as paper in a light theme
-   * and as ink in a dark one, and taking `surface` in both would make the chat
-   * a slightly raised panel rather than a thing you read.
+   * In Latte it is white — the lightest surface there is. In Macchiato it is
+   * Catppuccin's own `base`, which is what that palette publishes as its
+   * background and what the pane two columns over is already drawing. So the
+   * dark value is the *same hex* as `surface`, and that is deliberate rather
+   * than an oversight: this role is a step up off the window ground in both
+   * themes, and where a page and a panel sit side by side the thing telling
+   * them apart is the border and the type, not a second fill.
+   *
+   * It was crust, `#181926`, on the argument that a document should read as
+   * ink in a dark theme. Reported as a black background instead — which is
+   * the ordinary failure of the deepest colour in a palette: it stops being a
+   * hue and becomes an absence.
    *
    * Not `raised`, which is white in Latte too. That one means "under the
    * pointer", and a ground that is also the hover colour leaves a hovered row
@@ -407,6 +420,20 @@ export const space = stylex.defineVars({
   lightsInline: "5.25rem",
   row: "0.35rem",
   gutter: "1rem",
+  /**
+   * A column's own footer: the strip under it, above a 1px rule.
+   *
+   * Two columns end in one — the sidebar's appearance control and the chat's
+   * session facts — and they sit side by side at the bottom of the window, so
+   * their rules are read as one line across it. They were a height and a pair
+   * of paddings, in two files, which agreed about nothing: reported as the
+   * composer's bottom border not lining up with the left panel's.
+   *
+   * A `min-height` at both ends rather than a height, because only one of the
+   * two has fixed contents. The chat's chips wrap at a narrow column, and a
+   * strip that could not grow would clip the model somebody is reading.
+   */
+  strip: "1.9rem",
 });
 
 /**

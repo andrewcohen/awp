@@ -147,7 +147,10 @@ const styles = stylex.create({
     display: "flex",
     alignItems: "center",
     flexShrink: 0,
-    height: "1.9rem",
+    // The window's bottom strip, shared with the chat's session bar so the
+    // two rules read as one line across the foot of the window. See
+    // `space.strip`.
+    minHeight: space.strip,
     paddingInline: "0.35rem",
     borderTopWidth: 1,
     borderTopStyle: "solid",
