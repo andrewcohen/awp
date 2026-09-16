@@ -1,7 +1,7 @@
 import { type Meter as Reading, readMeter, resetMeter } from "@awp-kit/pane";
 import * as stylex from "@stylexjs/stylex";
 import { useEffect, useState } from "react";
-import { colors, space, text } from "../tokens.stylex";
+import { colors, space, text } from "../design/tokens.stylex";
 
 // The pane's vital signs, in the accessory column.
 //

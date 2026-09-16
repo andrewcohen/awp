@@ -1,15 +1,15 @@
 import { StrictMode } from "react";
-import "./stylex.css";
+import "./design/stylex.css";
 // Before global.css and before anything StyleX emits, so a face is declared by
 // the time the first rule asks for it. See fonts.css for why these are shipped
 // rather than named.
-import "./fonts.css";
-import "./global.css";
+import "./design/fonts.css";
+import "./design/global.css";
 import { RouterProvider } from "@tanstack/react-router";
 import { createRoot } from "react-dom/client";
-import { Highlighting } from "./highlighting";
-import { rememberedPlace } from "./remembered";
-import { router } from "./routes";
+import { Highlighting } from "./panels/highlighting";
+import { rememberedPlace } from "./routing/remembered";
+import { router } from "./routing/routes";
 
 // StrictMode is ON, deliberately, and this is worth revisiting rather than
 // assuming.

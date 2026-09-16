@@ -1,0 +1,854 @@
+import type { ChatConfigOption } from "@awp-kit/protocol";
+import { ArrowUpIcon } from "@phosphor-icons/react/ArrowUp";
+import { StopIcon } from "@phosphor-icons/react/Stop";
+import { AnimatePresence, motion } from "motion/react";
+import { jelly } from "../design/springs";
+import * as stylex from "@stylexjs/stylex";
+import { useState } from "react";
+import { FOLD_MS } from "../shell/columns";
+import { Chip } from "../design/Chip";
+import { type Command, completed, matching } from "@awp-kit/protocol/commands";
+import { growth, useGrow } from "../design/grow";
+import { acceptsFiles } from "./dropped";
+import { typeset } from "../design/typeset";
+import { colors, glaze, lift, space, timing } from "../design/tokens.stylex";
+
+// What you type at an agent, and everything under it.
+//
+// ── lifted out of Chat.tsx, and for one reason ───────────────────────────
+//
+// The style guide needs to draw it. A composer copied onto that page would be
+// a copy that drifts, and the whole argument for that page's chat section is
+// that it renders the panel's own components — so what somebody criticises
+// there is what ships. `Row` went the same way.
+//
+// What stayed behind in Chat.tsx is everything with a consequence: the send,
+// the command that runs, the option that reaches the daemon. This file is the
+// box, the menu, the chips, and the arithmetic of when each is worth drawing —
+// a component that is a function of its props, which is exactly what a fixture
+// can render.
+
+/**
+ * How a setting reads on its chip.
+ *
+ * The value's own name, and the setting's name when the value would not say
+ * which setting it belongs to. `Manual` and `Opus` name themselves; `On` and
+ * `Off` do not, so fast mode says `fast: off`.
+ */
+const nameOf = (option: ChatConfigOption): string => {
+  const current = option.values.find((value) => value.value === option.currentValue);
+  const said = current?.name ?? option.currentValue;
+  return said === "On" || said === "Off" || said === "Default"
+    ? `${option.name.toLowerCase()}: ${said.toLowerCase()}`
+    : said;
+};
+
+/**
+ * Past this, the figure is worth minding rather than merely knowing.
+ *
+ * There used to be a floor under it as well — nothing on screen until half
+ * full, on the status bar's argument that a figure which is always there is
+ * furniture. Asked for the other way ("can the context usage show in the chat
+ * bottom bar"), and the ask is right for this one: a person deciding whether
+ * to start a fresh conversation wants the number *before* it is a problem, and
+ * unlike the status bar this row is already full of session facts, so one more
+ * is not what teaches the eye to skip it.
+ */
+const NEARLY_FULL = 0.85;
+
+const styles = stylex.create({
+  // ── the composer ────────────────────────────────────────────────────────
+  //
+  // One box with the button inside it rather than a field and a button side by
+  // side. Two controls in a row makes the field look short and puts the send
+  // where a person's eye is not — at the end of a line they are not looking at
+  // — where inside the box it sits under the last word they typed.
+  // ── the command menu ────────────────────────────────────────────────────
+  //
+  // A list, not a popup: it takes height above the box rather than floating,
+  // for the reason every overlay in this window is examined for — it is inside
+  // a scrolling column, and a floating element there is either clipped by the
+  // column or portalled out of it, and neither is worth it for two rows.
+  menu: {
+    display: "flex",
+    flexDirection: "column",
+    marginBottom: "0.4rem",
+    borderWidth: 1,
+    borderStyle: "solid",
+    borderColor: colors.border,
+    borderRadius: "0.4rem",
+    backgroundColor: colors.surface,
+    // ── the cap ───────────────────────────────────────────────────────────
+    //
+    // Unfiltered, this list is every command the agent advertises — 57 on
+    // this machine — and an uncapped one takes the whole column and pushes
+    // the conversation off the top to say what typing one more letter would
+    // narrow to three rows. Six rows is enough to show that there is more and
+    // to scroll for it, and it is the cap the TUI's own menu takes.
+    //
+    // A row is `0.3rem` of padding either side of one `text.small` line, so
+    // six of them is a shade under this — and the seventh is half-drawn at
+    // the bottom edge, which is the thing that says there is more.
+    //
+    // `overscrollBehavior: contain`, or reaching the end of the menu carries
+    // on scrolling the transcript behind it.
+    maxHeight: "10.5rem",
+    overflowX: "hidden",
+    overflowY: "auto",
+    overscrollBehavior: "contain",
+  },
+  slash: {
+    display: "flex",
+    // A flex child in a scrolling column shrinks rather than overflowing, so
+    // without this every row is squeezed instead of the list scrolling.
+    flexShrink: 0,
+    alignItems: "baseline",
+    gap: "0.5rem",
+    // Left-aligned, because it is a row in a list rather than a button.
+    textAlign: "start",
+    padding: "0.3rem 0.6rem",
+    backgroundColor: { default: "transparent", ":hover": colors.raised },
+    borderStyle: "none",
+    color: colors.text,
+    font: "inherit",
+    cursor: "pointer",
+  },
+  /** The highlighted row. The accent is not spent here — see AGENTS.md: it is
+      on four things in the whole window, and a transient menu is not one. */
+  slashOn: { backgroundColor: colors.border },
+  slashName: { flexShrink: 0 },
+  // `flex: 1` with `minWidth: 0`. The pair, and a sentence that must clip
+  // rather than widen a column.
+  /** What it takes: `[file]`. Beside the name, because it is part of it. */
+  slashHint: { flexShrink: 0, color: colors.muted },
+  /** `awp` — the window runs this one, and nothing is sent. */
+  slashMine: { flexShrink: 0, color: colors.muted },
+  slashSaid: {
+    flex: 1,
+    minWidth: 0,
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+    color: colors.muted,
+  },
+  /**
+   * The thing that floats, and the root of this component.
+   *
+   * ── it was two elements, and one of them drew nothing ─────────────────
+   *
+   * There was an outer flex column around this holding the fill and the
+   * blur, and when both of those moved onto `box` it was left as a wrapper
+   * with a `display` and nothing else — an invisible rectangle in the tree
+   * that a person inspecting the composer had to step past to reach
+   * anything. Reported as exactly that.
+   *
+   * It could go because the two never disagreed: the outer one was the whole
+   * dock's width and so is this, and its only child was this. What the merge
+   * keeps is the padding, which is the inset that makes the box read as a
+   * card rather than as a bar.
+   *
+   * The inline padding is the transcript's own gutter, so what somebody
+   * types begins on the same edge as what they are reading.
+   */
+  card: {
+    display: "flex",
+    flexDirection: "column",
+    // The leading number is half the gap between the activity ledge and this
+    // box — the other half is the pill's own bottom margin, and halving one
+    // without the other halves nothing much. It is also the dock's top inset
+    // with no ledge up, which is the same distance and wants to agree.
+    paddingBlock: "0.275rem 0.6rem",
+    paddingInline: "1rem",
+  },
+  /**
+   * The border, while a turn is running.
+   *
+   * ── the smallest thing that can say it ──────────────────────────────────
+   *
+   * Everything with a position was tried first and removed; see the note
+   * above `Composer`. What is left has no shape and no travel — the line
+   * around the box warms toward the accent and back, at the 2.6s the
+   * sidebar's working dot already breathes at.
+   *
+   * A mix rather than the accent itself. The accent is spent in four places
+   * and each marks "this, here" — and this box is already wearing it for
+   * focus, so a full-strength cycle would be one property making two claims.
+   *
+   * ── it breathes while focused too, on a different pair ──────────────────
+   *
+   * It was suppressed under `:focus-within` first, on the argument that the
+   * focus colour should not be blinked over. That reasoning was fine and the
+   * result was useless: reported as "i dont see whatever breathing effect",
+   * because **the composer is focused almost all of the time** — the one state
+   * the animation was turned off in is the ordinary one.
+   *
+   * An animation beats a declaration whatever the order, so a single pair
+   * cannot be right in both states: it would drag the focused border back down
+   * to `border` twice a cycle, which reads as focus flickering off. Two pairs
+   * instead, each breathing around the colour that state is already wearing —
+   * so what pulses is the intensity, and the *meaning* of the colour, focused
+   * or not, never changes.
+   */
+  breathing: {
+    animationName: {
+      default: stylex.keyframes({
+        "0%, 100%": { borderColor: colors.border },
+        "50%": { borderColor: `color-mix(in oklab, ${colors.accent} 45%, ${colors.border})` },
+      }),
+      ":focus-within": stylex.keyframes({
+        "0%, 100%": { borderColor: colors.accent },
+        "50%": { borderColor: `color-mix(in oklab, ${colors.accent} 50%, ${colors.border})` },
+      }),
+    },
+    // Reduced motion means none, not slower. The window's rule.
+    animationDuration: { default: "2.6s", "@media (prefers-reduced-motion: reduce)": "0s" },
+    animationTimingFunction: "cubic-bezier(0.45, 0, 0.55, 1)",
+    animationIterationCount: {
+      default: "infinite",
+      "@media (prefers-reduced-motion: reduce)": "1",
+    },
+  },
+  /**
+   * What somebody types, and it is the one rectangle here.
+   *
+   * ── the card keeps its outline; the dock lost its edge ──────────────────
+   *
+   * There were two rectangles a few pixels apart — this one, and the rule
+   * across the top of the dock that separated it from the transcript. The
+   * outer one is the one that came off: an edge running the width of the
+   * column says "a region begins here", which is a claim about layout, and
+   * what is wanted is a card sitting over a document. Without it the glass
+   * has no boundary of its own and the card is the only thing with a shape,
+   * which is what makes it read as floating.
+   *
+   * `:focus-within` and not `:focus` — the thing being focused is the
+   * textarea inside it, and the whole box is the control.
+   */
+  box: {
+    display: "flex",
+    flexDirection: "column",
+    gap: "0.4rem",
+    padding: "0.55rem 0.6rem 0.5rem",
+    borderStyle: "solid",
+    borderWidth: 1,
+    borderColor: { default: colors.border, ":focus-within": colors.accent },
+    borderRadius: "0.6rem",
+    // ── this is the pane of glass now, and it is the only one ────────────
+    //
+    // It went transparent for an hour on the argument that what sat behind it
+    // was the dock's own glass rather than the transcript — which stopped
+    // being true the moment the dock lost its fill and its filter. Left alone
+    // it would be a rounded outline with somebody's message scrolling through
+    // the words being typed into it.
+    //
+    // So the material is here instead: the same token the activity pill
+    // wears, on the one element in the dock that has to be read. The blur is
+    // what makes a transcript passing underneath legible as texture rather
+    // than as text, and the tint is what stops it being a window.
+    backgroundColor: colors.glass,
+    backdropFilter: glaze.pane,
+    // ── depth is what "floating" is ───────────────────────────────────────
+    //
+    // `mid` at rest rather than `low`. With the dock's own edge gone there is
+    // nothing but this shadow saying the card is above the transcript, and a
+    // control that overlaps a document has to look like it is above one.
+    //
+    // The ring is a second shadow rather than a wider border, because a
+    // border that grows moves the text inside it by a pixel.
+    boxShadow: {
+      default: lift.mid,
+      ":focus-within": `${lift.mid}, 0 0 0 3px color-mix(in oklab, ${colors.accent} 22%, transparent)`,
+    },
+    transitionProperty: "border-color, box-shadow, transform",
+    transitionDuration: { default: timing.quick, "@media (prefers-reduced-motion: reduce)": "0s" },
+    transitionTimingFunction: timing.ease,
+  },
+  // ── one line, growing with what is in it ────────────────────────────────
+  //
+  // It was `rows={2}`, which is two lines of nothing under every conversation
+  // — and still two lines when somebody pastes twelve. The height is set from
+  // `scrollHeight` on every change instead, between one line and a cap, and
+  // the transition is the window's own fold duration and curve.
+  //
+  // `overflowY: hidden` while it fits, or the element scrolls itself at the
+  // exact moment it should be growing. Past the cap it becomes a scroller,
+  // which is the honest end of "expand as you fill it".
+  input: {
+    // `flex: 1` with `minWidth: 0` — the pair. `width: 100%` on a flex child
+    // beside a button is a row wider than the box it is in, which is the
+    // window's most common cause of a horizontal scrollbar.
+    flex: 1,
+    minWidth: 0,
+    resize: "none",
+    overflowY: "auto",
+    lineHeight: 1.5,
+    color: colors.text,
+    backgroundColor: "transparent",
+    borderStyle: "none",
+    padding: 0,
+    outline: "none",
+  },
+  /**
+   * The text and the send, on one line.
+   *
+   * `flex-end`, so the button stays with the last line as the box grows
+   * rather than floating beside the middle of a paragraph.
+   */
+  line: { display: "flex", alignItems: "flex-end", gap: "0.5rem" },
+  /** What Return does, said quietly and only when there is something to say. */
+  hint: { color: colors.muted },
+  // Round, and the size of the modal's, because it is the same control: an
+  // arrow in a circle, at the end of the line somebody just typed.
+  send: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    flexShrink: 0,
+    width: "1.6rem",
+    height: "1.6rem",
+    padding: 0,
+    borderRadius: "0.8rem",
+    borderStyle: "none",
+    backgroundColor: colors.accent,
+    color: colors.base,
+    cursor: "pointer",
+    // It is the one thing in this window somebody presses on purpose
+    // dozens of times a day, and it did not move when they did. A press
+    // that answers is the cheapest confidence a control can give.
+    boxShadow: lift.low,
+    transitionProperty: "transform, box-shadow, background-color",
+    transitionDuration: { default: timing.quick, "@media (prefers-reduced-motion: reduce)": "0s" },
+    transitionTimingFunction: timing.ease,
+    ":hover": { transform: "translateY(-1px)", boxShadow: lift.mid },
+    ":active": { transform: "scale(0.92)", boxShadow: "none" },
+  },
+  /** Present and plainly unavailable, rather than gone. */
+  shut: { backgroundColor: colors.border, color: colors.muted, cursor: "default" },
+  /** The glyph itself, so it can be swapped under the button. */
+  icon: { display: "flex", alignItems: "center", justifyContent: "center" },
+  /**
+   * The bottom of the column: flush, edge to edge, under a rule.
+   *
+   * Full width rather than inset with the card, because these are the
+   * session's facts rather than a control — a strip along the bottom of the
+   * column is what a status line is, and inset they read as more of the
+   * composer.
+   *
+   * `flexShrink: 0` is what makes it the bottom rather than the first thing a
+   * short window gives up: it is a sibling of the transcript now, and a flex
+   * child that may shrink in a column that is short is one that disappears
+   * before the thing above it does.
+   *
+   * Opaque, and that is new. It used to be a band on a pane of glass, where
+   * whatever the blur had softened showed through; it now sits on the column
+   * itself, and the transcript scrolls *to* it rather than under it — so it
+   * takes the page's own colour and the rule above it is the edge between the
+   * two.
+   */
+  settings: {
+    flexShrink: 0,
+    display: "flex",
+    alignItems: "center",
+    gap: "0.35rem",
+    // The same floor the sidebar's own footer stands at, so the 1px rule
+    // above each of them is one line across the window rather than two that
+    // nearly agree. Padding as well as a floor, because the chips wrap at a
+    // narrow column and the strip then grows past it. See `space.strip`.
+    minHeight: space.strip,
+    paddingBlock: "0.15rem",
+    paddingInline: "1.25rem",
+    backgroundColor: colors.page,
+    borderTopStyle: "solid",
+    borderTopWidth: 1,
+    // Faint: it separates two parts of one column rather than announcing a
+    // region. A full-strength rule here reads as a footer.
+    borderTopColor: `color-mix(in oklab, ${colors.border} 55%, transparent)`,
+    // Wrapping rather than scrolling — the window's rule is that nothing
+    // grows a sideways scrollbar. Four chips in a narrow agent column become
+    // two rows.
+    flexWrap: "wrap",
+  },
+  spacer: { flex: 1 },
+  full: { color: colors.muted },
+  warn: { color: colors.warn },
+});
+
+/**
+ * ── what the composer used to do while a turn ran, and why it stopped ─────
+ *
+ * Three techniques lived here, each removed after being looked at:
+ *
+ *   a blurred shape on a motion path   "just a big fuzzy dot", then "i still
+ *                                      just see a blurry ball" — a thing you
+ *                                      can see is not underneath anything
+ *   animated `border-radius`           "its just the corners. terrible". A
+ *                                      radius is anchored at a corner, so no
+ *                                      value of it puts a bump mid-edge
+ *   a deformed SVG outline             a creature with a gait, crawling the
+ *                                      perimeter. "i think i hate it tbh"
+ *
+ * The last one worked, and that is the useful part of the finding: it was not
+ * a tuning failure. **The window already says a turn is running in two
+ * places** — the turning mark on the running row, and the activity pill on the
+ * ledge directly above this box. A third was always going to be the one moving
+ * underneath the words being typed into it.
+ *
+ * So what is left is the smallest thing that can say it: the border breathes.
+ * No travel, no shape, nothing with a position — the same 2.6s the sidebar's
+ * working dot uses, because two marks meaning one thing should move alike.
+ */
+
+export const Composer = ({
+  draft,
+  onDraft,
+  onSend,
+  onStop,
+  working,
+  onCommand,
+  theirs = [],
+  onBox,
+}: {
+  readonly draft: string;
+  readonly onDraft: (draft: string) => void;
+  /**
+   * Enter, or the button. What a message *does* is the caller's.
+   *
+   * `interrupt` is cmd+Return: stop the agent where it is rather than waiting
+   * for it to finish. Return does *not* set it, and that is a correction —
+   * every message used to interrupt, which aborts the answer being written.
+   * See `ChatSend.interrupt`.
+   */
+  readonly onSend: (interrupt?: boolean) => void;
+  /**
+   * Stop the turn the agent is in.
+   *
+   * Separate from `onSend` because it is the opposite act, and the button is
+   * one control that becomes the other — see the send below.
+   */
+  readonly onStop: () => void;
+  /**
+   * Whether the agent is working, which is what makes the send a stop.
+   *
+   * A boolean and not the turn count the panel holds: what the composer needs
+   * is whether there is anything to stop, and two overlapping turns are still
+   * one press.
+   */
+  readonly working: boolean;
+  /**
+   * One of the window's own commands was chosen from the menu.
+   *
+   * Separate from `onSend` because a command is not a message — see
+   * commands.ts. The caller still intercepts an exactly-typed command on send,
+   * for the case where the menu is not open: `/new ` with a trailing space is
+   * a command and is not a bare `/word`.
+   */
+  readonly onCommand: (command: Command) => void;
+  /**
+   * The agent's own commands, skills included.
+   *
+   * Listed beside the window's two and *not* intercepted — a skill is a
+   * prompt, and the adapter passes it through to the CLI verbatim. Empty by
+   * default so the style guide can draw the composer with no conversation
+   * behind it.
+   */
+  readonly theirs?: ReadonlyArray<Command>;
+  /**
+   * Told what the textarea is, for a caller that has to put the caret in it.
+   *
+   * The quote control is the reason: quoting types into the box and then
+   * focuses it, and focus is not a prop. A callback rather than a ref object
+   * to write into — the holder belongs to whoever declared it, and a
+   * component that reaches into a prop's `.current` is a component mutating
+   * something it does not own.
+   */
+  readonly onBox?: ((node: HTMLTextAreaElement | null) => void) | undefined;
+}) => {
+  /**
+   * Which command in the menu is highlighted.
+   *
+   * Kept rather than derived from the draft, because the arrow keys move it —
+   * and reset whenever the list changes underneath it, since an index into a
+   * list that has just been filtered is an index into the wrong list.
+   */
+  const [picked, setPicked] = useState(0);
+  const commands = matching(draft, theirs);
+  const at = Math.min(picked, Math.max(0, commands.length - 1));
+
+  // ── the box grows with what is in it ────────────────────────────────────
+  //
+  // One line at rest and taller as it fills, up to a cap, animated with the
+  // window's own duration and curve — everything that appears or disappears
+  // here moves, and a box that jumps from one line to four is the same
+  // startle as a panel that pops. `grow.ts` holds the arithmetic, because the
+  // new-thread brief is the same box.
+  const hold = useGrow(draft);
+
+  /**
+   * What the next keypress does, when that is not obvious.
+   *
+   * The interrupt is said only while the agent is working, which is the only
+   * moment it means anything — and it is the one line here that describes a
+   * key somebody has no other way to find out about. Return's own behaviour
+   * is not said: waiting is what every other chat does, so it is the one that
+   * needs no announcement.
+   */
+  const said =
+    commands.length > 0
+      ? "tab to complete, return to run"
+      : draft.includes("\n")
+        ? "shift+return for a new line"
+        : working && draft !== ""
+          ? "cmd+return interrupts"
+          : "";
+
+  /**
+   * One element, two holders.
+   *
+   * This component always keeps its own — the height is measured off it on
+   * every keystroke — and the caller is *told* when there is one, rather than
+   * handed a holder to write into. The effect above reads only the local ref,
+   * so nothing here touches an object it does not own.
+   */
+  const attach = (node: HTMLTextAreaElement | null): void => {
+    hold(node);
+    onBox?.(node);
+  };
+
+  // Both the outline's flex and the blob answer to this. Read once here
+  // rather than twice: two calls could not disagree, but a reader would have
+  // to check, and the blob is rendered from a different branch.
+  // The hook first, then the `&&`. Short-circuiting past a hook call makes it
+  // conditional, which react-doctor is right to refuse: an idle composer and a
+  // working one would call a different number of hooks.
+
+  return (
+    <div {...stylex.props(styles.card)}>
+      {/* ── the command menu ───────────────────────────────────────────────
+
+        Above the box rather than below it, because it is a list of things
+        the *box* can become and the eye is already at the box. Shown only
+        while the draft is a bare `/word`: a message about a path must not
+        put a menu over the conversation.
+
+        Not a Base UI menu, deliberately. This is not a popup with its own
+        focus — the caret stays in the textarea and the keys are read
+        there — so a component that moved focus would take the typing with
+        it. What Base UI gives is roving focus and a portal, and neither is
+        wanted here. */}
+      {commands.length > 0 && (
+        <div {...stylex.props(styles.menu)} role="listbox" aria-label="commands">
+          {commands.map((command, index) => (
+            <button
+              key={command.name}
+              type="button"
+              role="option"
+              aria-selected={index === at}
+              // The pointer is a second way in, and a press must not take
+              // focus off the box — `onMouseDown` with `preventDefault` is
+              // what keeps the caret where it was.
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => onCommand(command)}
+              // The list scrolls now, so the arrow keys can walk the
+              // highlight out of sight. `block: "nearest"` moves the menu by
+              // the least that brings the row back — anything more scrolls
+              // the column behind it as well.
+              ref={(node) => {
+                if (node !== null && index === at) node.scrollIntoView({ block: "nearest" });
+              }}
+              {...stylex.props(styles.slash, index === at && styles.slashOn)}
+            >
+              <span {...stylex.props(typeset.address, styles.slashName)}>{command.name}</span>
+              {command.hint !== undefined && (
+                <span {...stylex.props(typeset.address, styles.slashHint)}>{command.hint}</span>
+              )}
+              <span {...stylex.props(typeset.label, styles.slashSaid)}>{command.said}</span>
+              {/* ── the window's two are marked, not the agent's dozens ────
+                  An agent on a real machine advertises twenty commands and
+                  the window has two, so marking the majority is marking the
+                  baseline — the same arithmetic as the reviewQueue's leading icon
+                  and the accent's four sites. What a person needs to know
+                  here is which rows do NOT reach their agent. */}
+              {command.mine && <span {...stylex.props(typeset.label, styles.slashMine)}>awp</span>}
+            </button>
+          ))}
+        </div>
+      )}
+      {/* ── the card itself is what bends ─────────────────────────────────
+
+        `animate` is left undefined when there is nothing to say, rather than
+        set to the resting radius: motion writes an inline `border-radius` for
+        anything it is given, and an inline value would outrank `box`'s own
+        for the rest of the session — so an idle composer would keep whatever
+        shape the last turn left it in. */}
+      <div {...stylex.props(styles.box, working && styles.breathing)}>
+        <div {...stylex.props(styles.line)}>
+          <textarea
+            ref={attach}
+            {...stylex.props(typeset.prose, styles.input, growth.eased(FOLD_MS))}
+            value={draft}
+            rows={1}
+            placeholder="say something, or / for a command"
+            // Dropping a file writes its absolute path in at the caret. The
+            // renderer cannot find that path itself — see `dropped.ts`.
+            {...acceptsFiles(draft, onDraft)}
+            onChange={(event) => {
+              onDraft(event.target.value);
+              // The list is re-filtered on every keystroke, so an index into
+              // the old one names the wrong row. Reset rather than clamped:
+              // the first match is what somebody narrowing a list means.
+              setPicked(0);
+            }}
+            onKeyDown={(event) => {
+              // ── the menu's keys, and only while it is open ─────────────
+              //
+              // Up and down rather than ctrl+j/k: those two are the window's
+              // column chords and are given up inside a textarea, which is
+              // where this caret is. Inside a list of two, the arrows are
+              // what a person will press.
+              if (commands.length > 0) {
+                if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                  event.preventDefault();
+                  const step = event.key === "ArrowDown" ? 1 : -1;
+                  setPicked((was) => (was + step + commands.length) % commands.length);
+                  return;
+                }
+                if (event.key === "Tab") {
+                  // Completion, not selection. Tab fills the box in and leaves
+                  // the next gesture — Return — to run it, so a mistyped
+                  // completion can still be edited or abandoned.
+                  event.preventDefault();
+                  const one = commands[at];
+                  if (one !== undefined) {
+                    onDraft(completed(one));
+                  }
+                  return;
+                }
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
+                  const one = commands[at];
+                  if (one !== undefined) {
+                    onCommand(one);
+                  }
+                  return;
+                }
+                if (event.key === "Escape") {
+                  // The draft is what the menu is open on, so clearing it is
+                  // what closes the menu. `stopPropagation` because Escape is
+                  // a window-level gesture elsewhere and this one is answered.
+                  event.stopPropagation();
+                  onDraft("");
+                  return;
+                }
+              }
+              // ── escape throws the draft away ──────────────────────────
+              //
+              // The same gesture the TUI's composer has, and it was here only
+              // while the slash menu was open — so the two faces disagreed
+              // about a key somebody presses by reflex: one abandoned the
+              // message, the other did nothing at all.
+              //
+              // ── and while the agent is working it stops it ──────────────
+              //
+              // The note on the send button below has claimed this for as
+              // long as it has existed — "Escape does it too, that is the
+              // terminal's habit and the TUI already answers to it" — and
+              // nothing implemented it. A comment is not a reader.
+              //
+              // Stopping wins over clearing, and the order is the whole of
+              // the rule. Somebody typing the next message while an answer
+              // runs away from them presses Escape to stop the *agent*;
+              // throwing their half-written message away instead is the one
+              // outcome they cannot undo, where the stop costs a turn that
+              // was already going wrong. So the draft survives, and a second
+              // press — now that nothing is running — clears it.
+              if (event.key === "Escape" && working) {
+                event.stopPropagation();
+                onStop();
+                return;
+              }
+              // Only while there is something to throw away. An empty
+              // composer lets Escape past, because it is a window-level
+              // gesture elsewhere — a dialog over this panel is what closes.
+              if (event.key === "Escape" && draft !== "") {
+                event.stopPropagation();
+                onDraft("");
+                return;
+              }
+              // The same rule the pane has: Return sends, shift+Return is a
+              // newline. A composer where Return inserts a line is one where
+              // every message needs a second gesture to leave.
+              //
+              // cmd+Return is the interrupt. It is a separate key because it
+              // is a separate act: it aborts the answer the agent is part way
+              // through writing, where Return waits for it. Both send — the
+              // difference is what happens to work already in flight, which
+              // is exactly the sort of thing that should need saying.
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                onSend(event.metaKey);
+              }
+            }}
+          />
+          {/* ── one control, and while the agent works it stops it ─────────
+              The props for this have been on the component unused, which is
+              two of the repo's three red gates and, more to the point, a
+              window with no way to interrupt an agent short of the
+              terminal. The composer is where a person's hands are.
+
+              The same button rather than a second one beside it: a stop
+              that appears next to send is two targets in a place that has
+              room for one, and the empty draft's disabled send is exactly
+              the moment the stop is wanted. Escape does it too — that is
+              the terminal's habit and the TUI already answers to it — but
+              a chord is not discoverable and this is.
+
+              `AnimatePresence` with a shared spring, so the arrow and the
+              square trade places by scale rather than by swapping glyphs
+              between frames.
+
+              **The glyph carries the distinction, and the colour does not.**
+              The stop was `warn`, on the argument that stopping is not the
+              ordinary act and the two states have to be told apart by
+              somebody whose eyes are on the transcript. The button stays the
+              accent through both — a red circle appearing where the send
+              was reads as something having gone wrong, which is not what an
+              interruption somebody asked for is. An arrow and a square are
+              already two silhouettes, and they are the thing the eye lands
+              on at this size. */}
+          <button
+            type="button"
+            data-nav-item
+            aria-label={working ? "stop" : "send"}
+            title={
+              working
+                ? "stop the agent (escape)"
+                : draft.trim() === ""
+                  ? "say something first"
+                  : "send (return)"
+            }
+            {...stylex.props(styles.send, !working && draft.trim() === "" && styles.shut)}
+            // Wrapped, not passed: `onSend` takes `interrupt` first and a
+            // click handler is handed a MouseEvent, which is truthy — so
+            // pressing the button would have interrupted every time. tsc
+            // caught it, which is the argument for the flag being a named
+            // boolean rather than an optional anything.
+            onClick={working ? onStop : () => onSend()}
+            disabled={!working && draft.trim() === ""}
+          >
+            <AnimatePresence initial={false} mode="popLayout">
+              <motion.span
+                key={working ? "stop" : "send"}
+                {...stylex.props(styles.icon)}
+                initial={{ scale: 0.4, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0.4, opacity: 0 }}
+                transition={jelly}
+              >
+                {working ? (
+                  <StopIcon size={11} weight="fill" aria-hidden />
+                ) : (
+                  <ArrowUpIcon size={13} weight="bold" aria-hidden />
+                )}
+              </motion.span>
+            </AnimatePresence>
+          </button>
+        </div>
+        {/* ── the hint has to earn its line ────────────────────────────────
+            Reported as "the composer is still 2 lines", and it was: the text
+            was one line and a permanent hint row under it was the second. The
+            box is now one line at rest with the send beside the text, and this
+            appears only when there is something to say about the next
+            keypress — which is exactly when somebody is about to press it. */}
+        {said !== "" && <span {...stylex.props(typeset.label, styles.hint)}>{said}</span>}
+      </div>
+    </div>
+  );
+};
+
+/**
+ * What this session is running as — the bar along the bottom of the chat.
+ *
+ * ── it is the bottom, rather than the last thing on a floating dock ───────
+ *
+ * It used to be the second half of the composer, inside the same absolutely
+ * positioned dock, so the transcript scrolled underneath it and the column had
+ * no bottom edge of its own. Asked for as "the bottom status bar should be the
+ * bottom and then the rest of the chat container scrolls up to it — stack
+ * them, only the composer float", and every word of that is a correction:
+ *
+ *   before   one dock over the transcript holding the ledge, the card and
+ *            this — so the scroller ran the full height of the column, and
+ *            its scrollbar ran behind all three
+ *   after    the transcript and this are stacked, and the card floats over
+ *            the first of them
+ *
+ * Which also settles the scrollbar without a rule about scrollbars: the
+ * scroller's box now ends where this begins, so the track ends there too.
+ *
+ * Here rather than in the agent bar, because these are facts about the
+ * *session* and that bar is the window's own chrome. They read in the right
+ * order this way round as well: what you are about to say, and then who is
+ * about to answer it.
+ *
+ * One shape for all of them. The adapter answers `mode`, `model`, `effort`
+ * and `fast` as four selects with the same fields, so there is nothing
+ * bespoke per setting — and a fifth appearing upstream is a row that shows up
+ * rather than a thing to add here.
+ */
+export const SessionBar = ({
+  config,
+  onSetOption,
+  usage,
+}: {
+  readonly config: ReadonlyArray<ChatConfigOption>;
+  readonly onSetOption: (option: string, value: string) => void;
+  readonly usage?:
+    | {
+        readonly full: number;
+        readonly used?: number | undefined;
+        readonly size?: number | undefined;
+      }
+    | undefined;
+}) => {
+  // Nothing to say is drawn as nothing rather than as an empty bar: a window
+  // that has only just opened has no config and no reading, and a rule across
+  // the bottom of the column would be furniture announcing that.
+  if (config.length === 0 && usage === undefined) {
+    return null;
+  }
+
+  return (
+    <div {...stylex.props(styles.settings)}>
+      {config.map((option) => (
+        <Chip
+          key={option.id}
+          id={`chat-${option.id}`}
+          label={nameOf(option)}
+          title={option.description ?? option.name}
+          value={option.currentValue}
+          onChange={(value) => onSetOption(option.id, value)}
+          options={option.values.map((value) => ({ value: value.value, label: value.name }))}
+          quiet
+        />
+      ))}
+
+      <span {...stylex.props(styles.spacer)} />
+
+      {/* Whenever there is a reading. The tokens go on the hover rather than
+        in the row: `18,606 of 200,000` is the answer to "how much is that",
+        and it is four times the width of the answer to "how full is it". */}
+      {usage !== undefined && (
+        <span
+          title={
+            usage.used === undefined || usage.size === undefined
+              ? "how much of the context window this conversation has spent"
+              : `${usage.used.toLocaleString()} of ${usage.size.toLocaleString()} tokens`
+          }
+          {...stylex.props(typeset.label, styles.full, usage.full >= NEARLY_FULL && styles.warn)}
+        >
+          {Math.round(usage.full * 100)}% context
+        </span>
+      )}
+    </div>
+  );
+};
