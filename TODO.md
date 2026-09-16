@@ -307,29 +307,6 @@ So at least one more finaliser in the daemon's layer stack does not complete. Un
 
 Not urgent. The deadline means the process always goes, and the daemon holds nothing whose loss a longer wait would prevent — sessions are zmx's and outlive it by design. What it costs today is that every stop takes the full grace period, and that a genuinely clean shutdown is indistinguishable from a stuck one in the log.
 
-## 89. Fuzzy search over the tasks panel
-
-The tasks panel is a list of titles and it is already long — twenty-four outstanding in this workspace, and that is before the completed ones become reachable. Scrolling to find one is the wrong gesture when the thing being looked for is a word somebody remembers.
-
-So: a filter field at the top of the panel, matching fuzzily over the subject and the description, narrowing as it is typed. Matching the description matters — half of what a person remembers about a task is a phrase from its body, not its title — even though the description is collapsed by default, which means a hit needs to say where it was found.
-
-Shape questions, none settled:
-
-- the field's place. The panel's head already holds the count; a filter could
-  replace it while typing, or sit under it as its own row.
-- the algorithm. Subsequence matching with a score is the usual answer and
-  needs no dependency; `browse.ts` may already hold something close enough to
-  reuse rather than a second implementation.
-- highlighting the matched characters, which is what makes a fuzzy match
-  legible rather than mysterious. Without it a low-scoring hit reads as a bug.
-- whether a filtered row should open its description automatically when the
-  match was found there. Probably yes, or the row is a title that does not
-  contain what was typed.
-- the keyboard. Focus should reach the field first when the panel opens, and
-  ctrl+j/k should step the filtered rows — see the navigation mandate.
-
-Related: [[a show-completed section on the tasks panel]] (#87), which makes the list long enough that this stops being optional, and #58's command palette, which is the same matching problem in a different frame — worth one implementation rather than two.
-
 ## 90. Tug a bookmark forward to a revision
 
 Split out of #70, which is now only about showing bookmarks on a revision row.

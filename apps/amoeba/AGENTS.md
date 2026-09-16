@@ -135,7 +135,10 @@ the pane.
   keyboard surface is a `contenteditable` with `role=textbox`, so an
   `isContentEditable` test reported "editing" for the whole agent column and
   every chord silently did nothing. Ask _where_ the element is, by `data-column`.
-  The chords are still given up inside real `<input>`/`<textarea>`.
+  The chords are still given up inside real `<input>`/`<textarea>` — and the
+  listener returns without preventing anything, so **a field that wants ctrl+j
+  answers it in its own `onKeyDown`**. The tasks filter steps into the list that
+  way rather than carving an exception into `editing()`.
 - `[data-nav-item]` is opt-in: every focusable element would step through
   hover-revealed row controls.
 - **`⌘⇧P` and `⌘K` are left unclaimed** — the action-palette chords in every

@@ -15,7 +15,8 @@ import {
   watchTasks,
 } from "../data/daemon";
 import { Markdown } from "./Markdown";
-import { type Listed, merge } from "./tasklist";
+import { type Found, type Listed, filter, merge } from "./tasklist";
+import { type Span, pieces } from "../search/fuzzy";
 import { typeset } from "../design/typeset";
 import { colors, space, text } from "../design/tokens.stylex";
 
@@ -73,6 +74,24 @@ import { colors, space, text } from "../design/tokens.stylex";
 // The board needs no directory, which changes what an empty panel means: a
 // workspace with nothing running still has tasks written down about it, so
 // this panel is no longer blank when no session is open.
+//
+// ── the filter is a row, and it is always there ────────────────────────────
+//
+// The list is twenty-four outstanding in this workspace before the finished
+// ones are shown, and scrolling is the wrong gesture for finding a row whose
+// word somebody already remembers.
+//
+// It does not share the head. There is room for three things up there and the
+// count, the add button and the scope control are already those three — a
+// field squeezed in beside them would be two characters wide in a 280px
+// column. The row it costs is spent every time the panel is open, which is the
+// argument the add line loses and this one wins: writing a task down here is
+// the rarest thing done in this panel, and finding one is the commonest.
+//
+// The head still answers, though: while a filter is on, the count says how
+// many of how many, because a list that has quietly become three rows should
+// say what it is hiding. See `search/fuzzy.ts` for why a subject and a
+// description are not matched the same way.
 //
 // ── done tasks are a count, not rows ───────────────────────────────────────
 //
@@ -309,6 +328,41 @@ const styles = stylex.create({
     // which is the whole reason the role has to be on it.
     ":focus-visible": { borderColor: colors.accent, outlineStyle: "none" },
   },
+  // The filter's own band, under the head. The add line's shape without its
+  // animation: this one never leaves, so there is nothing to open.
+  filtering: {
+    display: "flex",
+    alignItems: "center",
+    gap: "0.4rem",
+    flexShrink: 0,
+    padding: "0.35rem 0.6rem",
+    borderBottomWidth: 1,
+    borderBottomStyle: "solid",
+    borderBottomColor: colors.border,
+  },
+  // What matched, and what did not.
+  //
+  // Deliberately NOT the accent. An accent is spent, not applied — it marks a
+  // deviation from the rows around it — and a highlight draws on every row a
+  // filter keeps, which is the arithmetic that put thirty accents in one
+  // column of the review queue. So the mark is made of what the row already
+  // has: the hit keeps the text colour and takes the weight, and everything
+  // around it drops to muted. The matched characters are the ones at full
+  // strength rather than the ones painted a new colour.
+  mark: { color: colors.text, fontWeight: text.strong },
+  dim: { color: colors.muted },
+  // The line of body a description hit is evidenced by. One line, clamped
+  // rather than wrapped: it is a fragment cut mid-sentence, and a fragment
+  // that took three lines would be the wall of prose the excerpt exists to
+  // avoid.
+  excerpt: {
+    margin: "0.15rem 0 0",
+    color: colors.muted,
+    fontSize: text.small,
+    whiteSpace: "nowrap",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+  },
   // A dot that is a control, for the rows this window owns. Everything about
   // it matches the span it replaces — see `dot` — so the list does not shift
   // by a pixel between a task awp wrote and one it copied.
@@ -363,8 +417,36 @@ const briefFor = (task: Listed): string => {
   return body === "" ? task.subject : `${task.subject}\n\n${body}`;
 };
 
+/**
+ * Text with the matched characters standing out of it.
+ *
+ * With no spans it renders the string and nothing else — the unfiltered case
+ * is every render of this panel, and it must not pay for a filter nobody
+ * typed, nor draw a row differently for having been asked about.
+ *
+ * Keyed by offset rather than by index: the pieces are a partition of one
+ * string, so where a piece starts is already unique, and an index key would
+ * re-use a node for a different fragment as somebody types.
+ */
+function Marks({
+  text: said,
+  spans,
+}: {
+  readonly text: string;
+  readonly spans: ReadonlyArray<Span>;
+}) {
+  if (spans.length === 0) {
+    return said;
+  }
+  return pieces(said, spans).map((piece) => (
+    <span key={piece.at} {...stylex.props(piece.hit ? styles.mark : styles.dim)}>
+      {piece.text}
+    </span>
+  ));
+}
+
 interface RowProps {
-  readonly task: Listed;
+  readonly found: Found;
   /** Absent for a session awp did not make: there is no agent to address. */
   readonly onSend: (() => void) | undefined;
   /**
@@ -388,7 +470,8 @@ interface RowProps {
   readonly state: "idle" | "sending" | "sent" | "failed";
 }
 
-function Row({ task, onSend, onMove, onFanOut, state }: RowProps) {
+function Row({ found, onSend, onMove, onFanOut, state }: RowProps) {
+  const task = found.task;
   const [open, setOpen] = useState(false);
   // Hover is React state rather than a CSS descendant selector, because StyleX
   // writes atomic rules for one element and has no way to say "while my parent
@@ -435,9 +518,20 @@ function Row({ task, onSend, onMove, onFanOut, state }: RowProps) {
           onClick={() => setOpen((was) => !was)}
           {...stylex.props(typeset.control, styles.subject)}
         >
-          <span {...stylex.props(styles.id)}>{task.label}</span>
-          {task.subject}
+          <span {...stylex.props(styles.id)}>
+            <Marks text={task.label} spans={found.label} />
+          </span>
+          <Marks text={task.subject} spans={found.subject} />
         </button>
+
+        {found.excerpt === undefined ? undefined : (
+          // Where it was found, for a row whose title visibly does not contain
+          // what was typed. Without this the filter reads as a bug: a list of
+          // titles, none of which say the word.
+          <p {...stylex.props(styles.excerpt)}>
+            <Marks text={found.excerpt.text} spans={found.excerpt.spans} />
+          </p>
+        )}
 
         {open && task.description.trim() !== "" ? (
           // Markdown, because a board task's body IS markdown — it is a
@@ -531,7 +625,12 @@ export function Tasks({ dir, project, workspace, thread }: TasksProps) {
   // nobody has to think about. `rememberedPanels` is the worked example of the
   // other kind.
   const [showingDone, setShowingDone] = useState(false);
+  // What is being looked for. Not remembered anywhere, for the same reason
+  // `showingDone` is not: a filter left on is a list that lies about how much
+  // work there is, and the panel is unmounted whenever its tab is hidden.
+  const [query, setQuery] = useState("");
   const held = useRef<ReadonlyArray<Task>>([]);
+  const list = useRef<HTMLDivElement>(null);
   const arriving = useArriving();
   const spring = useSpring();
 
@@ -595,6 +694,25 @@ export function Tasks({ dir, project, workspace, thread }: TasksProps) {
   }, [project, workspace, scope]);
 
   const { rows, done } = merge(board);
+  const showing = filter(rows, query);
+  const showingFinished = filter(done, query);
+  const filtering = query.trim() !== "";
+
+  /**
+   * Down, out of the field and into the list.
+   *
+   * `navigation.ts` hands ctrl+j and ctrl+k over inside a real `<input>` on
+   * purpose — on macOS they are kill-line and newline in any text field, and
+   * the composer is a textarea. That decision is right and this is what it
+   * costs: the field has to answer the chord itself, which it can, because the
+   * window's capture-phase listener returns without preventing anything.
+   *
+   * ArrowDown does it too. A person typing into a filter reaches for the arrow
+   * long before they reach for a chord, whatever the window's mandate is.
+   */
+  const intoTheList = () => {
+    list.current?.querySelector<HTMLElement>("[data-nav-item]")?.focus();
+  };
 
   /**
    * Write one down here.
@@ -684,7 +802,16 @@ export function Tasks({ dir, project, workspace, thread }: TasksProps) {
     <div {...stylex.props(styles.panel)}>
       <div {...stylex.props(styles.head)}>
         <span {...stylex.props(styles.count)}>
-          {rows.length === 0 ? "nothing to do" : `${rows.length} to do`}
+          {/*
+            While a filter is on the count says how many of how many: the list
+            has quietly stopped being all of them, and the head is where it
+            says so.
+          */}
+          {rows.length === 0
+            ? "nothing to do"
+            : filtering
+              ? `${showing.length} of ${rows.length}`
+              : `${rows.length} to do`}
           {done.length === 0 ? undefined : (
             // The count was the whole sentence and it made the finished half
             // unreachable: a number saying a thing exists, with no way to it.
@@ -698,7 +825,9 @@ export function Tasks({ dir, project, workspace, thread }: TasksProps) {
               onClick={() => setShowingDone((was) => !was)}
               {...stylex.props(styles.done, showingDone && styles.showing)}
             >
-              {` · ${done.length} done`}
+              {filtering
+                ? ` · ${showingFinished.length} of ${done.length} done`
+                : ` · ${done.length} done`}
             </button>
           )}
         </span>
@@ -744,6 +873,36 @@ export function Tasks({ dir, project, workspace, thread }: TasksProps) {
         )}
       </div>
 
+      <div {...stylex.props(styles.filtering)}>
+        <input
+          type="search"
+          data-nav-item
+          value={query}
+          placeholder="find one"
+          onChange={(event) => setQuery(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") {
+              // Clear rather than blur: the list coming back is the thing
+              // being asked for, and the field is where the next query is
+              // typed anyway.
+              event.preventDefault();
+              setQuery("");
+              return;
+            }
+            if (event.key === "Enter" || event.key === "ArrowDown") {
+              event.preventDefault();
+              intoTheList();
+              return;
+            }
+            if (event.ctrlKey && event.code === "KeyJ") {
+              event.preventDefault();
+              intoTheList();
+            }
+          }}
+          {...stylex.props(typeset.label, styles.field)}
+        />
+      </div>
+
       <AnimatePresence initial={false}>
         {writing ? (
           <motion.div
@@ -782,19 +941,29 @@ export function Tasks({ dir, project, workspace, thread }: TasksProps) {
         ) : undefined}
       </AnimatePresence>
 
-      <div {...stylex.props(styles.list)}>
-        {rows.length > 0 ? (
-          rows.map((task) => (
-            <motion.div key={task.key} layout="position" {...arriving}>
+      <div ref={list} {...stylex.props(styles.list)}>
+        {showing.length > 0 ? (
+          showing.map((one) => (
+            <motion.div key={one.task.key} layout="position" {...arriving}>
               <Row
-                task={task}
-                onSend={send(task)}
-                onFanOut={fanOut(task)}
-                onMove={move(task)}
-                state={states[task.key] ?? "idle"}
+                found={one}
+                onSend={send(one.task)}
+                onFanOut={fanOut(one.task)}
+                onMove={move(one.task)}
+                state={states[one.task.key] ?? "idle"}
               />
             </motion.div>
           ))
+        ) : filtering ? (
+          // A filter that matches nothing says so about itself. The two
+          // sentences below are about the board being empty, which is a
+          // different fact and would be a lie here — and the finished half
+          // may still have hits, which is the one thing worth pointing at.
+          <p {...stylex.props(styles.note)}>
+            {showingFinished.length === 0
+              ? `Nothing matches “${query.trim()}”.`
+              : `Nothing outstanding matches “${query.trim()}” — ${showingFinished.length} finished ${showingFinished.length === 1 ? "one does" : "ones do"}.`}
+          </p>
         ) : asked && done.length === 0 ? (
           // Two situations now, and they want different sentences. An empty
           // board is a fact about what is written down; an empty session list
@@ -808,7 +977,7 @@ export function Tasks({ dir, project, workspace, thread }: TasksProps) {
         ) : undefined}
 
         <AnimatePresence initial={false}>
-          {showingDone && done.length > 0 ? (
+          {showingDone && showingFinished.length > 0 ? (
             <motion.div
               key="finished"
               initial={{ height: 0, opacity: 0 }}
@@ -818,14 +987,14 @@ export function Tasks({ dir, project, workspace, thread }: TasksProps) {
               {...stylex.props(styles.opening)}
             >
               <div {...stylex.props(styles.finished)}>
-                {done.map((task) => (
+                {showingFinished.map((one) => (
                   <Row
-                    key={task.key}
-                    task={task}
-                    onSend={send(task)}
-                    onFanOut={fanOut(task)}
-                    onMove={move(task)}
-                    state={states[task.key] ?? "idle"}
+                    key={one.task.key}
+                    found={one}
+                    onSend={send(one.task)}
+                    onFanOut={fanOut(one.task)}
+                    onMove={move(one.task)}
+                    state={states[one.task.key] ?? "idle"}
                   />
                 ))}
               </div>

@@ -1,4 +1,5 @@
 import type { AgentTask, Task } from "@awp-kit/protocol";
+import { contains, excerpt, flatten, fuzzy, type Span } from "../search/fuzzy";
 
 // The board, as rows.
 //
@@ -122,4 +123,68 @@ export const merge = (
     .toSorted((a, b) => rank(a.status) - rank(b.status) || from(a.source) - from(b.source));
   const done = all.filter((row) => finished(row.status)).toSorted((a, b) => b.at - a.at);
   return { rows, done };
+};
+
+// ── narrowing the list, and what a row has to say about why it is still here ──
+//
+// Three fields are matched and they are matched three different ways, which is
+// the whole of the design:
+//
+//   label        substring    `#89` is an address, and half of it typed is
+//                             not a fuzzy question
+//   subject      fuzzy        a title somebody half-remembers
+//   description  substring    see `fuzzy.ts` — a subsequence over six thousand
+//                             characters matches every task there is
+//
+// **The order does not change.** `merge` above orders by what is underway and
+// then by source, which is a reading order somebody has learned; re-sorting the
+// survivors by how well they matched would move a row somebody is aiming at
+// while they are still typing. A filter answers "which of these", not "which
+// first".
+
+/** A row that survived the filter, and where the query was found in it. */
+export interface Found {
+  readonly task: Listed;
+  /** Empty when the query was not found here, or when there is no query. */
+  readonly label: ReadonlyArray<Span>;
+  readonly subject: ReadonlyArray<Span>;
+  /**
+   * One line of the body around the match — present only when the subject did
+   * *not* match.
+   *
+   * A row whose title contains what was typed needs no evidence; a row whose
+   * title does not is otherwise a title that visibly fails the filter, which
+   * reads as a bug rather than as a hit in the description.
+   */
+  readonly excerpt: { readonly text: string; readonly spans: ReadonlyArray<Span> } | undefined;
+}
+
+const nothing: ReadonlyArray<Span> = [];
+
+/** The rows that match, in the order they were already in. */
+export const filter = (rows: ReadonlyArray<Listed>, query: string): ReadonlyArray<Found> => {
+  const asked = query.trim();
+  if (asked === "") {
+    return rows.map((task) => ({ task, label: nothing, subject: nothing, excerpt: undefined }));
+  }
+  const found: Array<Found> = [];
+  for (const task of rows) {
+    const label = contains(asked, task.label);
+    const subject = fuzzy(asked, task.subject);
+    if (label !== undefined || subject !== undefined) {
+      found.push({
+        task,
+        label: label ?? nothing,
+        subject: subject ?? nothing,
+        excerpt: undefined,
+      });
+      continue;
+    }
+    const flat = flatten(task.description);
+    const body = contains(asked, flat);
+    if (body !== undefined) {
+      found.push({ task, label: nothing, subject: nothing, excerpt: excerpt(flat, body) });
+    }
+  }
+  return found;
 };

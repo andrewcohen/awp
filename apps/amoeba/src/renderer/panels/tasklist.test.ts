@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Task } from "@awp-kit/protocol";
-import { finished, merge } from "./tasklist";
+import { filter, finished, merge } from "./tasklist";
 
 const board = (over: Partial<Task> = {}): Task => ({
   id: "todo:thicket#91",
@@ -107,5 +107,53 @@ describe("finished", () => {
     expect(finished("done")).toBe(true);
     expect(finished("pending")).toBe(false);
     expect(finished("in_progress")).toBe(false);
+  });
+});
+
+describe("filter", () => {
+  const rows = merge([
+    board({ id: "a", seq: 89, subject: "Fuzzy search over the tasks panel", description: "" }),
+    board({
+      id: "b",
+      seq: 63,
+      subject: "Run a workspace's services",
+      description: "The port is the feature.\n\n    A service nobody can reach is a process.",
+    }),
+    board({ id: "c", seq: 21, subject: "Design one theme", description: "" }),
+  ]).rows;
+
+  const subjects = (query: string): ReadonlyArray<string> =>
+    filter(rows, query).map((one) => one.task.subject);
+
+  it("an empty query keeps everything, and marks nothing", () => {
+    const all = filter(rows, "  ");
+    expect(all).toHaveLength(3);
+    expect(all.every((one) => one.subject.length === 0 && one.excerpt === undefined)).toBe(true);
+  });
+
+  it("matches a subject fuzzily", () => {
+    expect(subjects("fzp")).toStrictEqual(["Fuzzy search over the tasks panel"]);
+  });
+
+  it("matches the label as an address, not a subsequence", () => {
+    expect(subjects("#63")).toStrictEqual(["Run a workspace's services"]);
+    expect(subjects("#69")).toStrictEqual([]);
+  });
+
+  // The reason the description is matched at all: half of what a person
+  // remembers about a task is a phrase from its body.
+  it("matches a description, and says where", () => {
+    const [only, ...rest] = filter(rows, "nobody can reach");
+    expect(rest).toStrictEqual([]);
+    expect(only?.task.subject).toBe("Run a workspace's services");
+    expect(only?.excerpt?.text).toContain("nobody can reach");
+  });
+
+  it("a subject hit carries no excerpt, because the title is the evidence", () => {
+    expect(filter(rows, "services")[0]?.excerpt).toBeUndefined();
+  });
+
+  it("keeps the order it was given rather than ranking by the match", () => {
+    expect(subjects("e")).toStrictEqual(rows.map((one) => one.subject));
   });
 });
