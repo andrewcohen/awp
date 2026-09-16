@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type Repairable, looksMine, repairPrompt } from "./repair";
+import { type Repairable, looksMine, repairPrompt, reviewBrief } from "./repair";
 
 // The two tones, and the rule that a reviewer is not handed the author's chores.
 // Every case here is a wording decision the archive got wrong first — see the
@@ -134,5 +134,58 @@ describe("whose branch it looks like", () => {
     // the cost of being wrong that way is a prompt that offers to fix rather
     // than one that quietly declines to.
     expect(looksMine(pr({ headRef: "someone/lantern" }), undefined)).toBe(true);
+  });
+});
+
+const brief = (over: Partial<Parameters<typeof reviewBrief>[0]> = {}) =>
+  reviewBrief({
+    number: 412,
+    title: "paginate the tabular exports",
+    url: "https://example.invalid/pull/412",
+    baseRef: "main",
+    ...over,
+  });
+
+describe("the brief a fresh review workspace gets", () => {
+  it("names the pull request and where its diff is", () => {
+    const said = brief();
+    expect(said).toContain("PR #412: paginate the tabular exports");
+    expect(said).toContain("https://example.invalid/pull/412");
+    expect(said).toContain("`main..@`");
+  });
+
+  it("says not to touch the branch, because it is somebody else's", () => {
+    // The one line that must survive any rewording: a review workspace is a
+    // checkout of somebody's branch, and an agent that starts fixing what it
+    // finds has rewritten the thing it was asked to read.
+    const said = brief();
+    expect(said).toContain("not fixing it");
+    expect(said).toContain("do not push");
+  });
+
+  it("points at the tools this daemon actually hands the conversation", () => {
+    // Not `awp review add`. The archive's prompt is six hundred lines about a
+    // CLI that does not exist here — see `reviewBrief`'s own note.
+    const said = brief();
+    expect(said).toContain("awp_review_comments");
+    expect(said).toContain("awp_file_finding");
+    expect(said).not.toContain("awp review add");
+  });
+
+  it("says there is no description rather than leaving a hole", () => {
+    // A blank paragraph between the title and the instructions reads as a
+    // prompt that lost something, which is worse than the absence itself.
+    expect(brief()).toContain("(the pull request has no description)");
+    expect(brief({ body: "  " })).toContain("(the pull request has no description)");
+  });
+
+  it("carries the description when there is one", () => {
+    const said = brief({ body: "Adds a page size and a cursor." });
+    expect(said).toContain("Adds a page size and a cursor.");
+    expect(said).not.toContain("no description");
+  });
+
+  it("leaves no empty line where a missing url was", () => {
+    expect(brief({ url: "" })).not.toMatch(/\n\n\n/);
   });
 });

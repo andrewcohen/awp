@@ -3316,7 +3316,22 @@ export class AwpRpcs extends RpcGroup.make(
    * is what has a progress panel.
    */
   Rpc.make("ReviewStart", {
-    payload: { project: Schema.String, number: Schema.Int },
+    payload: {
+      project: Schema.String,
+      number: Schema.Int,
+      /**
+       * Which agent this review should live in. See {@link Face}.
+       *
+       * The same field {@link Rpc ThreadStart} carries, and here for the same
+       * reason: the `brief` step delivers by it and the `claim` step records
+       * it, so a review started without one was briefed into a pty while the
+       * chat beside it said `nothing said yet`.
+       *
+       * Optional, so absent still means the terminal — `faces.ts` argues that
+       * default — and an older client is no worse than it was.
+       */
+      face: Schema.optional(Face),
+    },
     success: ReviewStarted,
     error: ReviewStartFailed,
   }),

@@ -251,3 +251,69 @@ export const repairPrompt = (
     `Address each of them, then push.${again}`,
   ].join("\n");
 };
+
+/**
+ * What to say to the agent in a freshly built review workspace.
+ *
+ * ── a review workspace was arriving with nothing said in it ────────────────
+ *
+ * Reported as "doesnt send any initial prompt after setting up the
+ * thread/workspace". `ReviewStart` enqueued `create-workspace` with no
+ * `prompt`, so the `brief` step logged `nothing to tell the agent` and the
+ * person was handed a checkout of somebody's branch and an idle agent. Every
+ * other way into this window briefs what it makes.
+ *
+ * ── this is not `repairPrompt`, and the two must not merge ─────────────────
+ *
+ *   repairPrompt   what is WRONG with a pull request — conflicts, red CI, a
+ *                  reviewer waiting. Offered into the composer for a person
+ *                  to read before it is sent, because on your own PR it says
+ *                  to push
+ *   reviewBrief    "read this and tell me what you think", sent by the job
+ *                  the moment the workspace exists. Nothing here changes a
+ *                  file, so nothing here needs a person's eye first
+ *
+ * ── deliberately smaller than the archive's ────────────────────────────────
+ *
+ * `internal/cli/review_prompt.md` is six hundred lines of `awp review add`
+ * invocations, quoting rules and heredoc advice — all of it about a CLI that
+ * does not exist here. amoeba hands the conversation an MCP server instead, so
+ * a finding is one tool call with typed arguments and there is nothing to
+ * escape. What is worth carrying over is the *judgement*: volume, tone, and
+ * the closing summary. Those are here. Porting the rest would be porting a
+ * manual for the wrong tool.
+ */
+export const reviewBrief = (pr: {
+  readonly number: number;
+  readonly title: string;
+  readonly url: string;
+  readonly baseRef: string;
+  readonly body?: string | undefined;
+}): string => {
+  const body = (pr.body ?? "").trim();
+  return [
+    `Please review PR #${pr.number}: ${pr.title}`,
+    pr.url === "" ? undefined : pr.url,
+    "",
+    body === "" ? "(the pull request has no description)" : body,
+    "",
+    `The branch is checked out here; the diff is \`${pr.baseRef}..@\`.`,
+    "",
+    // Said first and said plainly. A review workspace is a checkout of
+    // somebody else's branch, and an agent that starts fixing what it finds
+    // has rewritten the thing it was asked to read.
+    "You are reviewing this, not fixing it. Do not edit files, do not commit, do not push, and do not comment on GitHub. Running tests to confirm a specific finding is fine.",
+    "",
+    "Read `awp_review_comments` before you start: an author of `human` is somebody asking you for something, and an author of `agent` is a finding you have already filed. Do not restate a point that is already there — agreeing or disagreeing with one is useful, repeating it is noise.",
+    "",
+    "File each finding with `awp_file_finding`, so it lands beside the code in the diff panel rather than in a paragraph somebody has to map back onto files. Pass `text` — the line's exact content — so the finding follows the code through a rebase or a force-push instead of pointing at whatever later occupies that number.",
+    "",
+    "Aim for three to eight findings on a typical pull request, and fewer when they do not clear the bar. Silence is an acceptable review; padding is not. Lead each one with the ask or the fault — justification after, and only where it changes the decision.",
+    "",
+    "Finish with one closing summary in chat: what you read, what you deliberately skipped, and where your confidence is low.",
+  ]
+    .filter((line) => line !== undefined)
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+};

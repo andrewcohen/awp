@@ -15,6 +15,7 @@ import { bucketLabel, reviewQueueBuckets } from "@awp-kit/protocol";
 import * as stylex from "@stylexjs/stylex";
 import { GitPullRequestIcon } from "@phosphor-icons/react/GitPullRequest";
 import { Nothing } from "./Nothing";
+import { START_FACE } from "./NewThread";
 import { useState } from "react";
 import { said, startReview } from "./daemon";
 import { guide } from "./stacks";
@@ -461,7 +462,7 @@ export function ReviewQueue({
     // Said before the call, because the call is a round trip and a press that
     // leaves the row unchanged reads as a press that missed.
     setStarting((all) => new Set(all).add(key));
-    startReview(item.project, item.number)
+    startReview(item.project, item.number, START_FACE)
       .then((started) => {
         // No navigation, which is the new-thread box's precedent: the job is
         // what has the progress, and going to a workspace whose session does

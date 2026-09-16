@@ -603,8 +603,15 @@ export const repair = (project: string, number: number): Promise<Repaired> =>
     Effect.flatMap(AwpClient, (rpc) => rpc.PullRequestRepair({ project, number })),
   );
 
-export const startReview = (project: string, number: number): Promise<ReviewStarted> =>
-  runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.ReviewStart({ project, number })));
+export const startReview = (
+  project: string,
+  number: number,
+  /** Which of the workspace's two agents gets briefed. See `START_FACE`. */
+  face: Face,
+): Promise<ReviewStarted> =>
+  runtime.runPromise(
+    Effect.flatMap(AwpClient, (rpc) => rpc.ReviewStart({ project, number, face })),
+  );
 
 /**
  * Watch every job change until the returned function is called.

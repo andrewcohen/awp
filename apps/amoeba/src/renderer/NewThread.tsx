@@ -100,7 +100,15 @@ const TRUNK = "trunk()";
  *
  * A constant and not a remembered preference: see the note at its `useState`.
  */
-const START_FACE: Face = "chat";
+/**
+ * Which face a workspace made from this window starts in.
+ *
+ * Exported because the review queue makes workspaces too and has no form to
+ * ask in — a review started on the other answer was briefed into a pty while
+ * the chat beside it said `nothing said yet`. One constant, because two files
+ * each naming a default is two defaults waiting to disagree.
+ */
+export const START_FACE: Face = "chat";
 
 /** What the window knew when the modal was opened. */
 export interface NewThreadRequest {

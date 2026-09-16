@@ -43,7 +43,7 @@ import { Clock, Effect, FileSystem, Option, Path, Ref, Schema, Stream } from "ef
 import { Chat } from "./chat";
 import { Faces } from "./faces";
 import { ReviewQueueFeed } from "./review-queue-feed";
-import { type Repairable, looksMine, repairPrompt } from "./repair";
+import { type Repairable, looksMine, repairPrompt, reviewBrief } from "./repair";
 import { authored, reviewRequested, reviewRerequested } from "./github-parse";
 import { type Claim, reviewKey, reviewNumber, reviewOf, reviewWorkspace } from "./review-queue";
 import { Jj } from "./jj";
@@ -1835,7 +1835,7 @@ export const layer = AwpRpcs.toLayer(
        * second. What that costs is spelled out below, at the one place it can
        * be seen — a thread made a moment before losing that race.
        */
-      ReviewStart: ({ project, number }) =>
+      ReviewStart: ({ project, number, face }) =>
         Effect.gen(function* () {
           const declined = (reason: string) => new ReviewStartFailed({ project, number, reason });
 
@@ -1891,6 +1891,13 @@ export const layer = AwpRpcs.toLayer(
           }
 
           const settings = yield* config.read();
+          // The description, for the brief. Cached the same way the listing is,
+          // and `undefined` is an answer rather than a failure: a review with
+          // no description in its brief is worse than one with, and neither is
+          // worth refusing to start a review over.
+          const full = yield* reviewQueue
+            .detail(found.root, number)
+            .pipe(Effect.orElseSucceed(() => undefined));
           // `#123 title`, which is what the sidebar shows. Not asked of a model,
           // unlike a thread started from a sentence: GitHub has already been
           // given a title for this work by the person who opened the PR, and
@@ -1935,6 +1942,39 @@ export const layer = AwpRpcs.toLayer(
                   ...(pr.fork === undefined ? {} : { fork: pr.fork }),
                 },
                 agent: agentWith(settings, {}),
+                // ── a review workspace used to arrive with nothing said ──────
+                //
+                // This enqueued no `prompt` at all, so the `brief` step logged
+                // `nothing to tell the agent` and a person was handed a checkout
+                // of somebody else's branch and an idle agent. Every other way
+                // into this window briefs what it makes.
+                //
+                // Composed here rather than in the window for the reason every
+                // rule in this repo is: the tone, the volume and the refusal to
+                // touch files are the daemon's, and a client writing its own
+                // would be the copy that drifts. See `reviewBrief`, which is
+                // deliberately not `repairPrompt` — that one says what is
+                // *wrong* with a pull request and is offered into the composer
+                // for a person to read, because on your own PR it says to push.
+                prompt: reviewBrief({
+                  number,
+                  title: pr.title,
+                  url: pr.url,
+                  baseRef: pr.baseRef,
+                  ...(full === undefined ? {} : { body: full.body }),
+                }),
+                // ── and it landed in the terminal ────────────────────────────
+                //
+                // Absent means the terminal — `faces.ts` argues that default at
+                // length, and it is right for every workspace that predates the
+                // table. It is wrong as the answer for a workspace being made
+                // right now: this one carried no face, so the brief was typed
+                // into a pty and the chat beside it said `nothing said yet`.
+                //
+                // The window chooses, exactly as it does for a thread. Absent
+                // here still means the terminal, so an older client is no worse
+                // than it was.
+                ...(face === undefined ? {} : { face }),
               },
               { key },
             )
