@@ -74,15 +74,13 @@ describe("validate", () => {
   const typed = "add tabular exports to checkout";
 
   test("a good answer comes through", () => {
-    const found = validate(
-      { name: "tabular-exports", label: "Tabular exports", prompt: "Add tabular exports." },
-      typed,
-    );
+    const found = validate({ name: "tabular-exports", label: "Tabular exports" }, typed);
 
     expect(found).toEqual({
       name: "tabular-exports",
       label: "Tabular exports",
-      prompt: "Add tabular exports.",
+      // Not asked for and not taken: the brief is what was typed.
+      prompt: typed,
     });
   });
 
@@ -94,7 +92,20 @@ describe("validate", () => {
     expect(found?.name).toBe("tabular-exports");
   });
 
-  test("a missing label or prompt falls back to what was typed", () => {
+  test("the prompt is what was typed, whatever the model says", () => {
+    // The finding this test exists for. Every other field is checked against
+    // something local before it is used; `prompt` was the one taken whole, so
+    // the agent was briefed with a paraphrase of somebody's sentence rather
+    // than the sentence. A model that answers with one now has it ignored.
+    const found = validate(
+      { name: "a-name", label: "A name", prompt: "Please add tabular exports to the checkout." },
+      typed,
+    );
+
+    expect(found?.prompt).toBe(typed);
+  });
+
+  test("a missing label falls back to what was typed", () => {
     const found = validate({ name: "a-name" }, typed);
 
     expect(found?.label).toBe(typed);
@@ -120,7 +131,7 @@ describe("validate", () => {
   });
 
   test("extra fields are ignored, not fatal", () => {
-    const found = validate({ name: "a", label: "b", prompt: "c", project: "invented" }, typed);
-    expect(found).toEqual({ name: "a", label: "b", prompt: "c" });
+    const found = validate({ name: "a", label: "b", project: "invented" }, typed);
+    expect(found).toEqual({ name: "a", label: "b", prompt: typed });
   });
 });

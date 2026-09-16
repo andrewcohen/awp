@@ -41,10 +41,15 @@ export class IntentError extends Data.TaggedError("IntentError")<{
 }> {}
 
 /**
- * What the model is asked for.
+ * What the naming step resolves to.
  *
- * `name` is a directory and a jj workspace name; `label` is what the sidebar
- * shows; `prompt` is what gets typed into the new agent session.
+ * `name` is a directory and a jj workspace name and `label` is what the
+ * sidebar shows — both the model's to choose, and both checked here.
+ *
+ * `prompt` is what gets typed into the new agent session, and it is **not**
+ * asked for. It is the typed text carried through, so that the step patching
+ * the job record has one shape whether the model answered or not. See
+ * `validate`.
  */
 export const Intent = Schema.Struct({
   name: Schema.String,
@@ -152,16 +157,12 @@ const prompt = (description: string, project: string): string =>
     `The project is ${project}.`,
     "",
     "Answer with a JSON object and nothing else — no prose, no code fence:",
-    '{"name": "...", "label": "...", "prompt": "..."}',
+    '{"name": "...", "label": "..."}',
     "",
     "  name    A directory name: lowercase, hyphen-separated, letters digits",
     "          and hyphens only, a handful of words. It has to work as a path.",
     "  label   The same thing as a short human-readable phrase. This is what",
     "          the sidebar shows, so it may have spaces and capitals.",
-    "  prompt  What to tell the coding agent that will do the work. Write it as",
-    "          an instruction to that agent. Keep the developer's meaning and",
-    "          their specifics — a PR number, a file, a symbol they named. Do",
-    "          not invent requirements they did not state.",
   ].join("\n");
 
 /**
@@ -219,10 +220,26 @@ export const validate = (raw: unknown, description: string): Intent | undefined 
   }
   return {
     name,
-    // The typed text is the fallback for both, so a model that answered only
-    // `name` still produces a complete result rather than blank fields.
+    // The typed text is the fallback, so a model that answered only `name`
+    // still produces a complete result rather than a blank field.
     label: text(reply["label"]) === "" ? description.trim() : text(reply["label"]),
-    prompt: text(reply["prompt"]) === "" ? description.trim() : text(reply["prompt"]),
+    // ── the brief is not the model's to write ──────────────────────────
+    //
+    // Every other field here is checked against something local before it is
+    // used — that is what makes acting on an answer nobody read safe, and it
+    // is why `name` is re-slugged two lines up rather than trusted. `prompt`
+    // was the one field taken whole, so what reached the agent was a
+    // paraphrase of somebody's sentence rather than the sentence.
+    //
+    // Lossy in proportion to how much was typed: a one-line description
+    // survives, and a paragraph comes back as a summary, because that is what
+    // "write it as an instruction to that agent" does to a paragraph. The
+    // fallback said so all along — `nameFrom` sets the typed text, so a naming
+    // call that FAILED gave the agent a better brief than one that succeeded.
+    //
+    // The model still names and labels. Those are the two it is good at and
+    // the two that are checked.
+    prompt: description.trim(),
   };
 };
 
