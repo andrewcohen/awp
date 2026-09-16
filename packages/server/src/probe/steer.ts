@@ -33,6 +33,20 @@
 //   do the two turns end in the order they were sent?
 //     — the release rule can only be exact if they do
 //
+// ── and the third, which is about an end that never came ───────────────────
+//
+// Reported as "this thread is thinking but its not". Every ordinary end of a
+// turn arrives as the reply to `session/prompt`; a killed adapter sends no
+// reply, and `request` is an `Effect.callback` with no timeout, so the fiber
+// holding it simply waits. The transcript then holds a `turn started` with no
+// end after it — for the life of the conversation, and for every client that
+// replays it, including one opened tomorrow.
+//
+//   does a `turn ended` arrive when the adapter is killed mid-turn?
+//     — the only question here whose old answer was NO, and the only one a
+//       fake cannot ask: the absence being measured is the absence of a
+//       process
+//
 // ── safe anywhere ──────────────────────────────────────────────────────────
 // A temporary directory and one file in it. It never invokes zmx, never
 // attaches and never names a session.
@@ -94,6 +108,8 @@ const drive = (
       key: string,
       interrupt: boolean,
     ) => Effect.Effect<string, unknown>;
+    /** SIGKILL the adapter. See the third scenario. */
+    readonly stop: Effect.Effect<void>;
   }) => Effect.Effect<void, unknown>,
 ) =>
   Effect.scoped(
@@ -235,6 +251,43 @@ const program = Effect.gen(function* () {
           : queuedOrder
       }\n`,
   );
+  // ── three: the adapter is killed while a turn is in flight ──────────────
+  //
+  // The one scenario here whose subject is not the adapter's behaviour but
+  // this daemon's. Nothing comes back from a killed process, so the edge —
+  // if there is one — is entirely the daemon's own.
+  const killed = yield* drive(spawner, dir, (chat) =>
+    Effect.gen(function* () {
+      yield* chat.send(SLOW, "probe-killed", false);
+      yield* Effect.sleep("8 seconds");
+      console.log("  killing the adapter now\n");
+      yield* chat.stop;
+      // Generous: the edge is emitted from the reader's own finalizer, which
+      // runs when stdout closes, and a pipe closing is not instantaneous.
+      yield* Effect.sleep("10 seconds");
+    }),
+  );
+  report("the adapter killed mid-turn", killed);
+
+  const killedOrder = turnOrder(killed);
+  const end = killed.find(
+    (one) => one.update.kind === "turn" && (one.update as { status?: string }).status === "ended",
+  );
+  console.log(
+    `\n  turns                     ${killedOrder}` +
+      `\n  stopReason                ${
+        (end?.update as { stopReason?: string } | undefined)?.stopReason ?? "(no end arrived)"
+      }` +
+      `\n  which means               ${
+        killedOrder === "started → ended"
+          ? "the turn ends when the process answering it does. A client folding " +
+            "this transcript stops drawing work in progress"
+          : "NO END — every client replaying this transcript says `working` " +
+            "for the rest of the conversation, and a window opened tomorrow " +
+            "says it too"
+      }\n`,
+  );
+
   rmSync(dir, { recursive: true, force: true });
   return 0;
 }).pipe(

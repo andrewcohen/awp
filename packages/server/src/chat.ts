@@ -49,6 +49,7 @@ import {
   Data,
   Duration,
   Effect,
+  Exit,
   Layer,
   Option,
   Queue,
@@ -302,6 +303,20 @@ interface Conversation {
    * a new session beside it.
    */
   readonly sessions: () => Effect.Effect<ReadonlyArray<string>, ChatError>;
+  /**
+   * Kill the adapter process where it stands.
+   *
+   * Only the probe asks, and it asks the one question no fake can answer:
+   * **what does a turn do when the process answering it goes away?** Every
+   * ordinary end — a reply, a refusal, a cancel — comes back through
+   * `session/prompt`. A killed adapter sends nothing at all, which is an
+   * absence rather than an edge, and an absence is what left a conversation
+   * saying `working` for the rest of its life.
+   *
+   * Not `cancel`, which is the adapter being asked nicely and answering. This
+   * is the adapter not being there.
+   */
+  readonly stop: Effect.Effect<void>;
   /** Answer a permission request by the id the update carried. */
   /**
    * Stop the turn that is running, if one is.
@@ -884,6 +899,52 @@ export const conversation = (
      * other end, so a notification sent as a request would leave this side
      * waiting for an answer nobody is required to send.
      */
+    /**
+     * Every request still waiting, answered with a refusal instead of nothing.
+     *
+     * ── an adapter that exits answers nothing, and nothing said so ────────
+     *
+     * `request` is an `Effect.callback` that resumes from the reader's table,
+     * and the table is the only thing that ever resumes it — there is no
+     * timeout, deliberately, because a turn legitimately runs for twenty
+     * minutes. So the exit of the process on the other end is not a failure
+     * here; it is an **absence**, and an absence has no edge for anything to
+     * hang on.
+     *
+     * What that cost is the one state this file says twice is the worst to be
+     * wrong about. The adapter dies mid-turn, `session/prompt` is never
+     * resumed, and the fiber holding it sits in `mine` forever:
+     *
+     * ```
+     *   the transcript   turn started …                ← and no `ended`, ever
+     *   this daemon      working, for the life of the conversation
+     *   every client     replays that transcript and folds `running: 1`
+     *                    — a window opened tomorrow reads it the same way
+     * ```
+     *
+     * Reported as "this thread is thinking but its not". Nothing else on
+     * screen disagrees, because every face is folding the same true record of
+     * what this process actually said.
+     *
+     * The repair is that the reader's **end is an event**: stdout closing is
+     * how a spawned process says it has gone, so the stream completing is the
+     * one place this side can know. Each waiter is handed an ordinary
+     * JSON-RPC error rather than a second resume path — `request` already
+     * turns an `error` field into a `ChatError`, and a second way to fail a
+     * call is the copy that drifts.
+     */
+    const abandonWaiting = (why: string) =>
+      Effect.sync(() => {
+        // Emptied before any of them is resumed: resuming a fiber can run it,
+        // and a turn that failed is free to send its own next request into a
+        // table it would otherwise still be being iterated out of.
+        const pendings = Array.from(waiting.values());
+        waiting.clear();
+        for (const pending of pendings) {
+          pending({ error: { code: -32000, message: why } });
+        }
+      });
+
     const notify = (method: string, params: unknown): Effect.Effect<void> =>
       Effect.sync(() => {
         Queue.offerUnsafe(
@@ -968,7 +1029,12 @@ export const conversation = (
         }
       }),
     );
-    yield* Effect.forkScoped(Effect.ignore(reader));
+    // `ensuring`, so the end of the reader is the end of every request that
+    // was waiting on it — whether the stream finished (the process exited),
+    // failed, or was interrupted by this scope closing.
+    yield* Effect.forkScoped(
+      Effect.ensuring(Effect.ignore(reader), abandonWaiting("the ACP adapter stopped answering")),
+    );
 
     const hello = yield* request("initialize", {
       protocolVersion: 1,
@@ -1273,35 +1339,61 @@ export const conversation = (
           }
         }
 
+        // ── the end of a turn is a finalizer, not a success ──────────────
+        //
+        // A refused or crashed turn still ends. Reporting only the happy edge
+        // leaves the window saying "working" for the rest of the session,
+        // which is the worst of the three states to be wrong about — and
+        // `orElseSucceed`, which is what used to say so, catches a *failure*
+        // and nothing else. A defect anywhere below it, or this scope closing
+        // under the fiber, took the whole pipeline with it and emitted no
+        // edge at all.
+        //
+        // That is not a hypothetical shape: interruption is not a failure, and
+        // this file already records the same mistake in the feeds the window
+        // wraps in `Effect.retry`. So the emission is on the exit, where the
+        // three outcomes are one outcome.
+        const ended = (stopReason: string) =>
+          // Ignored, because this runs while the conversation may already be
+          // going away: a transcript nobody can be told about is not a reason
+          // to fail a finalizer.
+          Effect.ignore(
+            Effect.gen(function* () {
+              // Any call still in flight is settled *before* the turn's own
+              // end, so a client folding both in one batch sees the rows
+              // resolve and then the turn stop — rather than a turn that
+              // ended with work apparently still going on inside it.
+              yield* settleHangingCalls;
+              yield* emit({ kind: "turn", status: "ended", stopReason, id: key });
+              // ── and nothing is left holding ─────────────────────────────
+              //
+              // The ordinary release is the compaction's own "compacting
+              // completed." sentence. This is the case where that sentence
+              // never comes: the turn was cancelled, the adapter died, or
+              // upstream reworded it — `compactionOf` says in its own note
+              // that a rewording degrades to prose, and without this that
+              // degradation would also strand somebody's message for the life
+              // of the conversation. A turn that has ended is not compacting,
+              // whatever was or was not said.
+              yield* Ref.set(compacting, false);
+              // Read here rather than closed over: `flushWaiting` is a `let`
+              // reassigned as messages are held, so the value wanted is the
+              // one standing when the turn ends.
+              yield* flushWaiting;
+            }),
+          );
+
         yield* emit({ kind: "turn", status: "started", id: key });
         yield* Effect.forkIn(
-          request("session/prompt", promptOf(text)).pipe(
-            Effect.map((reply) => String(reply["stopReason"] ?? "")),
-            // A refused or crashed turn still ends. Reporting only the happy
-            // edge leaves the window saying "working" for the rest of the
-            // session, which is the worst of the three states to be wrong
-            // about.
-            Effect.orElseSucceed(() => "failed"),
-            // Any call still in flight is settled *before* the turn's own
-            // end, so a client folding both in one batch sees the rows
-            // resolve and then the turn stop — rather than a turn that
-            // ended with work apparently still going on inside it.
-            Effect.tap(() => settleHangingCalls),
-            Effect.flatMap((stopReason) =>
-              emit({ kind: "turn", status: "ended", stopReason, id: key }),
+          Effect.onExit(
+            Effect.map(request("session/prompt", promptOf(text)), (reply) =>
+              String(reply["stopReason"] ?? ""),
             ),
-            // ── and nothing is left holding ─────────────────────────────
-            //
-            // The ordinary release is the compaction's own "compacting
-            // completed." sentence. This is the case where that sentence
-            // never comes: the turn was cancelled, the adapter died, or
-            // upstream reworded it — `compactionOf` says in its own note
-            // that a rewording degrades to prose, and without this that
-            // degradation would also strand somebody's message for the life
-            // of the conversation. A turn that has ended is not compacting,
-            // whatever was or was not said.
-            Effect.tap(() => Ref.set(compacting, false)),
-            Effect.tap(() => flushWaiting),
+            // An interrupted turn reads as `failed` like a refused one, and
+            // deliberately: what a client does with either is stop drawing it
+            // as work in progress, and inventing a third word would be a
+            // distinction no face has a rendering for.
+            (exit) => ended(Exit.isSuccess(exit) ? exit.value : "failed"),
           ),
           mine,
         );
@@ -1388,6 +1480,9 @@ export const conversation = (
 
           return yield* deliver(text, interrupt, key);
         }),
+
+      /** SIGKILL, so nothing gets to be tidy on the way out. Probe only. */
+      stop: Effect.ignore(handle.kill({ killSignal: "SIGKILL" })),
 
       /** Every session the adapter sees here, by id. Asked for by the probe. */
       sessions: () =>
