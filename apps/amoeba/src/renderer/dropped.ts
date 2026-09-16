@@ -91,3 +91,65 @@ export const acceptsFiles = (
     });
   },
 });
+
+/**
+ * The handlers a whole panel needs to accept a file on behalf of its composer.
+ *
+ * ── a drop target the size of the thing somebody is looking at ────────────
+ *
+ * {@link acceptsFiles} puts these on the textarea, which makes the box the
+ * only place a file may be let go of — and the box is one line at the bottom
+ * of a column somebody is reading. Asked for in those words: the whole pane
+ * should take a drop, and it should not matter whether the composer is
+ * focused.
+ *
+ * The composer keeps its own handlers as well, and that is not redundant: a
+ * drop **on** the box has a caret to land at, which is the one thing this
+ * cannot know. Both see the same event, because the box's handler does not
+ * stop propagation — so this one asks whether the drop was already taken and
+ * does nothing when it was. Without that the path is spliced twice, once at
+ * the caret and once at the end.
+ *
+ * ── it answers where the caret should go, and does not put it there ───────
+ *
+ * Focusing means reading a ref, and a ref may not be read while rendering —
+ * which is what building these handlers is. So the caret comes back and the
+ * caller moves it from inside its own event handler, where the rule allows
+ * it. That also keeps this file free of the DOM it would otherwise have to
+ * hold on to across a frame.
+ *
+ * `undefined` for a drop that carried nothing usable — which is every drop in
+ * a plain browser, where the bridge is absent. It is cancelled all the same:
+ * the alternative is Chromium navigating the window to the file, replacing
+ * the renderer with a picture of somebody's screenshot and no way back but a
+ * reload. That is the failure `main.tsx` cancels at `window` for.
+ */
+export const acceptsFilesInto = (
+  value: string,
+  onValue: (next: string) => void,
+): {
+  readonly onDragOver: (event: React.DragEvent<HTMLElement>) => void;
+  readonly onDrop: (event: React.DragEvent<HTMLElement>) => number | undefined;
+} => ({
+  onDragOver: (event) => {
+    event.preventDefault();
+  },
+  onDrop: (event) => {
+    // Already handled by the textarea's own, which had a caret to use.
+    if (event.defaultPrevented) {
+      return undefined;
+    }
+    event.preventDefault();
+    const paths = droppedPaths(event.dataTransfer);
+    if (paths.length === 0) {
+      return undefined;
+    }
+    // No caret, because the pointer was let go somewhere that has none. The
+    // end of the draft is the honest place for it — and the caller focuses
+    // afterwards, so what somebody does next is type.
+    const at = value.length;
+    const { text, caret } = spliced(value, paths.join(" "), at, at);
+    onValue(text);
+    return caret;
+  },
+});

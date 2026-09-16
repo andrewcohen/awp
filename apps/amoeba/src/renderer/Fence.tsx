@@ -4,7 +4,7 @@ import { CodeView } from "@pierre/diffs/react";
 import * as stylex from "@stylexjs/stylex";
 import { type ReactNode, isValidElement, useEffect, useId, useMemo, useState } from "react";
 import { THEME } from "./highlighting";
-import { contentOf } from "./patch";
+import { contentOf, versionOf } from "./patch";
 import { useColorScheme } from "./theme";
 import { typeset } from "./typeset";
 import { colors } from "./tokens.stylex";
@@ -247,33 +247,64 @@ const Code = ({ source, language }: { readonly source: string; readonly language
   const scheme = useColorScheme();
   return (
     <div {...stylex.props(styles.block)}>
-      <CodeView
-        items={[
-          {
-            id: "block",
-            type: "file",
-            file: {
-              // A name, because that is what the library infers a language
-              // from, and the language as well: a fence says `ts`, and shiki
-              // knows that name where a filename would have to be invented.
-              name: `block.${language}`,
-              contents: source,
-              lang: language,
+      {/*
+       * ── nothing in a message may take the column ────────────────────────
+       *
+       * `Patch` above wraps its `CodeView` in one of these and names `Code`
+       * as the fallback — which left the fallback itself unguarded, and this
+       * is the path every ordinary fence takes anyway. A throw here reaches
+       * the agent column's `Boundary`, which unmounts the chat panel, which
+       * runs `watchChat`'s cleanup: the feed and the settings go with it, so
+       * one bad fence in one message reads as the daemon having gone away.
+       *
+       * The text is kept and the highlighting is lost, which is the same
+       * trade `Patch` makes one level up.
+       */}
+      <Salvage fallback={<pre {...stylex.props(typeset.address, styles.plain)}>{source}</pre>}>
+        <CodeView
+          items={[
+            {
+              id: "block",
+              type: "file",
+              // ── the version, for the same reason `Patch` needs one ────────
+              //
+              // A fence in a live message is *replaced* on every chunk: the
+              // content grows token by token under an item whose id does not
+              // change. The library says what that costs in its own note on
+              // `cacheKey` — it is what the worker pool keys a highlight by,
+              // and "if you modify the contents in any way, you will need to
+              // update the cacheKey".
+              //
+              // Unversioned, the pool answers every later chunk with the AST
+              // it built for the first one. Measured on a `ts` fence in a
+              // streaming answer: the block rendered the word `const` and
+              // nothing else, for the life of the message — the first token
+              // that happened to arrive, frozen.
+              version: versionOf(source),
+              file: {
+                // A name, because that is what the library infers a language
+                // from, and the language as well: a fence says `ts`, and shiki
+                // knows that name where a filename would have to be invented.
+                name: `block.${language}`,
+                contents: source,
+                lang: language,
+                cacheKey: `block|${language}|${source}`,
+              },
             },
-          },
-        ]}
-        options={{
-          theme: THEME,
-          themeType: scheme,
-          overflow: "wrap",
-          disableFileHeader: true,
-          // Numbers on a four-line snippet in a message are furniture. The
-          // diff panel keeps them because a line number there is an address
-          // somebody comments on; here nothing points at one.
-          disableLineNumbers: true,
-          enableLineSelection: false,
-        }}
-      />
+          ]}
+          options={{
+            theme: THEME,
+            themeType: scheme,
+            overflow: "wrap",
+            disableFileHeader: true,
+            // Numbers on a four-line snippet in a message are furniture. The
+            // diff panel keeps them because a line number there is an address
+            // somebody comments on; here nothing points at one.
+            disableLineNumbers: true,
+            enableLineSelection: false,
+          }}
+        />
+      </Salvage>
     </div>
   );
 };

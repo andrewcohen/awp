@@ -5,6 +5,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { type Command, agentCommands, commandOf, completed } from "@awp-kit/protocol/commands";
 import { heldBack, toolTitleOf, turningAt } from "@awp-kit/protocol/tools";
+import { acceptsFilesInto } from "./dropped";
 import { Composer, SessionBar } from "./Composer";
 import { rememberDraft, rememberedDrafts } from "./remembered";
 import { type Arriving, STILL, heavy, jelly, useArriving, useSpring, useSquish } from "./springs";
@@ -37,6 +38,7 @@ import {
   chatFresh,
   chatSend,
   chatSet,
+  onReconnect,
   watchChat,
 } from "./daemon";
 import { type Spot, spotIn, withQuote } from "./quote";
@@ -355,22 +357,43 @@ const Panel = ({
   );
 
   useEffect(() => {
-    // Asked once, when the panel opens. There is no call that answers "what
-    // are my options" on the adapter either — they arrive with the session —
-    // so the daemon holds them and this is a read of that.
+    // There is no call that answers "what are my options" on the adapter
+    // either — they arrive with the session — so the daemon holds them and
+    // this is a read of that.
+    //
+    // ── and it is asked again when the socket comes back ──────────────────
+    //
+    // This was asked *once*, when the panel opened, and it was the only read
+    // in the renderer that was: `useThreads`, `useProjects`, `useSessions`,
+    // `useJobs`, `useInbox`, `usePullRequest` and `Tasks` all take
+    // `onReconnect`. The rule this repo states twice already is that **a
+    // subscription answers what changes and a question answers what is**, so
+    // anything that resubscribes has to ask again as well.
+    //
+    // The feed above does resubscribe and replays the whole transcript, so
+    // the messages came back and the chips did not: mode, model and effort
+    // sat frozen at whatever they were before the drop, or empty when the
+    // panel had remounted during it. Nothing said so — the `catch` below
+    // defers to the stream for the failure, and the stream is the half that
+    // recovers on its own, so the half that could not was the silent one.
     let gone = false;
-    void chatConfig(project, workspace)
-      .then((options) => {
-        if (!gone) {
-          setConfig(options);
-        }
-      })
-      .catch(() => {
-        // A conversation that could not be opened has no settings, and the
-        // stream above is where that failure is already said out loud.
-      });
+    const ask = () => {
+      void chatConfig(project, workspace)
+        .then((options) => {
+          if (!gone) {
+            setConfig(options);
+          }
+        })
+        .catch(() => {
+          // A conversation that could not be opened has no settings, and the
+          // stream above is where that failure is already said out loud.
+        });
+    };
+    ask();
+    const stop = onReconnect(ask);
     return () => {
       gone = true;
+      stop();
     };
   }, [project, workspace]);
 
@@ -644,8 +667,37 @@ const Panel = ({
     [draft, deliver, run],
   );
 
+  // Built once per render, and pure: what it answers is where the caret
+  // should end up. Moving it is this component's job — see below.
+  const dropping = acceptsFilesInto(draft, setDraft);
+
   return (
-    <div {...stylex.props(styles.chat)} data-column-part="chat">
+    <div
+      {...stylex.props(styles.chat)}
+      data-column-part="chat"
+      // The whole panel takes a drop, not just the one line at the bottom of
+      // it. The composer keeps its own handlers for the caret — see
+      // `acceptsFilesInto`.
+      onDragOver={dropping.onDragOver}
+      onDrop={(event) => {
+        const caret = dropping.onDrop(event);
+        if (caret === undefined) {
+          return;
+        }
+        // A frame later, because React owns the box and the value it is about
+        // to hold is the one this caret indexes. The ref is read here rather
+        // than handed to `dropped.ts`: an event handler is where a ref may be
+        // read at all.
+        requestAnimationFrame(() => {
+          const node = box.current;
+          if (node === null) {
+            return;
+          }
+          node.focus();
+          node.setSelectionRange(caret, caret);
+        });
+      }}
+    >
       {/* ── the stage: the transcript, and the one thing that floats over it ──
 
           The dock is `absolute` against *this* rather than against the column,

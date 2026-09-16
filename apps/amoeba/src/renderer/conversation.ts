@@ -306,12 +306,47 @@ const released = (
       : item,
   );
 
-/** Where the trailing run of queued messages starts, or the end of the list. */
-const tail = (items: ReadonlyArray<Item>): number => {
+/**
+ * Where the trailing run of messages the agent has not reached starts.
+ *
+ * ── derived per fold, because the mark arrives too late to place by ────────
+ *
+ * This read `item.queued`, and that is a latch set by {@link waiting} — which
+ * the panel calls when `ChatSend` *resolves*. The row itself is painted on the
+ * keypress by {@link mine}, so between the two there is a round trip, and
+ * every agent chunk arriving inside it saw an unqueued user message sitting at
+ * the end of the list. A chunk whose role does not match the last row starts a
+ * new one, so the answer being streamed was cut in half:
+ *
+ *   agent  That                      ← the turn, up to the keypress
+ *   you    dead again                ← mine(), not yet marked
+ *   agent  is my own message …       ← a NEW row, and permanently so
+ *
+ * Permanently, because once that row exists below the user's message the mark
+ * arriving changes nothing: the last item is an agent row, so the scan stops
+ * there and every later chunk appends to the bottom.
+ *
+ * So placement is computed rather than remembered. `inflight` holds the turns
+ * in the order they started, and a message the agent has not got to is one the
+ * head of that list is not:
+ *
+ *   inflight[0] === its key   the agent is answering it — the reply goes BELOW
+ *   inflight[0] is another    it is waiting behind that turn — it FLOATS
+ *   inflight is empty         no turn; nothing to be behind
+ *
+ * `queued` stays what it was, a mark for the eye. It is still honoured here so
+ * that a daemon too old to name its turns behaves as it did.
+ */
+const tail = (items: ReadonlyArray<Item>, inflight: ReadonlyArray<string>): number => {
+  const head = inflight[0];
   let at = items.length;
   while (at > 0) {
     const item = items[at - 1];
-    if (item?.kind !== "said" || !item.queued) {
+    if (item?.kind !== "said") {
+      return at;
+    }
+    const floats = item.queued || (item.role === "user" && head !== undefined && head !== item.key);
+    if (!floats) {
       return at;
     }
     at -= 1;
@@ -420,7 +455,7 @@ export const fold = (state: Conversation, update: ChatUpdate): Conversation => {
       if (state.items.some((item) => item.key === key)) {
         return state;
       }
-      const where = tail(state.items);
+      const where = tail(state.items, state.inflight);
       return {
         ...state,
         items: [
@@ -432,7 +467,7 @@ export const fold = (state: Conversation, update: ChatUpdate): Conversation => {
     }
     // Above anything queued. What the agent is still saying belongs to the
     // turn a steer interrupted, so it goes before it rather than after.
-    const at = tail(state.items);
+    const at = tail(state.items, state.inflight);
     const last = state.items[at - 1];
     // Chunks. A model answers in fragments and each is its own update, so a
     // new row per update would draw one sentence as a column of words.
@@ -496,7 +531,7 @@ export const fold = (state: Conversation, update: ChatUpdate): Conversation => {
       retry: update.retry ?? found?.retry,
       ask: found?.ask,
     };
-    const where = at < 0 ? tail(state.items) : at;
+    const where = at < 0 ? tail(state.items, state.inflight) : at;
     return {
       ...state,
       items:
@@ -552,7 +587,7 @@ export const fold = (state: Conversation, update: ChatUpdate): Conversation => {
     // A question about a call this window has not been told about is still a
     // question, and refusing to draw it would leave the agent waiting on
     // somebody who cannot see what it asked.
-    const at = tail(state.items);
+    const at = tail(state.items, state.inflight);
     return {
       ...state,
       items: [...state.items.slice(0, at), asked, ...state.items.slice(at)],

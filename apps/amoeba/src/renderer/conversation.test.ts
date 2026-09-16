@@ -312,6 +312,49 @@ describe("a steer", () => {
     expect(waiting(sent, "mine-1").items[0]).toMatchObject({ queued: true });
   });
 
+  it("does not split the answer typed over, before the send has replied", () => {
+    // Reported from a real window, and the screenshot is the assertion:
+    //
+    //   agent  That
+    //   you    dead again
+    //   agent  is my own message rendering …
+    //
+    // One answer cut in half with an interjection wedged into it. `mine`
+    // paints the row on the keypress and `waiting` marks it when `ChatSend`
+    // resolves, so there is a round trip between the two — and a chunk landing
+    // inside it saw an unqueued user row at the end of the list and started a
+    // new agent row under it. Permanently: the mark arriving afterwards cannot
+    // move a row that is already below.
+    //
+    // So placement is derived from `inflight` rather than from the mark. The
+    // agent is on turn `t1`, which is not this message, so the message floats
+    // from the moment it exists.
+    const turning = fold({ ...nothing }, { kind: "turn", status: "started", id: "t1" });
+    const answering = fold(turning, said("agent", "That"));
+
+    // The keypress. No `waiting` yet — that is the whole point.
+    const typed = mine(answering, "dead again", "mine-1");
+    const after = fold(typed, said("agent", " is my own message rendering"));
+
+    expect(after.items.map((item) => (item.kind === "said" ? item.text : ""))).toEqual([
+      "That is my own message rendering",
+      "dead again",
+    ]);
+  });
+
+  it("puts the reply below a message the agent is actually answering", () => {
+    // The other half, and what stops the rule above floating every message:
+    // once the turn in flight IS this message's, its answer belongs under it.
+    const typed = mine(nothing, "what is broken", "mine-1");
+    const turning = fold(typed, { kind: "turn", status: "started", id: "mine-1" });
+    const after = fold(turning, said("agent", "the fence"));
+
+    expect(after.items.map((item) => (item.kind === "said" ? item.text : ""))).toEqual([
+      "what is broken",
+      "the fence",
+    ]);
+  });
+
   it("names the message rather than its place in the list", () => {
     // The reply arrives while the list is still growing, so a position would
     // name a different message by the time it lands.
