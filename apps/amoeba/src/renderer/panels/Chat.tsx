@@ -36,7 +36,6 @@ import {
   verb,
   waiting,
 } from "./conversation";
-import { Patch } from "./Fence";
 import { Markdown } from "./Markdown";
 import {
   chatAnswer,
@@ -1735,21 +1734,19 @@ const Tool = ({
         {open && (said.more > 0 || behind) && (
           <pre {...stylex.props(typeset.address, styles.whole)}>{item.title}</pre>
         )}
-        {/* ── what it changed, drawn as the change ──────────────────────
-            Not behind the disclosure, unlike the output: an edit's output is
-            empty, so the patch *is* the row's content and a shut row would be
-            a title and a tick over the one thing worth reading. The same
-            renderer a ```diff in a message goes through, and the same one the
-            diff panel uses — a change described and a change made must not
-            read as two different things.
+        {/* ── an edit's patch is deliberately not drawn here ────────────
+            It was, and the argument was that an edit's output is empty so the
+            patch is the row's whole content. What that produced in a real
+            transcript is a wall: an agent working through a file emits an edit
+            per hunk, so a dozen calls became a dozen diffs between two
+            sentences, and the conversation stopped being readable as one.
 
-            One block per patch, because the adapter reports an edit per hunk:
-            a `MultiEdit` of three places in one file arrives as three. */}
-        {item.diffs.map((diff) => (
-          <div key={diff.path + diff.patch} {...stylex.props(styles.changed)}>
-            <Patch source={diff.patch} />
-          </div>
-        ))}
+            The diff panel is where a change is read, and it shows the whole
+            change rather than a rehearsal of how it was assembled. The row
+            keeps the path and the mark, which is what an index is for.
+
+            The daemon still composes the patch — the terminal face draws it,
+            and `ChatDiff` is on the wire for both. See packages/server. */}
         {open && item.output !== "" && (
           <pre {...stylex.props(typeset.address, styles.output)}>{item.output}</pre>
         )}
@@ -2518,15 +2515,6 @@ const styles = stylex.create({
     whiteSpace: "pre-wrap",
     overflowWrap: "anywhere",
     marginTop: "0.25rem",
-  },
-  // A patch under a tool row. Bounded, because a whole-file rewrite is a
-  // legitimate edit and a transcript is not the diff panel: past this it
-  // scrolls in its own box, which is the rule every wide thing in this window
-  // follows.
-  changed: {
-    marginTop: "0.25rem",
-    maxHeight: "20rem",
-    overflowY: "auto",
   },
   output: {
     color: colors.muted,

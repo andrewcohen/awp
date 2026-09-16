@@ -698,18 +698,16 @@ export type Block =
  * A call the fold must not swallow.
  *
  * A block draws its tail and counts the rest, so anything earlier in a long
- * run is behind `+7 earlier calls`. That is right for receipts and wrong for
- * the two kinds of row that carry something to read:
+ * run is behind `+7 earlier calls`. That is right for receipts and wrong for a
+ * question: an agent waiting on somebody, hidden behind a count, is somebody
+ * waiting on nothing.
  *
- *   an edit      its patch is the row's whole content — folded away, the one
- *                call that changed something is the one saying least
- *   a question   an agent waiting on somebody, hidden behind a count
- *
- * The question was already an exception in the drawing; the patch made it
- * worth stating once, here, where the fold is decided.
+ * An edit used to be the other exception, because its patch was the row's whole
+ * content. The panel no longer draws that patch — see the note in `Chat.tsx` —
+ * so an edit is a receipt like any other call and groups with its neighbours,
+ * which is most of what made a run of them readable again.
  */
-const standsAlone = (item: Item): boolean =>
-  item.kind === "ran" && (item.diffs.length > 0 || item.ask !== undefined);
+const standsAlone = (item: Item): boolean => item.kind === "ran" && item.ask !== undefined;
 
 export const grouped = (items: ReadonlyArray<Item>): ReadonlyArray<Block> => {
   const out: Array<Block> = [];

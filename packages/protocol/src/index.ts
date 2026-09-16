@@ -557,6 +557,65 @@ export const ThreadHere = Schema.Struct({
 export type ThreadHere = (typeof ThreadHere)["Type"];
 
 /**
+ * One thing an agent said to another agent.
+ *
+ * ── the body never arrives as a prompt ─────────────────────────────────────
+ *
+ * A message is *fetched*, not injected. What the daemon pushes into the
+ * recipient's chat is a nudge saying how many are waiting; the bodies come back
+ * through `awp_messages`, as tool output.
+ *
+ * That is not a convenience. ACP has one `user` role, so a body delivered as a
+ * turn wears the operator's face — and an agent cannot then tell "run the
+ * migration" from a peer apart from the same words from the person running the
+ * window. Tool output is already the channel every model treats as data from a
+ * system rather than as an instruction, and it costs no protocol change to say
+ * so.
+ *
+ * ── addressed to a workspace, not to an agent ──────────────────────────────
+ *
+ * The workspace is the durable row; the agent inside it is a context window
+ * that dies with its session. The same argument that keeps a thread's
+ * understanding in sqlite rather than in a model.
+ */
+export const Message = Schema.Struct({
+  id: Schema.String,
+  /** The work both ends are part of. A message never leaves its thread. */
+  thread: Schema.String,
+  from: ThreadMember,
+  to: ThreadMember,
+  body: Schema.String,
+  sentAt: Schema.Number,
+  /**
+   * When the recipient was told it had mail, or absent because it has not been
+   * told yet.
+   *
+   * Separate from {@link readAt} because they are two different acts by two
+   * different parties: the daemon nudges, the agent fetches. Folding them into
+   * one column would make a nudge that was never answered indistinguishable
+   * from a message nobody has been told about, and the deliverer would either
+   * re-nudge forever or go quiet after one try.
+   */
+  notifiedAt: Schema.UndefinedOr(Schema.Number),
+  /** When the recipient fetched it. The fetch *is* the read. */
+  readAt: Schema.UndefinedOr(Schema.Number),
+});
+
+export type Message = (typeof Message)["Type"];
+
+/**
+ * A message was not accepted, and the sentence says why.
+ *
+ * Its own failure rather than a defect, because every case is a thing an agent
+ * can do something about: name a sibling that is in the thread, wait for the
+ * hour to turn over, or stop trying to talk to a checkout that belongs to
+ * nobody's work.
+ */
+export class MessageRefused extends Schema.TaggedError<MessageRefused>()("MessageRefused", {
+  reason: Schema.String,
+}) {}
+
+/**
  * A thread could not be started — the model was unreachable, or answered with
  * something unusable.
  *
@@ -3054,6 +3113,66 @@ export class AwpRpcs extends RpcGroup.make(
     payload: { from: Schema.String },
     success: ThreadHere,
     error: NotAWorkspace,
+  }),
+
+  /**
+   * Say something to a sibling checkout in the same thread.
+   *
+   * `from` is a directory and the recipient is a workspace *name*, which is the
+   * whole addressing rule: the sender is resolved from where it is standing and
+   * the target is looked up among the members of the thread that holds it. So
+   * there is no pair to pass and no call that reaches another piece of work —
+   * the same binding {@link Rpc ThreadAt} has, applied to a write.
+   *
+   * The workspace name alone is enough because a thread holds at most one
+   * checkout per project and the names within one thread are its members' —
+   * `beta/tabular-exports` and `rowan/tabular-exports` are one name to a
+   * sender. Ambiguity is refused rather than guessed at.
+   */
+  Rpc.make("MessageSend", {
+    payload: { from: Schema.String, to: Schema.String, body: Schema.String },
+    success: Message,
+    error: Schema.Union([NotAWorkspace, MessageRefused]),
+  }),
+
+  /**
+   * Every message waiting for this checkout, and reading it marks it read.
+   *
+   * The two are one call on purpose. A separate `markRead` is a second thing
+   * an agent has to remember to do, and the one that forgets re-reads its
+   * inbox forever — so the fetch is the acknowledgement, and an agent that
+   * crashes between the two loses a message it had already been handed rather
+   * than looping on one it had not.
+   */
+  Rpc.make("MessageInbox", {
+    payload: { from: Schema.String },
+    success: Schema.Array(Message),
+    error: NotAWorkspace,
+  }),
+
+  /**
+   * Everything anyone has said, newest first — what the viewer draws.
+   *
+   * Read and unread alike: this is the record, not a queue. The whole list
+   * rather than a page, for the reason `ThreadList` sends the whole list, and
+   * with the same consequence — it is the only shape that can say a message is
+   * no longer there.
+   */
+  Rpc.make("MessageList", {
+    success: Schema.Array(Message),
+  }),
+
+  /**
+   * The same list again, each time anything about a message changes.
+   *
+   * Sent, nudged and read are three writes by three different parties — an
+   * agent's tool call, the daemon's deliverer, the recipient's fetch — and only
+   * the first of them is ever something this window did. "The reply is the
+   * update" was never true here for two of the three.
+   */
+  Rpc.make("MessageChanges", {
+    success: Schema.Array(Message),
+    stream: true,
   }),
 
   /**

@@ -126,3 +126,35 @@ describe("a row that has no title yet", () => {
     expect(heldBack({ toolName: "Bash", title: "Terminal" })).toBe(false);
   });
 });
+
+describe("a title that opens with the tool's own name", () => {
+  it("does not say the verb twice", () => {
+    // Reported as a dupe on the row: `write  Write apps/…/chords.ts`.
+    expect(toolTitleOf({ toolName: "Write", title: "Write apps/a/chords.ts" })).toBe(
+      "apps/a/chords.ts",
+    );
+  });
+
+  it("gives the path back its shape, which is the half that matters", () => {
+    // A title counts as a path only when it holds a slash and no whitespace,
+    // so the leading word made every edit row render as a command — and lose
+    // the basename emphasis that exists so the filename is what the eye lands
+    // on. Asserted as the absence of whitespace, which is the actual predicate.
+    expect(toolTitleOf({ toolName: "Edit", title: "Edit src/x.ts" })).not.toContain(" ");
+  });
+
+  it("leaves a title that merely mentions another tool alone", () => {
+    expect(toolTitleOf({ toolName: "Bash", title: "Write the file with tee" })).toBe(
+      "Write the file with tee",
+    );
+  });
+
+  it("leaves a title that is only the name", () => {
+    // Nothing would be left, and a row cannot be blank.
+    expect(toolTitleOf({ toolName: "Write", title: "Write" })).toBe("Write");
+  });
+
+  it("takes the first word only", () => {
+    expect(toolTitleOf({ toolName: "Write", title: "Write Write a.ts" })).toBe("Write a.ts");
+  });
+});

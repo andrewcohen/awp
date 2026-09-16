@@ -17,6 +17,7 @@ import {
   CreateWorkspace as CreateWorkspaceSchema,
   DiffUnavailable,
   JobNotFound,
+  MessageRefused,
   NoAgent,
   NotAWorkspace,
   TaskRefused,
@@ -47,6 +48,7 @@ import { type Repairable, looksMine, repairPrompt, reviewBrief } from "./repair"
 import { authored, reviewRequested, reviewRerequested } from "./github-parse";
 import { type Claim, reviewKey, reviewNumber, reviewOf, reviewWorkspace } from "./review-queue";
 import { Jj } from "./jj";
+import { Messages } from "./messages";
 import { archiveThreadRef } from "./jobs/archive-thread";
 import { createWorkspaceRef, workspacePath } from "./jobs/create-workspace";
 import { Settings, agentWith } from "./settings";
@@ -417,6 +419,33 @@ const firstSentence = (said: string): string => {
   return at === -1 ? said : said.slice(0, at + 1);
 };
 
+/**
+ * Which of a thread's checkouts a sender meant, by whichever half it named.
+ *
+ * Exported for the tests, and pure so the rule can be stated without a
+ * database: the three passes are tried in order and the first that matches
+ * anything wins, so a project name that also happens to be some other member's
+ * workspace name resolves rather than refusing.
+ *
+ * Several matches at one level is a genuine ambiguity and is handed back as
+ * such — the caller turns it into the sentence naming the pairs.
+ */
+export const addressed = <A extends { readonly project: string; readonly workspace: string }>(
+  siblings: ReadonlyArray<A>,
+  to: string,
+): ReadonlyArray<A> => {
+  const wanted = to.trim();
+  const pair = siblings.filter((one) => `${one.project}/${one.workspace}` === wanted);
+  if (pair.length > 0) {
+    return pair;
+  }
+  const project = siblings.filter((one) => one.project === wanted);
+  if (project.length > 0) {
+    return project;
+  }
+  return siblings.filter((one) => one.workspace === wanted);
+};
+
 const workspaceOf = (bookmark: string, prefix: string | undefined): string | undefined =>
   prefix !== undefined && bookmark.startsWith(`${prefix}/`)
     ? bookmark.slice(prefix.length + 1)
@@ -438,6 +467,7 @@ export const layer = AwpRpcs.toLayer(
     const faces = yield* Faces;
     const tasks = yield* Tasks;
     const pages = yield* Pages;
+    const messages = yield* Messages;
     // Taken once, here, rather than per request. A handler's return value has
     // to name no requirements — the rpc layer is what settles them — so the
     // watcher's file system is closed over instead of being asked for inside
@@ -2392,6 +2422,132 @@ export const layer = AwpRpcs.toLayer(
             },
           };
         }),
+
+      /**
+       * Say something to a sibling checkout.
+       *
+       * ── the name is whichever half identifies one member ─────────────────
+       *
+       * A thread's members usually share a workspace name and differ only by
+       * project: adding a project to a thread takes the sibling's name on
+       * purpose, so the thread reads as one piece of work. `Testing Multi` on
+       * this machine is `wiki/testing-multi`, `grove/testing-multi` and
+       * `redwood/testing-multi` — three rows, one name.
+       *
+       * So addressing by workspace name alone refuses in the ordinary case,
+       * which is what the first version of this did. What is actually unique
+       * within one thread is the **project**, and the honest rule is to accept
+       * whichever half names exactly one member:
+       *
+       *   `redwood/testing-multi`   the pair, always unambiguous — what the
+       *                             inbox hands back as the way to reply
+       *   `redwood`                 the project, unique per thread in practice
+       *   `exports-ui`              the workspace, when the names differ
+       *
+       * Tried in that order rather than all at once, so a project that happens
+       * to share a string with another member's workspace name resolves to the
+       * project rather than refusing.
+       *
+       * Four refusals, and each is a thing the agent can act on:
+       *
+       *   not in a workspace   `NotAWorkspace`, naming the directory — the same
+       *                        sentence every directory-scoped call gives
+       *   no thread            this checkout is not part of any live work, so
+       *                        there is nobody it could be addressing
+       *   no such sibling      with the pairs that *are* in the thread, because
+       *                        a model given a refusal and no roster will guess
+       *                        again rather than look
+       *   the cap              the thread has said too much this hour. See
+       *                        `CAP` — the one guard that replaces a human
+       *                        approving each send
+       *
+       * Sending to itself is refused too, and not for safety: an agent that
+       * could message its own checkout would nudge itself, read its own
+       * message, and have every reason to answer it.
+       */
+      MessageSend: ({ from, to, body }) =>
+        Effect.gen(function* () {
+          const at = yield* workspaceAt(from);
+          const said = body.trim();
+          if (said === "") {
+            return yield* Effect.fail(new MessageRefused({ reason: "a message needs a body" }));
+          }
+          const all = yield* threads.list().pipe(Effect.orDie);
+          const holding = all.find(
+            (thread) =>
+              thread.archivedAt === undefined &&
+              thread.members.some(
+                (member) => member.project === at.project && member.workspace === at.workspace,
+              ),
+          );
+          if (holding === undefined) {
+            return yield* Effect.fail(
+              new MessageRefused({
+                reason: `${at.project}/${at.workspace} is not part of a thread, so there is nobody to message`,
+              }),
+            );
+          }
+          const siblings = holding.members.filter(
+            (member) => !(member.project === at.project && member.workspace === at.workspace),
+          );
+          const roster = siblings.map((member) => `${member.project}/${member.workspace}`);
+          const named = addressed(siblings, to);
+          if (named.length === 0) {
+            return yield* Effect.fail(
+              new MessageRefused({
+                reason:
+                  siblings.length === 0
+                    ? `no checkout called ${to} — this thread holds no other checkout`
+                    : `no checkout called ${to} — this thread holds ${roster.join(", ")}`,
+              }),
+            );
+          }
+          // Still possible: two members in one project, or a name that is one
+          // member's project and another's workspace. Refused with the pairs
+          // rather than delivered to whichever row sorted first, and the pairs
+          // are what the sender should say instead.
+          if (named.length > 1) {
+            return yield* Effect.fail(
+              new MessageRefused({
+                reason: `${to} is ambiguous — name one of ${named
+                  .map((member) => `${member.project}/${member.workspace}`)
+                  .join(", ")}`,
+              }),
+            );
+          }
+          const target = named[0];
+          if (target === undefined) {
+            return yield* Effect.fail(new MessageRefused({ reason: `no checkout called ${to}` }));
+          }
+          const made = yield* messages
+            .send({
+              thread: holding.id,
+              from: { project: at.project, workspace: at.workspace },
+              to: target,
+              body: said,
+            })
+            .pipe(Effect.orDie);
+          return made === undefined
+            ? yield* Effect.fail(
+                new MessageRefused({
+                  reason:
+                    "this thread has reached its hourly message limit — it will accept messages again shortly",
+                }),
+              )
+            : made;
+        }),
+
+      MessageInbox: ({ from }) =>
+        Effect.gen(function* () {
+          const at = yield* workspaceAt(from);
+          return yield* messages
+            .inbox({ project: at.project, workspace: at.workspace })
+            .pipe(Effect.orDie);
+        }),
+
+      MessageList: () => messages.list().pipe(Effect.orDie),
+
+      MessageChanges: () => messages.changes(),
 
       ThreadCreate: ({ title }) => threads.create(title).pipe(Effect.orDie),
 

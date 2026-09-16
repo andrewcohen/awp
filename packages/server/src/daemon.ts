@@ -42,6 +42,8 @@ import * as workspaceState from "./workspace-state";
 import { migrations as reviewMigrations, layer as reviewsLayer } from "./reviews";
 import { Faces, migrations as faceMigrations, layer as facesLayer } from "./faces";
 import { migrations as threadMigrations, layer as threadsLayer } from "./threads";
+import { migrations as messageMigrations, layer as messagesLayer } from "./messages";
+import { deliverer } from "./deliver";
 import { migrations as taskMigrations, layer as tasksLayer } from "./tasks";
 import * as zmx from "./zmx";
 
@@ -137,6 +139,7 @@ export const db = Layer.orDie(
     ...chatMigrations,
     ...taskMigrations,
     ...faceMigrations,
+    ...messageMigrations,
   ]),
 );
 
@@ -211,6 +214,23 @@ export const jobs = Layer.unwrap(
 
 export const threads = threadsLayer;
 
+export const messages = messagesLayer;
+
+/**
+ * The message deliverer, forked for as long as the daemon is up.
+ *
+ * `effectDiscard` because nothing consumes it: what this layer contributes is a
+ * running fiber, not a service. `forkScoped` ties that fiber to the layer's own
+ * scope, so the daemon shutting down takes it with it rather than leaving a
+ * stream subscribed to a `PubSub` nobody will publish to again.
+ *
+ * It is merged in beside `jobs` rather than provided its own `Chat`, and that is
+ * the whole reason it is wired here: the conversation it briefs has to be the
+ * one the window is watching. A second `Chat` would deliver every nudge into a
+ * conversation nobody can see.
+ */
+export const deliveries = Layer.effectDiscard(Effect.forkScoped(deliverer));
+
 export const faces = facesLayer;
 
 export const tasks = tasksLayer;
@@ -250,13 +270,13 @@ export const layer = RpcServer.layer(AwpRpcs).pipe(
   // dependency private to what it provided to, so a second `Layer.provide(
   // chatLayer)` under `jobs` would build a second Chat. Merging leaves it in
   // the output, where `jobs` finds the one already made.
-  Layer.provide(jobs.pipe(Layer.provideMerge(chatLayer))),
+  Layer.provide(Layer.merge(jobs, deliveries).pipe(Layer.provideMerge(chatLayer))),
   // Merged rather than provided one after the other, and not for tidiness:
   // `pipe` takes at most twenty arguments and this stack had reached it. Two
   // stores that are both read by the handlers *and* by the create job's steps
   // are the natural pair to fold together — the `claim` step writes a thread
   // membership and a face in the same breath.
-  Layer.provide(Layer.merge(threads, faces)),
+  Layer.provide(Layer.merge(threads, Layer.merge(faces, messages))),
   Layer.provide(tasks),
   Layer.provide(reviews),
   Layer.provide(projects),

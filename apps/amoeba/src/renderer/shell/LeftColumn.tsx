@@ -1,6 +1,7 @@
 import type { SessionInfo, Thread } from "@awp-kit/protocol";
 import { PlusIcon } from "@phosphor-icons/react/Plus";
 import { GitPullRequestIcon } from "@phosphor-icons/react/GitPullRequest";
+import { EnvelopeIcon } from "@phosphor-icons/react/Envelope";
 import * as stylex from "@stylexjs/stylex";
 import type { ComponentType } from "react";
 import { Sidebar } from "./Sidebar";
@@ -12,6 +13,7 @@ import type { Facts } from "../data/useFacts";
 //
 //   ⊕  new thread                    ⌘N
 //   ⊟  reviewQueue
+//   ✉  inbox                         ⌘I
 //   ─────────────────────────────────────
 //   ▸ tabular exports
 //       rowan · agent
@@ -38,9 +40,14 @@ import type { Facts } from "../data/useFacts";
 // the same reason, which is the shape to copy: a modal belongs to the window,
 // and the control that opens it belongs to whichever column has room for it.
 //
-// That is also where `⌘I` lives, beside `⌘N` — see App.tsx. A menu item is the
+// That is also where every chord lives — see App.tsx. A menu item is the
 // discoverable half and a chord is the half that still works with this column
 // folded away.
+//
+// `⌘I` held the pull requests while they were called the inbox, and both the key
+// and the word are back on this menu — this time over something that is actually
+// mail. Worth knowing rather than a coincidence: a muscle memory that survived
+// the rename lands somewhere adjacent to where it used to.
 //
 // **The `+ thread` button at the foot of the strip went with it.** It was the
 // only way to make a workspace from this window and it is now the first line of
@@ -160,6 +167,7 @@ export function LeftColumn({
   onSelect,
   onNew,
   onReviewQueue,
+  onMessages,
   onThreadsChanged,
   onOpenWorkspace,
   failure,
@@ -174,6 +182,8 @@ export function LeftColumn({
   readonly onNew: () => void;
   /** Open the reviewQueue. The dialog itself is App's — see the note above. */
   readonly onReviewQueue: () => void;
+  /** Open the messages viewer. App's dialog too, and for the same reason. */
+  readonly onMessages: () => void;
   readonly onThreadsChanged: () => void;
   /** Go to a workspace's agent, named rather than handed as a session: an
    * reviewQueue row knows the pair and not which session is running. */
@@ -185,6 +195,7 @@ export function LeftColumn({
       <nav aria-label="actions" {...stylex.props(styles.menu)}>
         <Item icon={PlusIcon} word="new thread" chord="⌘N" onPress={onNew} />
         <Item icon={GitPullRequestIcon} word="pull requests" chord="⌘⇧R" onPress={onReviewQueue} />
+        <Item icon={EnvelopeIcon} word="inbox" chord="⌘I" onPress={onMessages} />
       </nav>
 
       <div {...stylex.props(styles.rule)} />

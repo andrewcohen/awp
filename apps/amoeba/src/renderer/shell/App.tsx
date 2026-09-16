@@ -9,6 +9,7 @@ import { AppearanceToggle } from "../design/Appearance";
 import { AgentBar, TopBar } from "./Bars";
 import { Divider } from "./Divider";
 import { ReviewQueueDialog } from "../dialogs/ReviewQueueDialog";
+import { MessagesDialog } from "../dialogs/MessagesDialog";
 import { LeftColumn } from "./LeftColumn";
 import { NewThread } from "../dialogs/NewThread";
 import { Chat } from "../panels/Chat";
@@ -41,6 +42,7 @@ import { themeFor, useAppearance, useColorScheme } from "../design/theme";
 import { typeset } from "../design/typeset";
 import { colors, space } from "../design/tokens.stylex";
 import { useColumnKeys } from "../routing/navigation";
+import { pressed } from "../routing/chords";
 import { useJobs } from "../data/useJobs";
 import { useConnection } from "../data/useConnection";
 import { useSessions } from "../data/useSessions";
@@ -545,6 +547,10 @@ function Window() {
   // `inert` with it, so an overlay it owned would be unreachable exactly when
   // somebody had put the sidebar away.
   const [reviewQueue, setReviewQueue] = useState(false);
+  // The messages viewer, held here for the reason above: the column its menu
+  // item sits in folds to nothing, and an overlay owned by an `inert` column is
+  // one nobody can reach.
+  const [messages, setMessages] = useState(false);
 
   // ── why a job finishing re-reads the sessions ────────────────────────────
   //
@@ -581,6 +587,10 @@ function Window() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [progress]);
 
+  // Every chord below goes through `pressed`, which is also what makes a held
+  // key fire once — see `routing/chords.ts`. Not `ctrl+hjkl` in navigation.ts:
+  // moving between columns is the one place repeating is what somebody means.
+
   // cmd+N from anywhere in the window, and cmd+shift+N to start from the
   // workspace on screen rather than from the project's main line.
   //
@@ -607,7 +617,7 @@ function Window() {
   // the chord this has to tell apart.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.code !== "KeyN" || !(event.metaKey || event.ctrlKey) || event.altKey) {
+      if (!pressed(event, "KeyN")) {
         return;
       }
       event.preventDefault();
@@ -641,7 +651,7 @@ function Window() {
   // the wrong thing. See the pull requests chord below, which tried it first.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.code !== "KeyP" || !(event.metaKey || event.ctrlKey) || event.altKey) {
+      if (!pressed(event, "KeyP")) {
         return;
       }
       event.preventDefault();
@@ -673,16 +683,32 @@ function Window() {
   // "put it away".
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (
-        event.code !== "KeyR" ||
-        !event.shiftKey ||
-        !(event.metaKey || event.ctrlKey) ||
-        event.altKey
-      ) {
+      if (!pressed(event, "KeyR") || !event.shiftKey) {
         return;
       }
       event.preventDefault();
       setReviewQueue((was) => !was);
+    };
+    window.addEventListener("keydown", onKey, { capture: true });
+    return () => window.removeEventListener("keydown", onKey, { capture: true });
+  }, []);
+
+  // cmd+I: what the agents have said to each other.
+  //
+  // The letter is free because it used to be the pull requests, back when that
+  // list was called the inbox — so this is not a new binding so much as the
+  // original meaning of the key arriving at the thing that is actually mail.
+  //
+  // Toggles, the rule `cmd+shift+R` states: this holds a list and nothing
+  // somebody is part way through typing, so pressing it again means "put it
+  // away" rather than "make sure".
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (!pressed(event, "KeyI")) {
+        return;
+      }
+      event.preventDefault();
+      setMessages((was) => !was);
     };
     window.addEventListener("keydown", onKey, { capture: true });
     return () => window.removeEventListener("keydown", onKey, { capture: true });
@@ -704,7 +730,7 @@ function Window() {
   // all — a menu item wearing an accelerator takes it before the page sees it.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.code !== "KeyB" || !(event.metaKey || event.ctrlKey) || event.altKey) {
+      if (!pressed(event, "KeyB")) {
         return;
       }
       event.preventDefault();
@@ -789,6 +815,7 @@ function Window() {
                 onThreadsChanged={reloadSessions}
                 failure={failure}
                 onReviewQueue={() => setReviewQueue(true)}
+                onMessages={() => setMessages(true)}
                 onNew={() =>
                   setNewThread({
                     project: open?.identity?.project,
@@ -969,6 +996,11 @@ function Window() {
         // half of the session, which the `progress` effect above catches up.
         onStarted={reloadSessions}
       />
+
+      {/* Beside the pull requests, and mounted only while open for the same
+          reason — `useMessages` subscribes on mount, so a viewer nobody has
+          open holds no feed. */}
+      <MessagesDialog open={messages} threads={threads} onClose={() => setMessages(false)} />
 
       <NewThread
         request={newThread}

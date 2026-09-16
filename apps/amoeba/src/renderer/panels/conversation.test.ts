@@ -613,16 +613,18 @@ describe("grouped", () => {
     expect(blocks.map((block) => block.kind)).toEqual(["calls", "one", "calls"]);
   });
 
-  it("leaves a call that changed a file out of the fold", () => {
-    // A block draws its tail and counts the rest, so an edit early in a long
-    // run is behind `+7 earlier calls` — which hides the one thing that call
-    // is worth reading. Its patch is the row's whole content.
+  it("folds a call that changed a file like any other receipt", () => {
+    // It used to stand alone, because the panel drew the patch under the row
+    // and folding it away hid the one thing worth reading. The panel no longer
+    // draws it — see the note in `Chat.tsx` — so an edit is a receipt, and a
+    // run of them is one block rather than a wall of diffs between two
+    // sentences.
     const blocks = grouped([
       called("a"),
       called("b", { diffs: [{ path: "x.ts", patch: "+one\n" }] }),
       called("c"),
     ]);
-    expect(blocks.map((block) => block.kind)).toEqual(["calls", "one", "calls"]);
+    expect(blocks.map((block) => block.kind)).toEqual(["calls"]);
   });
 
   it("leaves a question out of the fold", () => {

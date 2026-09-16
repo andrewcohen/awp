@@ -17,6 +17,7 @@ import type {
   Face,
   ReviewQueue,
   McpStatus,
+  Message,
   Page,
   PageNote,
   Patch,
@@ -913,6 +914,17 @@ export const openPage = (from: string, url: string): Promise<Page> =>
  * what it holds. See `ThreadChanges` in the contract for why this is not a
  * per-record feed — a deleted thread is the change with no record to send.
  */
+/** Everything anyone has said, newest first. See `Message` in the contract. */
+export const listMessages = (): Promise<ReadonlyArray<Message>> =>
+  runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.MessageList()));
+
+export const watchMessages = (
+  onMessages: (messages: ReadonlyArray<Message>) => void,
+): (() => void) =>
+  subscribe((rpc) =>
+    Stream.runForEach(rpc.MessageChanges(), (messages) => Effect.sync(() => onMessages(messages))),
+  );
+
 export const watchThreads = (onThreads: (threads: ReadonlyArray<Thread>) => void): (() => void) =>
   subscribe((rpc) =>
     Stream.runForEach(rpc.ThreadChanges(), (threads) => Effect.sync(() => onThreads(threads))),

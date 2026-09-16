@@ -120,7 +120,45 @@ export const toolTitleOf = (
     // lands on the same id a moment later.
     return toolVerb(call);
   }
-  return title === "" ? toolVerb(call) : title;
+  return title === "" ? toolVerb(call) : withoutOwnName(title, call.toolName);
+};
+
+/**
+ * A title with its leading copy of the tool's own name taken off.
+ *
+ * ── it was drawn twice, and the second one cost the path its shape ────────
+ *
+ * The adapter titles an edit with the tool and the file, and the row already
+ * draws the tool as its verb:
+ *
+ *   write  Write apps/amoeba/src/renderer/routing/chords.ts
+ *
+ * The repetition is the visible half. The half that matters more is what the
+ * leading word does further down: a title is treated as a **path** only when it
+ * holds a slash and no whitespace, so `Write ` in front of one makes it a
+ * command instead — and the row loses the basename emphasis that exists
+ * precisely so `chords.ts` is what the eye lands on. Taking the word off gives
+ * both back:
+ *
+ *   write  apps/amoeba/src/renderer/routing/chords.ts
+ *                                            ^^^^^^^^^ no longer clipped away
+ *
+ * The same argument as the `Bash`/`Terminal` case above, which is the narrow
+ * version of it — and this is deliberately narrow too. Only the **first
+ * whitespace-delimited word**, only when it is this call's own tool name, and
+ * only when something is left: a file genuinely called `Write` keeps its title,
+ * and a command that merely mentions another tool is untouched.
+ */
+const withoutOwnName = (title: string, toolName: string | undefined): string => {
+  if (toolName === undefined || toolName === "") {
+    return title;
+  }
+  const gap = title.indexOf(" ");
+  if (gap <= 0 || title.slice(0, gap).toLowerCase() !== toolName.toLowerCase()) {
+    return title;
+  }
+  const rest = title.slice(gap + 1).trim();
+  return rest === "" ? title : rest;
 };
 
 /**

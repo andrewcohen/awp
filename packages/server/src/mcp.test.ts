@@ -101,6 +101,23 @@ const daemonOf = (
         asked.push({ tagTask: id, tag, on });
         return Effect.succeed(entry({ id, tags: on ? [tag] : [] }));
       },
+      sendMessage: (from, to, body) => {
+        asked.push({ sendMessage: from, to, body });
+        return Effect.succeed({
+          id: "m20260916-0001",
+          thread: "th-1",
+          from: { project: "rowan", workspace: "tabular-exports" },
+          to: { project: "beta", workspace: to },
+          body,
+          sentAt: 1_787_000_000_000,
+          notifiedAt: undefined,
+          readAt: undefined,
+        });
+      },
+      inbox: (from) => {
+        asked.push({ inbox: from });
+        return Effect.succeed([]);
+      },
       ...over,
     },
   };
@@ -596,5 +613,150 @@ describe("awp_task_status and awp_task_tag are bound to this project", () => {
   it("refuses with no id, before asking the daemon", () => {
     expect(call("awp_task_status", { status: "completed" }).asked).toEqual([]);
     expect(call("awp_task_tag", { tag: "x" }).asked).toEqual([]);
+  });
+});
+
+describe("awp_thread names the way to reach the other checkouts", () => {
+  const withOthers = (others: ReadonlyArray<[string, string]>) => ({
+    project: "grove",
+    workspace: "testing-multi",
+    dir: HERE,
+    thread: {
+      id: "th-1",
+      title: "Testing Multi",
+      parent: undefined,
+      prs: [],
+      checkouts: [
+        { project: "grove", workspace: "testing-multi", dir: HERE, running: true },
+        ...others.map(([project, workspace]) => ({
+          project,
+          workspace,
+          dir: `/w/${project}`,
+          running: false,
+        })),
+      ],
+    },
+  });
+
+  it("teaches the project form, which is the one that usually works", () => {
+    const said = threadSaid(withOthers([["redwood", "testing-multi"]]));
+    expect(said).toContain("awp_message");
+    expect(said).toContain('e.g. "redwood"');
+  });
+
+  it("falls back to the pair when no single project names one checkout", () => {
+    // Two siblings in one project: the short form would be refused as
+    // ambiguous, and an example a model copies and gets refused for is worse
+    // than a longer one.
+    const said = threadSaid(
+      withOthers([
+        ["redwood", "the-api"],
+        ["redwood", "the-ui"],
+      ]),
+    );
+    expect(said).toContain("redwood/the-api");
+  });
+
+  it("says nothing about messaging when there is nobody to message", () => {
+    // An instruction with no object. The tool list already carries the
+    // general case for a checkout that later gains a sibling.
+    expect(threadSaid(withOthers([]))).not.toContain("awp_message");
+  });
+});
+
+describe("awp_message", () => {
+  it("names the recipient it reached, and does not echo the body back", () => {
+    const got = call("awp_message", { to: "exports-ui", body: "the endpoint is live on 4000" });
+
+    expect(got.failed).toBe(false);
+    expect(got.text).toContain("exports-ui");
+    // What the sender needs to know is that it was accepted and when it will
+    // land — not its own sentence read back to it.
+    expect(got.text).toContain("next free");
+  });
+
+  it("is asked about the server's own directory, like every other tool", () => {
+    expect(call("awp_message", { to: "exports-ui", body: "hi" }).asked).toEqual([
+      { sendMessage: HERE, to: "exports-ui", body: "hi" },
+    ]);
+  });
+
+  it("refuses an empty call before asking the daemon", () => {
+    // Two different missing halves, and each says which one. A tool that
+    // answered "invalid arguments" would have the model guess at which.
+    const noRecipient = call("awp_message", { body: "hi" });
+    expect(noRecipient.failed).toBe(true);
+    expect(noRecipient.text).toContain("recipient");
+    expect(noRecipient.asked).toEqual([]);
+
+    const noBody = call("awp_message", { to: "exports-ui" });
+    expect(noBody.failed).toBe(true);
+    expect(noBody.text).toContain("body");
+    expect(noBody.asked).toEqual([]);
+  });
+
+  it("renders the daemon's refusal rather than a failure of its own", () => {
+    const got = call(
+      "awp_message",
+      { to: "nobody", body: "hi" },
+      {
+        sendMessage: () =>
+          Effect.fail({ reason: "no checkout called nobody — this thread holds exports-ui" }),
+      },
+    );
+
+    expect(got.failed).toBe(true);
+    // The sentence is the interface: what reads it is a model, and the roster
+    // in it is what stops the next call being another guess.
+    expect(got.text).toContain("exports-ui");
+  });
+});
+
+/** A message waiting for this checkout, from a sibling in its thread. */
+const from = (workspace: string, body: string) => ({
+  id: `m-${workspace}`,
+  thread: "th-1",
+  from: { project: "beta", workspace },
+  to: { project: "rowan", workspace: "tabular-exports" },
+  body,
+  sentAt: 0,
+  notifiedAt: 0,
+  readAt: undefined,
+});
+
+describe("awp_messages", () => {
+  it("says nothing is waiting rather than answering with an empty string", () => {
+    // A tool whose refusal or emptiness renders as "" is a tool an agent calls
+    // again — the same argument `commentsSaid` is written around.
+    const got = call("awp_messages");
+    expect(got.failed).toBe(false);
+    expect(got.text).toBe("No new messages.");
+  });
+
+  it("gives the bodies whole, with the sender and how to answer", () => {
+    const got = call(
+      "awp_messages",
+      {},
+      { inbox: () => Effect.succeed([from("exports-ui", "the endpoint is live on 4000")]) },
+    );
+
+    // Whole, not summarised: the tool exists so the recipient reads what was
+    // said rather than this process's rendering of it.
+    expect(got.text).toContain("the endpoint is live on 4000");
+    expect(got.text).toContain("beta/exports-ui");
+    // The address to answer on travels with the message. An agent should never
+    // have to be told separately how to be reachable — and it is the PAIR,
+    // because a thread's checkouts commonly share a workspace name and the
+    // short form would be refused as ambiguous by the call it is suggesting.
+    expect(got.text).toContain('awp_message to: "beta/exports-ui"');
+  });
+
+  it("counts them, so an agent knows whether it has read everything", () => {
+    const got = call(
+      "awp_messages",
+      {},
+      { inbox: () => Effect.succeed([from("exports-ui", "one"), from("the-api", "two")]) },
+    );
+    expect(got.text).toContain("2 new messages");
   });
 });

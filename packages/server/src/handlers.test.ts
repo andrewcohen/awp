@@ -7,6 +7,8 @@ import {
   AwpRpcs,
   type CommentSide,
   type Face,
+  MessageRefused,
+  NotAWorkspace,
   type ReviewComment,
   type WorkspaceFacts,
   type WorkspaceStatus,
@@ -19,6 +21,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import * as attachment from "./attachment";
 import { Chat } from "./chat";
 import { Faces } from "./faces";
+import { Messages } from "./messages";
 import { Github, GithubError, type Remark } from "./github";
 import type { PullRequest } from "./github-parse";
 import {
@@ -153,6 +156,8 @@ type Client = RpcClient.RpcClient<
  * a real branch in `baseOfThread` that no other test reaches.
  */
 interface Fakes {
+  /** Every message the handlers accepted, in the order they were sent. */
+  readonly sent?: Array<{ readonly to: string; readonly body: string }> | undefined;
   /** Written into a config file, because Settings reads one. */
   readonly bookmarkPrefix?: string | undefined;
   /**
@@ -322,6 +327,34 @@ const run = <A>(body: (rpc: Client) => Effect.Effect<A, unknown, Scope.Scope>, f
             setStatus: () => Effect.die("no writing in this fake"),
             tag: () => Effect.die("no writing in this fake"),
             remove: () => Effect.die("no writing in this fake"),
+          }),
+        ),
+        // A message store that holds nothing and records what was sent. The
+        // store's own rules — the cap, marking read on the way out — are
+        // `messages.test.ts` against a real connection; what this suite can
+        // see is the half above it, which is the addressing: a refusal for a
+        // checkout in no thread, and for a name no sibling has.
+        Layer.provide(
+          Layer.succeed(Messages)({
+            list: () => Effect.succeed([]),
+            changes: () => Stream.empty,
+            send: (message) =>
+              Effect.sync(() => {
+                fakes.sent?.push({ to: message.to.workspace, body: message.body });
+                return {
+                  id: "m20260916-fake",
+                  thread: message.thread,
+                  from: message.from,
+                  to: message.to,
+                  body: message.body,
+                  sentAt: 0,
+                  notifiedAt: undefined,
+                  readAt: undefined,
+                };
+              }),
+            inbox: () => Effect.succeed([]),
+            waiting: () => Effect.succeed([]),
+            notified: () => Effect.void,
           }),
         ),
         // A conversation nobody has. The chat calls are exercised by
@@ -747,6 +780,187 @@ describe("the thread a checkout belongs to", () => {
     );
     expect(running.get("other")).toBe(true);
     expect(running.get("finished")).toBe(false);
+  });
+});
+
+/** A thread holding exactly these checkouts, for the addressing tests below. */
+const inThread = (rpc: Client, members: ReadonlyArray<[string, string]>) =>
+  Effect.gen(function* () {
+    const started = yield* rpc.ThreadStart({
+      description: "add tabular exports",
+      project: "thicket",
+      from: "/somewhere/thicket",
+      parent: undefined,
+      base: undefined,
+    });
+    for (const [project, workspace] of members) {
+      yield* rpc.ThreadAttach({ thread: started.thread.id, member: { project, workspace } });
+    }
+    return started.thread.id;
+  });
+
+describe("addressing a message", () => {
+  // The store's own rules are `messages.test.ts` against a real connection.
+  // What is only visible here is the addressing: a sender resolved from where
+  // it is standing, and a recipient looked up among its own thread's members.
+
+  it("delivers to a sibling named by workspace alone", async () => {
+    const sent: Array<{ readonly to: string; readonly body: string }> = [];
+    const got = await run(
+      (rpc) =>
+        Effect.gen(function* () {
+          yield* inThread(rpc, [
+            ["rowan", "tabular-exports"],
+            ["beta", "exports-ui"],
+          ]);
+          return yield* rpc.MessageSend({
+            from: dirOf("rowan", "tabular-exports"),
+            to: "exports-ui",
+            body: "the endpoint is live on 4000",
+          });
+        }),
+      { sent },
+    );
+
+    // The sender is the directory's, never an argument — the same binding
+    // `ThreadAt` has, applied to a write.
+    expect(got.from).toEqual({ project: "rowan", workspace: "tabular-exports" });
+    expect(got.to).toEqual({ project: "beta", workspace: "exports-ui" });
+    expect(sent).toEqual([{ to: "exports-ui", body: "the endpoint is live on 4000" }]);
+  });
+
+  it("refuses a checkout that is in no thread, because there is nobody to address", async () => {
+    const refused = await run((rpc) =>
+      rpc
+        .MessageSend({ from: dirOf("rowan", "unclaimed"), to: "exports-ui", body: "hello" })
+        .pipe(Effect.flip),
+    );
+
+    expect(refused).toBeInstanceOf(MessageRefused);
+    expect((refused as { readonly reason: string }).reason).toContain("not part of a thread");
+  });
+
+  it("refuses a name no sibling has, and says which names there are", async () => {
+    const refused = await run((rpc) =>
+      Effect.gen(function* () {
+        yield* inThread(rpc, [
+          ["rowan", "tabular-exports"],
+          ["beta", "exports-ui"],
+        ]);
+        return yield* rpc
+          .MessageSend({
+            from: dirOf("rowan", "tabular-exports"),
+            to: "somewhere-else",
+            body: "hello",
+          })
+          .pipe(Effect.flip);
+      }),
+    );
+
+    // The roster is in the sentence because the sentence is the interface: a
+    // model given a refusal and no list of names guesses again rather than
+    // going and looking. Pairs, so what it reads is what it can say next.
+    expect((refused as { readonly reason: string }).reason).toContain("beta/exports-ui");
+  });
+
+  it("refuses itself", async () => {
+    const refused = await run((rpc) =>
+      Effect.gen(function* () {
+        yield* inThread(rpc, [["rowan", "tabular-exports"]]);
+        return yield* rpc
+          .MessageSend({
+            from: dirOf("rowan", "tabular-exports"),
+            to: "tabular-exports",
+            body: "hello",
+          })
+          .pipe(Effect.flip);
+      }),
+    );
+
+    // An agent that could message its own checkout would nudge itself, read
+    // its own message, and have every reason to answer it.
+    expect((refused as { readonly reason: string }).reason).toContain("no other checkout");
+  });
+
+  // ── the shape a real thread has ──────────────────────────────────────────
+  //
+  // Adding a project to a thread takes the sibling's workspace name on purpose,
+  // so a thread reads as one piece of work — which means the ordinary thread is
+  // several checkouts with ONE workspace name and different projects. The first
+  // version of this addressed by workspace name and therefore refused every
+  // message in the ordinary case; `Testing Multi` on this machine is exactly it.
+  it("delivers when every member shares a workspace name and the project is named", async () => {
+    const sent: Array<{ readonly to: string; readonly body: string }> = [];
+    const got = await run(
+      (rpc) =>
+        Effect.gen(function* () {
+          yield* inThread(rpc, [
+            ["thicket", "testing-multi"],
+            ["rowan", "testing-multi"],
+            ["beta", "testing-multi"],
+          ]);
+          return yield* rpc.MessageSend({
+            from: dirOf("thicket", "testing-multi"),
+            to: "rowan",
+            body: "the endpoint is live",
+          });
+        }),
+      { sent },
+    );
+
+    expect(got.to).toEqual({ project: "rowan", workspace: "testing-multi" });
+  });
+
+  it("takes the full pair, which is what the inbox hands back", async () => {
+    const got = await run((rpc) =>
+      Effect.gen(function* () {
+        yield* inThread(rpc, [
+          ["thicket", "testing-multi"],
+          ["rowan", "testing-multi"],
+        ]);
+        return yield* rpc.MessageSend({
+          from: dirOf("thicket", "testing-multi"),
+          to: "rowan/testing-multi",
+          body: "hi",
+        });
+      }),
+    );
+
+    expect(got.to).toEqual({ project: "rowan", workspace: "testing-multi" });
+  });
+
+  it("refuses a name two members still share, naming the pairs to use instead", async () => {
+    const refused = await run((rpc) =>
+      Effect.gen(function* () {
+        // Two checkouts of one project in one thread: not what adding a project
+        // does, and not refused by the schema either, so it has to resolve here.
+        yield* inThread(rpc, [
+          ["thicket", "sender"],
+          ["rowan", "the-api"],
+          ["rowan", "the-ui"],
+        ]);
+        return yield* rpc
+          .MessageSend({ from: dirOf("thicket", "sender"), to: "rowan", body: "hi" })
+          .pipe(Effect.flip);
+      }),
+    );
+
+    const reason = (refused as { readonly reason: string }).reason;
+    expect(reason).toContain("ambiguous");
+    // The pairs, because those are what the sender should say instead — a
+    // refusal that does not carry the next call is a refusal a model guesses at.
+    expect(reason).toContain("rowan/the-api");
+    expect(reason).toContain("rowan/the-ui");
+  });
+
+  it("refuses a directory that is not a workspace at all", async () => {
+    const refused = await run((rpc) =>
+      rpc
+        .MessageSend({ from: "/Users/x/code/thicket", to: "exports-ui", body: "hello" })
+        .pipe(Effect.flip),
+    );
+
+    expect(refused).toBeInstanceOf(NotAWorkspace);
   });
 });
 
