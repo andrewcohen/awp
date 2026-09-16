@@ -3,6 +3,9 @@ import * as stylex from "@stylexjs/stylex";
 import { AnimatePresence, motion } from "motion/react";
 import { useArriving, useSpring } from "./springs";
 import { useEffect, useRef, useState } from "react";
+import { ArrowsSplit } from "@phosphor-icons/react/ArrowsSplit";
+import { useAtomSet } from "@effect/atom-react";
+import { newThreadAtom } from "./atoms";
 import { addTask, listBoard, onReconnect, sendTask, setTaskStatus, watchTasks } from "./daemon";
 import { Markdown } from "./Markdown";
 import { type Listed, merge } from "./tasklist";
@@ -235,6 +238,25 @@ const styles = stylex.create({
     ":focus-visible": { opacity: 1 },
     ":hover": { color: colors.text, borderColor: colors.muted },
   },
+  // The fan-out, beside the send and hidden by the same rule. A glyph rather
+  // than a second word: the row is 280px wide, `send` is the thing done here
+  // most often, and two labelled buttons make the rarer one look like half of
+  // a pair of equals.
+  fan: {
+    flexShrink: 0,
+    display: "flex",
+    alignItems: "center",
+    padding: "0.15rem",
+    backgroundColor: "transparent",
+    borderStyle: "none",
+    color: colors.muted,
+    cursor: "pointer",
+    opacity: 0,
+    transitionProperty: "opacity, color",
+    transitionDuration: "100ms",
+    ":focus-visible": { opacity: 1 },
+    ":hover": { color: colors.text },
+  },
   shown: { opacity: 1 },
   // The scope control. A button that reads as a label until it is hovered —
   // the panel's own noun, and pressing it widens the question.
@@ -315,6 +337,25 @@ const NEXT_STATUS: Record<string, string> = {
   completed: "pending",
 };
 
+/**
+ * The brief a task makes, which is the task.
+ *
+ * Subject and body, separated by a blank line, because the form's one field
+ * is markdown a person is about to read back — and a description that ran on
+ * from its own title would be a paragraph nobody wrote. The body is often
+ * empty (a `TODO.md` heading with nothing under it), and then the subject is
+ * the whole of it rather than a subject with a trailing gap.
+ *
+ * The thread's *name* is not set here and cannot be: the daemon writes it,
+ * one step into the job, out of this sentence. That is the `name` step's
+ * whole job and a client composing one would be guessing at a prompt it
+ * cannot see.
+ */
+const briefFor = (task: Listed): string => {
+  const body = task.description.trim();
+  return body === "" ? task.subject : `${task.subject}\n\n${body}`;
+};
+
 interface RowProps {
   readonly task: Listed;
   /** Absent for a session awp did not make: there is no agent to address. */
@@ -328,10 +369,19 @@ interface RowProps {
    * one of those stays a mark rather than becoming a control that lies.
    */
   readonly onMove: (() => void) | undefined;
+  /**
+   * Start a thread of its own for it, rather than telling the agent here.
+   *
+   * The opposite act to `onSend`, and the reason the panel is a queue rather
+   * than a list: read the pending work, and either hand one to the agent in
+   * front of you or fan one out beside it. Absent when no project is on
+   * screen — the form has to open on one, and the panel does not know which.
+   */
+  readonly onFanOut: (() => void) | undefined;
   readonly state: "idle" | "sending" | "sent" | "failed";
 }
 
-function Row({ task, onSend, onMove, state }: RowProps) {
+function Row({ task, onSend, onMove, onFanOut, state }: RowProps) {
   const [open, setOpen] = useState(false);
   // Hover is React state rather than a CSS descendant selector, because StyleX
   // writes atomic rules for one element and has no way to say "while my parent
@@ -397,6 +447,18 @@ function Row({ task, onSend, onMove, state }: RowProps) {
         ) : undefined}
       </div>
 
+      {onFanOut === undefined ? undefined : (
+        <button
+          type="button"
+          data-nav-item
+          title={`start a thread of its own for "${task.subject}"`}
+          onClick={onFanOut}
+          {...stylex.props(styles.fan, (hovered || state !== "idle") && styles.shown)}
+        >
+          <ArrowsSplit size={14} aria-hidden />
+        </button>
+      )}
+
       <button
         type="button"
         data-nav-item
@@ -437,6 +499,10 @@ export interface TasksProps {
 }
 
 export function Tasks({ dir, project, workspace, thread }: TasksProps) {
+  // The new-thread modal is App's — a modal belongs to the window — and this
+  // panel is three columns from it behind a Base UI tab, so the request is
+  // written where both can reach it. See `newThreadAtom`.
+  const openNewThread = useAtomSet(newThreadAtom);
   const [board, setBoard] = useState<ReadonlyArray<Task>>([]);
   const [asked, setAsked] = useState(false);
   const [states, setStates] = useState<Record<string, RowProps["state"]>>({});
@@ -576,6 +642,25 @@ export function Tasks({ dir, project, workspace, thread }: TasksProps) {
     };
   };
 
+  const fanOut = (task: Listed) => {
+    if (project === undefined) {
+      return undefined;
+    }
+    return () => {
+      openNewThread({
+        project,
+        workspace,
+        // Branch from the workspace on screen when there is one: a task read
+        // out of this checkout usually follows on from it, which is what
+        // cmd+shift+N means and what `baseOfThread` already resolves. With no
+        // workspace there is nothing to branch from and the form stays on
+        // trunk, which is the same answer cmd+N gives.
+        fromWorkspace: workspace !== undefined,
+        brief: briefFor(task),
+      });
+    };
+  };
+
   const send = (task: Listed) => {
     if (project === undefined || workspace === undefined) {
       return;
@@ -697,6 +782,7 @@ export function Tasks({ dir, project, workspace, thread }: TasksProps) {
               <Row
                 task={task}
                 onSend={send(task)}
+                onFanOut={fanOut(task)}
                 onMove={move(task)}
                 state={states[task.key] ?? "idle"}
               />
@@ -730,6 +816,7 @@ export function Tasks({ dir, project, workspace, thread }: TasksProps) {
                     key={task.key}
                     task={task}
                     onSend={send(task)}
+                    onFanOut={fanOut(task)}
                     onMove={move(task)}
                     state={states[task.key] ?? "idle"}
                   />

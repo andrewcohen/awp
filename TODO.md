@@ -11,7 +11,7 @@ rather than the summary when what you learn changes the shape of the work.
 
 `bun run fmt` reflows this file, so the sequence is edit, then format, then commit; skipping the format leaves a diff that turns up under somebody else's change.
 
-41 open, as of 2026-09-15. The count is taken from the entries rather than
+40 open, as of 2026-09-16. The count is taken from the entries rather than
 carried forward — it read "46 open" over 51 of them once.
 
 Closed later the same day, each against the code: #87 (the tasks panel's `N
@@ -21,6 +21,15 @@ or the bar, plus `rename…` in its menu).
 
 Added the same day, out of what was asked while those landed: #132, #133 and
 #134.
+
+Closed on 2026-09-16: #85 (the tasks row's second control, which opens the
+new-thread form with the task already in the brief). Both of its open questions
+were decided by building it — the base is the workspace on screen, which is
+what cmd+shift+N means, and the label is a glyph rather than a second word,
+because the row is 280px wide and two labelled buttons make the rarer one look
+like half of a pair of equals. The third, what happens to the task afterwards,
+is still nothing: this panel does not write to the store for a fan-out, and
+should not until there is a reason.
 
 Hand-edited rather than regenerated, and that is now the normal way this file
 changes: the session the list was regenerated from has ended.
@@ -281,18 +290,6 @@ Rules for what a tip says, so they are worth having:
 The catch is the patch, not the library. `jj diff --git` emits three lines of context, so expansion has nothing beyond that to reveal unless `loadDiffFiles: FileDiffContentsLoader` is supplied — a callback that fetches both whole sides of a changed file. That is a new RPC (file contents at a revision, both sides) plus the loader wiring, and it is the actual work here. Without it, expansion only reaches the ends of what the patch already carries.
 
 Also check whether the default `collapsedContextThreshold` already draws separators we are simply not noticing in a 200px column.
-
-## 85. A second button on a task: start it in its own thread
-
-The tasks panel's row has one button, Send, which briefs the agent already open in this thread. The second thing a person wants is the opposite: leave this thread alone and start a _new_ one for the task — the task's subject becomes the thread name and its description becomes the prompt, so it is the new-thread flow with both fields already filled in.
-
-That makes the panel a queue rather than a list: read the pending work, and either hand one to the agent in front of you or fan one out beside it.
-
-Open questions, none of them decided:
-
-- the new thread's base. Probably the current thread's bookmark, since a task read out of this workspace usually follows on from it — which is what `baseOfThread` already resolves.
-- what happens to the task afterwards. A task started in another thread is no longer pending, but nothing here writes to the task store, and it should stay that way until there is a reason.
-- the label. "Send" and a fan-out glyph beside it, or two named buttons; the row is narrow and the second control is the rarer one.
 
 ## 88. Find the daemon finaliser that never completes
 

@@ -1,5 +1,6 @@
 import type { Inbox, Page, PullRequest } from "@awp-kit/protocol";
 import { Atom } from "effect/unstable/reactivity";
+import type { NewThreadRequest } from "./NewThread";
 import { rememberedPages } from "./remembered";
 
 // State that outlives the component holding it.
@@ -110,3 +111,25 @@ export const pagesAtom = Atom.make<Record<string, string>>(rememberedPages());
  * value-equal urls are only distinguishable by the `at` the daemon stamped.
  */
 export const pageAskedAtom = Atom.make<Page | undefined>(undefined);
+
+/**
+ * The new-thread modal's request, or nothing while it is shut.
+ *
+ * ── an atom because the opener is three columns from the modal ────────────
+ *
+ * The dialog is App's — a modal belongs to the window, because the column that
+ * holds a control folds to nothing and goes `inert` with it. That was fine
+ * while every opener was App's too: cmd+N, cmd+shift+N, and the sidebar menu
+ * item it hands a callback to.
+ *
+ * The tasks panel is the first opener that is not. It sits inside `Accessory`,
+ * behind a Base UI tab, and threading `onFanOut` down to it would put a prop
+ * about a dialog through two components that have nothing to do with either.
+ * Same shape as the inbox: the value plus a subscription, which is what an atom
+ * is and what a `let` is not.
+ *
+ * Held here rather than in App's `useState` so there is **one** of it. An atom
+ * beside a piece of state saying the same thing is two answers to "is the
+ * dialog open", and the one that loses is whichever a later reader believed.
+ */
+export const newThreadAtom = Atom.make<NewThreadRequest | undefined>(undefined);

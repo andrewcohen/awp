@@ -86,7 +86,14 @@ describe("parseTodo", () => {
     // the real file is the failure this whole module is one guess away from.
     const { readFile } = await import("node:fs/promises");
     const tasks = parseTodo(await readFile("TODO.md", "utf8"));
-    expect(tasks.length).toBeGreaterThan(40);
+    // A floor, not a count. It was 40 and the file held 41, so closing one
+    // task failed a test about the parser — which is a test measuring the
+    // wrong thing twice over: the number here is a fact about the backlog on
+    // the day it was written, and the backlog is meant to go down. What this
+    // is guarding is that the real file parses to a *list* rather than to
+    // nothing or to one task made of the whole document, and both of those
+    // fail well under ten.
+    expect(tasks.length).toBeGreaterThan(10);
     expect(tasks.every((task) => task.subject !== "")).toBe(true);
     expect(tasks.every((task) => Number.isInteger(task.number))).toBe(true);
     // Every number appears once. Two tasks sharing one would collide on their

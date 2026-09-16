@@ -116,6 +116,19 @@ export interface NewThreadRequest {
   readonly workspace: string | undefined;
   /** True when opened with cmd+shift+N, which asks to branch from that one. */
   readonly fromWorkspace: boolean;
+  /**
+   * What to put in the brief, for an opener that already knows.
+   *
+   * The tasks panel's fan-out is the one that does: a task is a subject and a
+   * body somebody already wrote, so starting a thread for it is this form with
+   * its one text field already filled in. Absent everywhere else, which is an
+   * empty box and the ordinary case.
+   *
+   * It seeds the field rather than replacing it — read once, at mount, so it
+   * is a starting point a person edits rather than a value the dialog insists
+   * on. Same reading as `project`: what the window knew when it was opened.
+   */
+  readonly brief?: string | undefined;
 }
 
 const styles = stylex.create({
@@ -392,7 +405,7 @@ function Composer({
   const [project, setProject] = useState(
     projects.some((p) => p.name === request.project) ? (request.project ?? first) : first,
   );
-  const [typed, setTyped] = useState("");
+  const [typed, setTyped] = useState(request.brief ?? "");
   // One line at rest, measured rather than assumed — this box is `text.lead`
   // with padding of its own, so what one line is belongs to the element. See
   // grow.ts, where a constant floor clipped exactly this textarea.

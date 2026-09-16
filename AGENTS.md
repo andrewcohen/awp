@@ -1308,6 +1308,58 @@ is for.
 preference; this is a glance, and a section that came back open would make the
 panel's first screen a list of work nobody has to think about.
 
+### Two acts on a row, and they are opposites
+
+The row had one button, `send`, which briefs the agent already open in this
+thread. The second thing somebody wants is the reverse — leave this thread
+alone and start a new one for the task — and having only the first is what
+made this a list rather than a queue:
+
+```
+  send      hand it to the agent in front of you
+  fan out   start a thread beside it, with the task as the brief
+```
+
+**The brief is the task, and the thread's name is not set here.** Subject, a
+blank line, then the body — markdown, because a board task's body already is,
+and a description running on from its own title is a paragraph nobody wrote. A
+task with an empty body is its subject and no trailing gap. The _name_ comes
+from the daemon's `name` step reading that sentence, which is the one place it
+can come from: a client composing one would be guessing at a prompt it cannot
+see.
+
+**The base is the workspace on screen**, which is what cmd+shift+N already
+means — a task read out of this checkout usually follows on from it, and
+`baseOfThread` already resolves it. With no workspace the form stays on trunk,
+which is cmd+N's answer. Measured, opening it from a row in a checkout:
+
+```
+  project   thicket
+  base      andrew/tabular-exports              ← the workspace's own bookmark
+  brief     "<subject>\n\n<the body>"            3 lines
+```
+
+**A glyph, not a second word.** The column is 280px and `send` is what is done
+here most often; two labelled buttons make the rarer one read as half of a pair
+of equals. Hidden by `opacity` like the send beside it — measured 0 at rest and
+1 on hover — because `display: none` leaves the layout and takes the keyboard
+with it.
+
+**Nothing is written to the task.** A task started in another thread is
+arguably no longer pending, and this panel still does not say so: the one act
+it has on a row is the dot, for rows awp owns, and inventing a second status
+writer for a fan-out would be a claim the source that owns the task would
+overwrite on the next sweep anyway.
+
+**And the modal is App's, so the request is an atom.** `newThreadAtom` replaced
+App's `useState`, rather than joining it — a dialog whose openness is in two
+places has two answers to "is it open", and the one that loses is whichever a
+later reader believed. The tasks panel is the first opener that is not App's:
+it is inside `Accessory`, behind a Base UI tab, and threading a callback down
+to it would put a prop about a dialog through two components that have nothing
+to do with either. The same argument the inbox made — the value _plus_ a
+subscription, which is what a `let` is not.
+
 ### A rename is a double click, in the two places the title is drawn
 
 A thread's title is written once by a model, out of the sentence somebody typed

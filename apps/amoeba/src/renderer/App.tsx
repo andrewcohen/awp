@@ -1,14 +1,16 @@
 import * as stylex from "@stylexjs/stylex";
+import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { useNavigate, useParams, useRouterState } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { Accessory } from "./Accessory";
+import { newThreadAtom } from "./atoms";
 import { Boundary } from "./Boundary";
 import { AppearanceToggle } from "./Appearance";
 import { AgentBar, TopBar } from "./Bars";
 import { Divider } from "./Divider";
 import { InboxDialog } from "./InboxDialog";
 import { LeftColumn } from "./LeftColumn";
-import { NewThread, type NewThreadRequest } from "./NewThread";
+import { NewThread } from "./NewThread";
 import { Chat } from "./Chat";
 import { NoSession } from "./NoSession";
 import { Pane } from "./Pane";
@@ -526,7 +528,11 @@ function Window() {
   // knew at the moment it was opened — which project was on screen, and which
   // workspace — so the form can read them once at mount instead of tracking a
   // selection that may move underneath it.
-  const [newThread, setNewThread] = useState<NewThreadRequest | undefined>();
+  // In an atom rather than in this component's state, because the tasks panel
+  // opens it too and sits three columns away behind a Base UI tab. One of it,
+  // deliberately — see `newThreadAtom`.
+  const newThread = useAtomValue(newThreadAtom);
+  const setNewThread = useAtomSet(newThreadAtom);
   // The inbox, which is a modal rather than a panel — see `InboxDialog`. Held
   // here and not in the left column: that column folds to nothing and goes
   // `inert` with it, so an overlay it owned would be unreachable exactly when
@@ -612,7 +618,7 @@ function Window() {
     };
     window.addEventListener("keydown", onKey, { capture: true });
     return () => window.removeEventListener("keydown", onKey, { capture: true });
-  }, [open]);
+  }, [open, setNewThread]);
 
   // cmd+P: go to a thread, previous one first.
   //
