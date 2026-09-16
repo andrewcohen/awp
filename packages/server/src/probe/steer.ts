@@ -12,6 +12,27 @@
 //
 // The last one is the one that decides whether `running` can be a boolean.
 //
+// ── and the second scenario, which is about the QUEUED mark ────────────────
+//
+// An ordinary send is not a steer — `ChatSend.interrupt` defaults to false, so
+// a message typed mid-turn goes as a plain `session/prompt` and the adapter's
+// own queue holds it at priority `next`. The panel marks that message `queued`
+// and clears the mark when a turn ends, under a comment claiming the turn that
+// ended is the one it was waiting behind.
+//
+// That claim is a guess, and this measures it. Two messages are sent behind
+// one slow turn, so the questions have answers a single message cannot give:
+//
+//   is a queued prompt ACCEPTED immediately, or held until the turn is over?
+//     — which decides whether it can be taken back at all, and the answer
+//       decides how much of "Up pops the queued message back" is even honest
+//   does anything on the stream mark the moment the adapter DEQUEUES one?
+//     — the adapter's `activateTurn` is internal and notifies nobody, so the
+//       expectation is no. A `turn started` is emitted by the daemon when it
+//       SENDS, not when the agent gets to it
+//   do the two turns end in the order they were sent?
+//     — the release rule can only be exact if they do
+//
 // ── safe anywhere ──────────────────────────────────────────────────────────
 // A temporary directory and one file in it. It never invokes zmx, never
 // attaches and never names a session.
@@ -47,19 +68,35 @@ const line = (started: number, { at, update }: Stamped): string => {
     return `${when}  tool     ${String(update.status ?? "").padEnd(11)} ${String(update.title ?? "").slice(0, 40)}`;
   }
   if (update.kind === "turn") {
-    return `${when}  TURN     ${update.status} ${update.stopReason ?? ""}`;
+    // The key is the whole reason a second message's mark can be right: it
+    // says WHOSE turn this edge is, which two ends in the same millisecond
+    // cannot say for themselves.
+    return `${when}  TURN     ${String(update.status).padEnd(8)} ${String(update.id ?? "—").padEnd(16)} ${update.stopReason ?? ""}`;
   }
   return `${when}  ${update.kind}`;
 };
 
-const program = Effect.gen(function* () {
-  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+/** Two messages behind one slow turn, so "which turn ended" has an answer. */
+const QUEUED = ["Say only the word lantern.", "Say only the word orchard."] as const;
 
-  const dir = mkdtempSync(join(tmpdir(), "awp-steer-"));
-  writeFileSync(join(dir, "notes.txt"), "the word is: heron\n");
-  console.log(`\n  cwd         ${dir}\n`);
-
-  const seen = yield* Effect.scoped(
+/**
+ * Drive one conversation and hand back every update, stamped.
+ *
+ * One conversation per scenario, never two scenarios in one — the second would
+ * read the turns the first left running. The same rule as one page per gesture.
+ */
+const drive = (
+  spawner: ChildProcessSpawner.ChildProcessSpawner["Service"],
+  dir: string,
+  act: (chat: {
+    readonly send: (
+      text: string,
+      key: string,
+      interrupt: boolean,
+    ) => Effect.Effect<string, unknown>;
+  }) => Effect.Effect<void, unknown>,
+) =>
+  Effect.scoped(
     Effect.gen(function* () {
       const chat = yield* conversation(spawner, { cwd: dir, model: "sonnet" });
       const updates = yield* chat.updates;
@@ -76,15 +113,37 @@ const program = Effect.gen(function* () {
       // permission request in Manual mode for the whole sixty seconds and
       // measured nothing at all — a turn that is waiting for a person is not a
       // turn that is working, and steering is about the second one.
-      const before = yield* chat.config;
-      console.log(
-        `  modes       ${before
-          .find((one) => one.id === "mode")
-          ?.values.map((one) => one.value)
-          .join(" · ")}\n`,
-      );
       yield* Effect.ignore(chat.set("mode", "bypassPermissions"));
+      yield* Effect.orDie(act(chat as never) as Effect.Effect<void>);
+      return yield* Ref.get(collected);
+    }),
+  );
 
+/** The turn edges as one string — `started → started → ended → ended`. */
+const turnOrder = (seen: ReadonlyArray<Stamped>): string =>
+  seen
+    .filter((one) => one.update.kind === "turn")
+    .map((one) => (one.update as { status?: string }).status)
+    .join(" → ");
+
+const report = (label: string, seen: ReadonlyArray<Stamped>) => {
+  const started = seen[0]?.at ?? Date.now();
+  console.log(`\n  ── ${label} ${"─".repeat(Math.max(0, 60 - label.length))}\n`);
+  for (const one of seen) {
+    console.log(`  ${line(started, one)}`);
+  }
+};
+
+const program = Effect.gen(function* () {
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+
+  const dir = mkdtempSync(join(tmpdir(), "awp-steer-"));
+  writeFileSync(join(dir, "notes.txt"), "the word is: heron\n");
+  console.log(`\n  cwd         ${dir}\n`);
+
+  // ── one: the steer, which is what this probe was written for ────────────
+  const steered = yield* drive(spawner, dir, (chat) =>
+    Effect.gen(function* () {
       yield* chat.send(SLOW, "probe-slow", false);
       // Long enough that the turn is certainly underway and the tool call is
       // running — a steer sent before the agent has started is not a steer.
@@ -96,31 +155,17 @@ const program = Effect.gen(function* () {
       // turn with a reason, and a second `turn started` with no `turn ended`
       // after it is a window that says "working" for the rest of the session.
       // `true`, because this probe exists to measure what an interrupt does.
-      // It is no longer what an ordinary send asks for — see
-      // `ChatSend.interrupt` — so the probe has to say so out loud, which is
-      // the honest shape: the aggressive path is the one with a name on it.
       const how = yield* chat.send(STEER, "probe-steer", true);
       console.log(`  delivered as  ${how}\n`);
       yield* Effect.sleep("60 seconds");
-      return yield* Ref.get(collected);
     }),
   );
+  report("a steer, interrupt: true", steered);
 
-  rmSync(dir, { recursive: true, force: true });
-
-  const started = seen[0]?.at ?? Date.now();
-  for (const one of seen) {
-    console.log(`  ${line(started, one)}`);
-  }
-
-  const echoes = seen.filter((one) => one.update.kind === "message" && one.update.role === "user");
-  const turns = seen.filter((one) => one.update.kind === "turn");
-  // What the turn sequence says, and it is the whole point of the probe: only
-  // a real adapter decides whether a mid-turn message can be steered into the
-  // turn already running, and it decides atomically — its own comment says the
-  // check and the push "stay in one synchronous section so the turn cannot
-  // settle in the gap between deciding to inject and enqueueing".
-  const order = turns.map((one) => (one.update as { status?: string }).status).join(" → ");
+  const echoes = steered.filter(
+    (one) => one.update.kind === "message" && one.update.role === "user",
+  );
+  const order = turnOrder(steered);
   console.log(
     `\n  user chunks echoed back   ${String(echoes.length)}` +
       `\n  turns                     ${order}` +
@@ -133,6 +178,64 @@ const program = Effect.gen(function* () {
             : order
       }\n`,
   );
+
+  // ── two: two ordinary sends behind a slow turn ──────────────────────────
+  //
+  // This is the shape the `queued` mark is about, and the one nothing had ever
+  // measured. A fresh conversation, because the one above has turns in it.
+  const delivered: Array<string> = [];
+  const queued = yield* drive(spawner, dir, (chat) =>
+    Effect.gen(function* () {
+      yield* chat.send(SLOW, "probe-slow", false);
+      yield* Effect.sleep("12 seconds");
+      console.log("  two ordinary sends now\n");
+      for (const [index, text] of QUEUED.entries()) {
+        const at = Date.now();
+        const how = yield* chat.send(text, `probe-queued-${String(index)}`, false);
+        // How long `send` took is the whole of the first question: a call that
+        // returns at once has handed the message to the adapter, and a message
+        // the adapter is holding cannot be taken back by this window.
+        delivered.push(`${String(how)} in ${String(Date.now() - at)}ms`);
+      }
+      yield* Effect.sleep("90 seconds");
+    }),
+  );
+  report("two ordinary sends, interrupt: false", queued);
+
+  const queuedOrder = turnOrder(queued);
+  const userEchoes = queued.filter(
+    (one) => one.update.kind === "message" && one.update.role === "user",
+  );
+  // Every update between the second `turn started` and the first `turn ended`.
+  // If anything in here named the queued message, that would be the dequeue
+  // edge the release rule could be built on.
+  const turns = queued.filter((one) => one.update.kind === "turn");
+  const secondStart = turns[1]?.at ?? 0;
+  const firstEnd =
+    turns.find((one, i) => i > 0 && (one.update as { status?: string }).status === "ended")?.at ??
+    0;
+  const between = queued.filter((one) => one.at > secondStart && one.at < firstEnd);
+
+  console.log(
+    `\n  send answered             ${delivered.join(" · ")}` +
+      `\n  turns                     ${queuedOrder}` +
+      `\n  user chunks on the wire   ${String(userEchoes.length)} (the daemon's own echo of each send)` +
+      `\n  updates between the 2nd start and the 1st end   ${String(between.length)}` +
+      `\n    ${between.map((one) => one.update.kind).join(", ") || "(none)"}` +
+      `\n\n  a dequeue edge            ${
+        between.some((one) => one.update.kind === "turn")
+          ? "SOMETHING — read the trace above"
+          : "NONE"
+      }` +
+      `\n  which means               ${
+        queuedOrder.startsWith("started → started → started")
+          ? "all three turns are started at SEND time, so `turn started` says " +
+            "nothing about when the agent got to a message. Ends are the only " +
+            "readable edge, and the release rule has to be built on their ORDER"
+          : queuedOrder
+      }\n`,
+  );
+  rmSync(dir, { recursive: true, force: true });
   return 0;
 }).pipe(
   Effect.provide(

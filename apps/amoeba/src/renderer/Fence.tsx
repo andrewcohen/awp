@@ -4,6 +4,7 @@ import { CodeView } from "@pierre/diffs/react";
 import * as stylex from "@stylexjs/stylex";
 import { type ReactNode, isValidElement, useEffect, useId, useMemo, useState } from "react";
 import { THEME } from "./highlighting";
+import { contentOf } from "./patch";
 import { useColorScheme } from "./theme";
 import { typeset } from "./typeset";
 import { colors } from "./tokens.stylex";
@@ -121,22 +122,69 @@ export const Patch = ({ source }: { readonly source: string }) => {
   // drew fences: a tool row is in a transcript that re-renders on every chunk
   // of the answer being written under it, and parsing an edit's patch again
   // per token is a parse for a string that cannot have changed.
+  // `undefined` is "this did not parse", which is not the same answer as an
+  // empty list — see the two branches below. A model's fence that is not
+  // really a patch should still be shown as the text somebody wrote; a patch
+  // that parsed and holds no lines should be shown as nothing at all.
   const items = useMemo(() => {
     try {
-      return parsePatchFiles(source, "message").flatMap((one) =>
-        one.files.map((fileDiff, index) => ({
-          id: `patch-${String(index)}`,
-          type: "diff" as const,
-          fileDiff,
-        })),
+      return (
+        parsePatchFiles(source, "message")
+          .flatMap((one) => one.files)
+          .map((fileDiff, index) => {
+            // ── the cache key and the version, which this was missing ───────
+            //
+            // Both are the repair `Diff.tsx` already made, and the reason it
+            // was needed here too is that a tool call's patch is *replaced*:
+            // the adapter sends its guess when the call is made and the SDK's
+            // real `structuredPatch` when it has run, on the same tool id. So
+            // `source` changes under an item whose id — `patch-0` — does not.
+            //
+            // Without a version the renderer reuses the AST it highlighted for
+            // the previous content and indexes it with hunks parsed from the
+            // new one, which is the throw in `patch.ts`'s own note:
+            //
+            //   deletionLines[deletionLine.lineIndex]   undefined
+            //   additionLines[additionLine.lineIndex]   undefined
+            //   → "deletionLine and additionLine are null, something is wrong"
+            //
+            // It read as intermittent because it needs the patch to be
+            // replaced while the row stays mounted, which is exactly what an
+            // edit that succeeds does.
+            fileDiff.cacheKey = `message|${String(index)}|${contentOf(fileDiff)}`;
+            return {
+              id: `patch-${String(index)}`,
+              type: "diff" as const,
+              version: contentOf(fileDiff),
+              fileDiff,
+            };
+          })
+          // ── and a file with nothing in it is not drawn ──────────────────
+          //
+          // A patch can parse and still carry no line on either side — an edit
+          // whose two texts are equal, a hunk header with an empty body. There
+          // is no row for the renderer to produce from one, and what it has to
+          // say about that is a thrown error rather than an empty box. Nothing
+          // is lost by leaving it out: a file with no deletions and no
+          // additions is a file the patch says nothing about.
+          .filter(
+            (item) => item.fileDiff.deletionLines.length + item.fileDiff.additionLines.length > 0,
+          )
       );
     } catch {
-      return [];
+      return undefined;
     }
   }, [source]);
 
-  if (items.length === 0) {
+  if (items === undefined) {
     return <Code source={source} language="diff" />;
+  }
+  // Parsed, and there is nothing in it. Nothing is drawn — not an empty box
+  // and not the source as text: this is the shape a tool call's patch takes
+  // when the edit changed nothing, and a row that says so in raw diff syntax
+  // is more confusing than a row that says it in no syntax at all.
+  if (items.length === 0) {
+    return null;
   }
 
   return (

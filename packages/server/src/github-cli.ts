@@ -30,7 +30,7 @@
 
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { Effect, FileSystem, Layer, Result } from "effect";
+import { Clock, Effect, FileSystem, Layer, Ref, Result } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { Github, GithubError, type Listing, type Repository } from "./github";
 import {
@@ -71,9 +71,30 @@ const json = <A>(op: string, out: string, fallback: A): Effect.Effect<A, GithubE
 /** How many open pull requests a repository's inbox is built from. */
 const LIMIT = 100;
 
+/**
+ * How long a repository that refused `mergeStateStatus` is taken at its word.
+ *
+ * The refusal is a function of how many open pull requests a repository has,
+ * which is not something anybody changes between two refreshes — so a
+ * repository that degraded once will degrade again, and asking anyway spends a
+ * multi-second failing query per refresh to learn what is already known.
+ *
+ * Long, and not permanent. The threshold is GitHub's own and moves with their
+ * load as much as with the repository's size, and a repository whose PRs have
+ * been merged down should get its conflicts signal back without a daemon
+ * restart. Six hours costs one failed query a working day.
+ */
+const REFUSED_FOR_MS = 6 * 60 * 60 * 1000;
+
 const make = Effect.gen(function* () {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const fs = yield* FileSystem.FileSystem;
+
+  // Which repositories have refused the expensive field, and when. In memory
+  // rather than in the store, deliberately: it is a reading about GitHub's
+  // patience rather than a fact about the work, and a daemon restart asking
+  // once more is the cheapest possible way to notice it has changed.
+  const refused = yield* Ref.make(new Map<string, number>());
 
   const run = (op: string, cwd: string, command: string, args: ReadonlyArray<string>) =>
     capture(spawner, ChildProcess.make(command, [...args], { cwd })).pipe(
@@ -185,12 +206,59 @@ const make = Effect.gen(function* () {
         // So the choice is between one repository losing its conflicts signal
         // and that repository having no inbox at all. It asks for everything,
         // and asks again without the expensive field when that is refused.
-        const whole = yield* Effect.result(list(PR_FIELDS));
-        const out = Result.isSuccess(whole) ? whole.success : yield* list(PR_FIELDS_CHEAP);
-        const degraded = Result.isSuccess(whole)
-          ? undefined
-          : `GitHub would not compute ${EXPENSIVE_FIELD} for ${LIMIT} pull requests here, so conflicts and behind-base are unknown`;
+        //
+        // ── and it stops asking a repository that has already said no ───────
+        //
+        // A refusal is about the size of the repository, so it repeats — and
+        // the full query is *several seconds* of waiting to be told the same
+        // thing. `refused` remembers it for `REFUSED_FOR_MS`, which turns the
+        // ordinary refresh of a degraded repository from two queries into one.
+        const now = yield* Clock.currentTimeMillis;
+        const since = (yield* Ref.get(refused)).get(repo);
+        const skip = since !== undefined && now - since < REFUSED_FOR_MS;
+        const whole = skip ? undefined : yield* Effect.result(list(PR_FIELDS));
+        const full = whole !== undefined && Result.isSuccess(whole);
+        const out =
+          whole !== undefined && Result.isSuccess(whole)
+            ? whole.success
+            : yield* list(PR_FIELDS_CHEAP);
+        // Written on the way down and cleared on the way back up. Without the
+        // clear, a repository that recovers stays degraded until the daemon
+        // restarts — which is the memory outliving the thing it remembers.
+        if (!full && !skip) {
+          yield* Ref.update(refused, (all) => new Map(all).set(repo, now));
+        }
+        if (full && since !== undefined) {
+          yield* Ref.update(refused, (all) => {
+            const next = new Map(all);
+            next.delete(repo);
+            return next;
+          });
+        }
         const raws = yield* json<ReadonlyArray<RawPullRequest>>(op, out, []);
+
+        // ── and the sentence names a count rather than the ceiling ──────────
+        //
+        // It read "for 100 pull requests here", where 100 is `LIMIT` — the
+        // number the query *asks* for. So the one concrete thing in the
+        // sentence was the one part that was not a fact about this repository,
+        // and it said 100 for a repository with twelve.
+        //
+        // It is composed here rather than beside the refusal because this is
+        // the first point at which there is anything true to say: the query
+        // that failed returned nothing to count, and the cheap one that
+        // succeeded is right above.
+        //
+        // At the ceiling the count is a ceiling again — `raws` is capped by the
+        // same `LIMIT` — so that one case says so instead of claiming a total
+        // it cannot know.
+        const count =
+          raws.length === LIMIT
+            ? `${LIMIT} or more open pull requests`
+            : `${raws.length} open pull request${raws.length === 1 ? "" : "s"}`;
+        const degraded = full
+          ? undefined
+          : `GitHub would not compute ${EXPENSIVE_FIELD} for this repository's ${count}, so conflicts and behind-base are unknown`;
         const all = raws
           .map((raw) => pullRequest(raw))
           .filter((pr): pr is PullRequest => pr !== undefined);

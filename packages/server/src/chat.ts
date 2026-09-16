@@ -826,7 +826,13 @@ export const conversation = (
     // the single reader of those three sentences, and a second opinion about
     // whether a compaction is running is the copy that drifts.
     const compacting = yield* Ref.make(false);
-    const waitingToSend = yield* Ref.make<ReadonlyArray<string>>([]);
+    // The key travels with the text, because a held message still has to be
+    // able to say which turn is its own when it finally goes — see the `id` on
+    // a `turn` update. Held as a pair rather than two lists for the reason
+    // this file gives about every other pair: two lists can disagree.
+    const waitingToSend = yield* Ref.make<
+      ReadonlyArray<{ readonly text: string; readonly key: string }>
+    >([]);
     // Assigned once `deliver` exists, below. A `let` rather than a forward
     // declaration because the reader fiber is forked before the session is
     // even open: what it must not do is capture an effect that was empty at
@@ -1221,6 +1227,15 @@ export const conversation = (
        * message does everywhere else. See `ChatSend.interrupt`.
        */
       interrupt: boolean,
+      /**
+       * The message this turn is for — `ChatSend.key`, the client's own uuid.
+       *
+       * Put on both turn edges so a client can tell *whose* turn ended. A
+       * window holding two messages behind one slow answer cannot work that
+       * out from the edges alone, and the one that used to guess released
+       * both on the first end. See the `id` field on `ChatUpdate`.
+       */
+      key: string,
     ): Effect.Effect<ChatDelivery, ChatError> =>
       Effect.gen(function* () {
         // Steer only when somebody asked to, the agent can be steered, and
@@ -1258,7 +1273,7 @@ export const conversation = (
           }
         }
 
-        yield* emit({ kind: "turn", status: "started" });
+        yield* emit({ kind: "turn", status: "started", id: key });
         yield* Effect.forkIn(
           request("session/prompt", promptOf(text)).pipe(
             Effect.map((reply) => String(reply["stopReason"] ?? "")),
@@ -1272,7 +1287,9 @@ export const conversation = (
             // resolve and then the turn stop — rather than a turn that
             // ended with work apparently still going on inside it.
             Effect.tap(() => settleHangingCalls),
-            Effect.flatMap((stopReason) => emit({ kind: "turn", status: "ended", stopReason })),
+            Effect.flatMap((stopReason) =>
+              emit({ kind: "turn", status: "ended", stopReason, id: key }),
+            ),
             // ── and nothing is left holding ─────────────────────────────
             //
             // The ordinary release is the compaction's own "compacting
@@ -1297,13 +1314,13 @@ export const conversation = (
     // had says so on is the update stream.
     flushWaiting = Effect.ignore(
       Effect.gen(function* () {
-        for (const text of yield* Ref.getAndSet(waitingToSend, [])) {
+        for (const { text, key } of yield* Ref.getAndSet(waitingToSend, [])) {
           // Never an interrupt, whatever the sender asked for. This runs when
           // a compaction has just ended, and what it is flushing has been on
           // screen marked `queued` for a minute — the moment to cut a turn
           // short is the moment somebody pressed the key, not a minute later
           // against whatever happens to be running by then.
-          yield* deliver(text, false);
+          yield* deliver(text, false, key);
         }
       }),
     );
@@ -1365,11 +1382,11 @@ export const conversation = (
           // `compacting`: the turn in flight is the one rewriting the
           // context, and injecting into it loses both.
           if (yield* Ref.get(compacting)) {
-            yield* Ref.update(waitingToSend, (all) => [...all, text]);
+            yield* Ref.update(waitingToSend, (all) => [...all, { text, key }]);
             return "queued" as const;
           }
 
-          return yield* deliver(text, interrupt);
+          return yield* deliver(text, interrupt, key);
         }),
 
       /** Every session the adapter sees here, by id. Asked for by the probe. */

@@ -1400,6 +1400,24 @@ store's own feed, so this window and any other are told by the daemon. "The
 reply is the update" is the rule for calls with **no** feed, and this one has
 had one since `watchThreads`.
 
+**And the bar was still showing a copy after that fix — a different one.** The
+paragraph above replaced `identity.label` with the live title and left
+`facts.displayName` in front of both, under a comment calling it "the one name
+a person chose by hand". It is not: it is the Go implementation's
+`~/.awp/workspace-state.json`, written by hooks, and frozen in exactly the way
+the label is. Read off this machine:
+
+```
+  thread title   amoeba                                   ← renameable
+  displayName    experimental rewrite from a clean slate  ← what was drawn
+```
+
+So renaming a thread still left the bar saying the old name. The sidebar has
+always had the order right and says why — the title is the only one of these
+that is neither shortened, sanitized nor second-hand — and the two strips agree
+now, which matters more than either ranking alone: a window whose header and
+whose selected row disagree gives nobody a reading that says which is true.
+
 ### cmd+B folds a column, cmd+shift+B the other one
 
 The toggles in the top bar are the discoverable half; these are the half that
@@ -4566,6 +4584,23 @@ refused. What it costs is `conflicts` and `behind base` being unknown there, and
 nothing is broken. **Silence was the alternative and is worse:** a clean-looking
 inbox for the one repository where nothing is _able_ to report a conflict.
 
+**The sentence named the ceiling, not a count.** It read "for 100 pull requests
+here", where 100 is `LIMIT` — the number the query _asks_ for — so the one
+concrete thing in it was the one part that was not a fact about the repository,
+and it said 100 for a repository with twelve. It is composed after the cheap
+listing now, which is the first point at which there is anything true to say:
+the query that failed returned nothing to count. At the ceiling it says "100 or
+more" rather than claiming a total it cannot know.
+
+**And a repository that refuses once refuses every time.** The refusal is a
+function of how many open pull requests there are, which nobody changes between
+two refreshes — so asking anyway spends a multi-second _failing_ query per
+refresh to learn what is already known. `refused` remembers it for six hours,
+in memory rather than in the store: it is a reading about GitHub's patience
+rather than a fact about the work, and a daemon restart asking once more is the
+cheapest way to notice it has changed. Written on the way down and **cleared on
+the way back up**, or the memory outlives the thing it remembers.
+
 ### The PR tab, and markdown
 
 A workspace whose thread names a pull request gets one more panel, first in the
@@ -4967,6 +5002,69 @@ thing said to a new conversation, so there is nothing to cut short; an
 throwing away an answer somebody is reading; and the compaction flush runs a
 minute after the keypress, against whatever happens to be running by then.
 
+### A turn edge says when the daemon SENT, not when the agent got there
+
+`queued` is the mark on a message typed while the agent is working, and what
+cleared it was "a turn ended, so clear every queued message" — under a comment
+claiming the turn that ended is the one it was waiting behind. With one message
+queued that is true by accident. `bun run probe:steer` drives two, and its
+second scenario is the whole finding:
+
+```
+  send answered   prompt in 1ms · prompt in 0ms
+  turns           started → started → started → ended → ended → ended
+  a dequeue edge  NONE
+```
+
+Three things follow, and the first is the one that is easiest to get backwards.
+
+**A message typed mid-turn is not held anywhere in awp.** `send` returns in a
+millisecond: it goes as a plain `session/prompt` and the _adapter_ queues it at
+priority `next`. So `queued` is a mark on a message somebody else already has —
+which is also why "take it back" is not available, and why TODO #132 now says
+so rather than asking for it. There is no per-prompt cancel in ACP, and
+`session/cancel` settles the running turn and **every** queued one with it.
+
+**All three `started` fire at send time**, so that edge says nothing about when
+the agent reached a message. The adapter's own `activateTurn` promotes its
+queue head and notifies nobody — read in its source, and confirmed by the probe
+finding nothing at all between the second start and the first end. An end is
+the only readable edge there is.
+
+**And an end was unattributed, which is what made ends unusable.** Two of the
+three landed in the same millisecond. So `ChatUpdate.id` is now on a `turn` as
+well — the key of the message that prompted it, which only the daemon can say —
+and `conversation.ts` keeps `inflight`, the keys of the turns in flight in the
+order they started:
+
+```
+  head of inflight       the agent is working on this one
+  anything behind it     still waiting        ← the mark, and now only here
+  not in inflight        its turn is over, or a daemon too old to name them
+```
+
+Matched by name rather than by dropping the head, because nothing promises the
+adapter settles them in the order they were sent. An empty `inflight` falls back
+to the old rule, so an older daemon is no worse than it was.
+
+The same probe with the keys on shows exactly what the old rule was getting
+wrong, and it is three and a half seconds of a lie rather than a subtlety:
+
+```
+    21s  TURN  ended  probe-slow       end_turn
+    21s  TURN  ended  probe-queued-0   end_turn   ← same second as the one
+  24.4s  agent "orchard"                             above it
+  24.5s  TURN  ended  probe-queued-1   end_turn
+```
+
+Two ends in one second, and the second message is not answered until 24.4s.
+Clearing every mark on the first end reported it as sent while the agent had
+not started it.
+
+Checked by putting the old rule back, which fails
+`releases only the message the agent has reached, when two are waiting` — a
+test that needs two messages to fail at all, which is why one never caught it.
+
 ### Steering is a request of its own, and a capability
 
 All of the above is what a _second `session/prompt`_ does, and that was the
@@ -5187,6 +5285,32 @@ Three rules follow, each one a way to get it wrong:
   jsdiff telling the truth about what it was handed, and the wrong half is the
   question: a fragment has no end of file to be missing a newline at. An empty
   side stays empty, or a `Write` gains a line to delete that never existed.
+
+**And a chat's patch needed the render version the diff panel already had.**
+Reported as the same sentence — `DiffHunksRenderer.processDiffResult:
+deletionLine and additionLine are null` — and the cause is the one `patch.ts`
+records for the panel, in the one place that had not been fixed. A tool call's
+patch is _replaced_: the adapter's guess when the call is made, the SDK's real
+`structuredPatch` when it has run, on the same tool id. `Patch` in `Fence.tsx`
+built its item as `patch-0` with no `version`, so the renderer reused the AST it
+highlighted for the first patch and indexed it with hunks parsed from the
+second.
+
+It read as intermittent because it needs the patch to be replaced while the row
+stays mounted, which is what an edit that _succeeds_ does — so the failure was
+on the ordinary path rather than an exotic one. `contentOf(fileDiff)` on both
+the `cacheKey` and the `version`, which is what `Diff.tsx` already does.
+
+Two smaller things came with it. A file that parses and carries no line on
+either side is dropped rather than drawn: there is no row the renderer can make
+from one, and what it does about that is throw. And "did not parse" is now a
+different answer from "parsed to nothing" — the first is still shown as the
+text somebody wrote, because a model's fence often is not really a patch; the
+second is shown as nothing at all.
+
+Worth knowing while reading the log: the library `console.error`s **and then**
+throws, so an error boundary catching it leaves the sentence in the console
+anyway. A caught throw is not a quiet one.
 
 **And the fold had to stop swallowing it.** `grouped` rolls a run of
 consecutive calls into one block that draws its tail and counts the rest — so

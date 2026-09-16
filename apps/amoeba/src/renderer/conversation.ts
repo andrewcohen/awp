@@ -213,6 +213,31 @@ export interface Conversation {
    * that turn ends whatever the adapter last said about it.
    */
   readonly turn: number;
+  /**
+   * The turns in flight, by the key of the message that caused each, oldest
+   * first.
+   *
+   * ── what `queued` could not say without it ──────────────────────────────
+   *
+   * A message typed while the agent is working is a plain `session/prompt`,
+   * so the adapter holds it at priority `next` and the panel marks it
+   * `queued`. Clearing that mark used to be "any turn ended, so clear every
+   * one of them", under a comment claiming the turn that ended is the one it
+   * was waiting behind. With one message queued that is true by accident.
+   * With two it is wrong for the second, which reads as sent while it is
+   * still waiting — and the mark exists to say exactly that one thing.
+   *
+   * Nothing in ACP marks a dequeue: the adapter's `activateTurn` promotes its
+   * queue head and notifies nobody, and the `turn started` here is the
+   * daemon's own, emitted when it *sends*. So the only readable edge is a
+   * turn's end, and the only thing that makes ends usable is knowing whose
+   * they are — which is why the key is on the wire.
+   *
+   * The head is the message the agent is working on now; anything behind it
+   * is still waiting. Order comes off the stream rather than from a counter
+   * taken at send time, which is what keeps it free of a race with the reply.
+   */
+  readonly inflight: ReadonlyArray<string>;
   /** Why the last turn ended, when it ended for a reason worth saying. */
   readonly stopped: string | undefined;
   /**
@@ -249,6 +274,7 @@ export interface Conversation {
 
 export const nothing: Conversation = {
   items: [],
+  inflight: [],
   running: 0,
   turn: 0,
   stopped: undefined,
@@ -257,6 +283,28 @@ export const nothing: Conversation = {
   size: undefined,
   commands: [],
 };
+
+/**
+ * The items, with every message the agent has reached no longer marked queued.
+ *
+ * A message is still waiting only while another turn sits in front of its own.
+ * Two readings clear the mark and they are different facts:
+ *
+ *   its key is the HEAD of `inflight`   the agent is working on it now
+ *   its key is not in `inflight`        its turn is over, or never started
+ *
+ * The second covers the replayed case and the daemon-too-old case at once —
+ * an empty `inflight` releases everything, which is the rule this replaced.
+ */
+const released = (
+  items: ReadonlyArray<Item>,
+  inflight: ReadonlyArray<string>,
+): ReadonlyArray<Item> =>
+  items.map((item) =>
+    item.kind === "said" && item.queued && !inflight.slice(1).includes(item.key)
+      ? { ...item, queued: false }
+      : item,
+  );
 
 /** Where the trailing run of queued messages starts, or the end of the list. */
 const tail = (items: ReadonlyArray<Item>): number => {
@@ -292,18 +340,30 @@ export const fold = (state: Conversation, update: ChatUpdate): Conversation => {
   // in the middle of a turn says so.
   if (update.kind === "turn") {
     if (update.status === "started") {
-      return { ...state, running: state.running + 1, turn: state.turn + 1, stopped: undefined };
+      return {
+        ...state,
+        running: state.running + 1,
+        turn: state.turn + 1,
+        // Appended, so the list is in the order the turns were sent. An
+        // update from a daemon too old to name its turns adds nothing, which
+        // leaves the list empty and `released` falling back to the old rule.
+        inflight: update.id === undefined ? state.inflight : [...state.inflight, update.id],
+        stopped: undefined,
+      };
     }
     const left = Math.max(0, state.running - 1);
+    // By name where there is one. Dropping the head instead would be the FIFO
+    // assumption doing work the wire can do exactly, and it is wrong the first
+    // time a steer settles out of order.
+    const inflight =
+      update.id === undefined
+        ? state.inflight.slice(1)
+        : state.inflight.filter((one) => one !== update.id);
     return {
       ...state,
       running: left,
-      // A queued message stops being queued when a turn ends, because the turn
-      // that ended is the one it was waiting behind. From here on it is the
-      // current subject and the answer comes after it.
-      items: state.items.map((item) =>
-        item.kind === "said" && item.queued ? { ...item, queued: false } : item,
-      ),
+      inflight,
+      items: released(state.items, inflight),
       // `end_turn` is the ordinary ending and says nothing worth a line.
       // Anything else — refused, cancelled, out of tokens — is the reason a
       // reply stopped where it did, and is the one case somebody needs told.
@@ -550,7 +610,18 @@ export const mine = (state: Conversation, text: string, key: string): Conversati
 export const waiting = (state: Conversation, key: string): Conversation => ({
   ...state,
   items: state.items.map((item) =>
-    item.kind === "said" && item.key === key ? { ...item, queued: true } : item,
+    // Refused only when this window positively knows better. `send` resolves
+    // after the daemon has emitted this turn's `started`, so the turn it was
+    // waiting behind may already have ended — and marking a message the agent
+    // is reading *now* is the one thing the mark must not say.
+    //
+    // Refused on that reading alone, rather than on the reverse: an empty
+    // `inflight` is a daemon too old to name its turns, and there the caller's
+    // own `working` is the best there is. Getting that backwards would drop
+    // the mark entirely against an older daemon.
+    item.kind === "said" && item.key === key && state.inflight[0] !== key
+      ? { ...item, queued: true }
+      : item,
   ),
 });
 

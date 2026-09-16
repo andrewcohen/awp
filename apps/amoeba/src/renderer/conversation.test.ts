@@ -23,6 +23,10 @@ const said = (role: "user" | "agent" | "thought", text: string): ChatUpdate => (
   text,
 });
 
+/** Every user message's queued mark, in order. */
+const marks = (state: Conversation) =>
+  state.items.filter((item) => item.kind === "said").map((item) => item.queued);
+
 describe("fold", () => {
   it("joins chunks from the same speaker into one message", () => {
     // A model answers in fragments and each is its own update. A row per
@@ -363,6 +367,63 @@ describe("a steer", () => {
       "user",
       "agent",
     ]);
+  });
+
+  it("releases only the message the agent has reached, when two are waiting", () => {
+    // The bug this file's `inflight` exists for, and it needs two messages to
+    // show at all. Measured against a real adapter — `bun run probe:steer`,
+    // the second scenario — two ordinary sends behind one slow turn:
+    //
+    //   send answered   prompt in 1ms · prompt in 0ms
+    //   turns           started → started → started → ended → ended → ended
+    //   a dequeue edge  NONE
+    //
+    // The three starts all fire at send time, two of the ends land in the same
+    // millisecond, and nothing on the stream says which turn either belongs
+    // to. So the old rule — any end clears every queued message — reported
+    // both as sent the moment the slow turn finished, while the second was
+    // still waiting behind the first.
+    const slow = fold(nothing, { kind: "turn", status: "started", id: "slow" });
+    const two = waiting(
+      waiting(
+        fold(
+          fold(mine(mine(slow, "lantern", "mine-1"), "orchard", "mine-2"), {
+            kind: "turn",
+            status: "started",
+            id: "mine-1",
+          }),
+          { kind: "turn", status: "started", id: "mine-2" },
+        ),
+        "mine-1",
+      ),
+      "mine-2",
+    );
+    expect(marks(two)).toEqual([true, true]);
+
+    // The slow turn ends. Only the message now at the head is released.
+    const first = fold(two, { kind: "turn", status: "ended", stopReason: "end_turn", id: "slow" });
+    expect(marks(first)).toEqual([false, true]);
+
+    // And the second only once its own predecessor is gone.
+    const second = fold(first, {
+      kind: "turn",
+      status: "ended",
+      stopReason: "end_turn",
+      id: "mine-1",
+    });
+    expect(marks(second)).toEqual([false, false]);
+  });
+
+  it("matches an end by name, so turns settling out of order still resolve", () => {
+    // Two of the three ends arrived in the same millisecond in the probe, and
+    // nothing guarantees the adapter settles them in the order they were sent.
+    // Dropping the head would release the wrong message.
+    const state = [
+      { kind: "turn", status: "started", id: "a" },
+      { kind: "turn", status: "started", id: "b" },
+    ].reduce((one, update) => fold(one, update as never), nothing);
+    const ended = fold(state, { kind: "turn", status: "ended", id: "b" } as never);
+    expect(ended.inflight).toEqual(["a"]);
   });
 
   it("keeps a tool call and a question above it too", () => {

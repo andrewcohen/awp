@@ -602,38 +602,6 @@ Two things to settle:
     a workspace  with no link, and one linked after the fact — the row has to
                  fall back to the workspace name rather than showing nothing
 
-## 105. The degraded-inbox sentence names a number nobody asked for
-
-Reported from a real window:
-
-    GitHub would not compute mergeStateStatus for 100 pull requests here,
-    so conflicts and behind-base are unknown
-
-**100 is `LIMIT`, not a count.** It is the ceiling the query asks for, so the
-sentence says "100 pull requests" for a repository with twelve open ones. The
-number is the only concrete thing in the sentence and it is the one part that
-is not a fact about this repository.
-
-The first guess was that closed pull requests were being included and inflating
-the query. They are not — `github-cli.ts` already passes `--state open`, with a
-comment explaining why. So the mechanism is right and only the sentence is
-wrong.
-
-    now     "…for 100 pull requests here"      a constant, read as a count
-    after   "…for this repository's open pull requests"
-
-The real count is not available at the point the message is composed: the whole
-query failed, so nothing came back to count. The cheap repair is to stop naming
-a number. The fuller one is to compose the sentence after the cheap listing has
-succeeded, where `raws.length` is in hand and can be stated truthfully.
-
-Also worth reconsidering while in there: `mergeStateStatus` is the field that
-fails, and it fails as a function of repository size rather than of anything a
-person did — so a repository that degrades once will degrade every time. Asking
-for the full field set on every refresh spends a failed multi-second query to
-learn something already known. Remembering the degradation per repository, and
-retrying it occasionally rather than always, is the same shape as the pr cache.
-
 ## 107. Reorder threads in the sidebar
 
 Threads sort by whatever the daemon returns. A person should be able to put them in the order they think about them, and have it stay that way.
@@ -1137,35 +1105,54 @@ Open: whether the TUI keeps a diff at all — reading a patch is arguably a
 pop-in-and-out act — and whether "leave" should mean detach rather than
 quit, which is a zmx question and not a UI one.
 
-## 132. Up pops the queued message back into the composer
+## 132. Take a queued message back — and what a real adapter says about that
 
-A message typed while an agent is working is queued rather than sent — it sits at the tail of the transcript with a `queued` mark, and the turn ending is what releases it. Until then it is a thing somebody wrote and cannot touch: no edit, no cancel, no way to add the sentence they thought of two seconds later.
-
-Up in an empty composer should take it back — the draft returns to the box, the queued item leaves the transcript, and the next Return re-queues it. The shape every shell has for the last command, and the reason it is Up rather than a button is that the gesture has to be cheaper than retyping or nobody uses it.
-
-Two things to decide:
-
-- **What "empty" means.** Up with something already typed should move the caret, which is what the key does in a textarea. So the pop is Up on an empty box, or Up on the first line — the second is friendlier and needs the caret's row, not just the value.
-- **Whether it can be popped after it has gone.** Once the turn ends, the message is sent and this is no longer a queue — it is history, and popping it would mean un-sending something the agent already has. So the gesture stops working the moment the mark clears, which is also the moment the row stops looking queued.
-
-Related: [[does anything say a queued message was dequeued]] (#133) — the same mark, and the same question about who knows what.
-
-## 133. Does anything say a queued message was actually dequeued
-
-Asked directly, and the answer is that the window **assumes**. `conversation.ts` clears the `queued` mark when a turn ends, under a comment saying the turn that ended is the one it was waiting behind — which is a guess about the adapter's queue rather than a reading of it.
+**Measured before building, and the premise did not survive it.** `bun run
+probe:steer` now drives two ordinary sends behind one slow turn, and the first
+line is the whole finding:
 
 ```
-  what the daemon knows    a turn started · a turn ended
-  what it does NOT know    that the adapter took THIS message off its queue
+  send answered   prompt in 1ms · prompt in 0ms
+  turns           started → started → started → ended → ended → ended
 ```
 
-The adapter's queue is a rank — `now` pre-empts, `next` is the head, `later` is background traffic — and an ordinary message is built at `next`. So "the next turn is mine" holds when one message is queued and is a guess when two are, or when something else was enqueued at the same rank in between.
+A message typed mid-turn is **not** held by this window or by the daemon. It
+goes as a plain `session/prompt` the moment Return is pressed, and the
+_adapter_ queues it at priority `next` — which is exactly the design
+`ChatSend.interrupt` argues for, because the adapter's own comment says the
+check and the push "stay in one synchronous section so the turn cannot settle
+in the gap". `queued` is a mark on a message somebody else already has.
 
-What that costs today is small and real: a mark that says `queued` clears on a turn that was not the one it was waiting behind, so the message reads as sent while it is still waiting. Nothing is lost — it does go — but the one thing the mark exists to say is the thing it is wrong about.
+So "the draft returns to the box, the queued item leaves the transcript" cannot
+be honoured. There is no selective retract:
 
-Worth checking against a real adapter before building anything: whether `session/prompt` for a queued message produces its own `turn started` when it is finally taken, which would make the edge readable rather than assumed. `probe:steer` already drives two overlapping turns and is where that measurement goes.
+```
+  session/cancel        settles EVERY queued turn as cancelled — and the
+                        running one with them. Read in the adapter's source:
+                        `for (const queued of session.turnQueue)`
+  a per-prompt cancel    does not exist in ACP
+```
 
-Related: [[up pops the queued message back into the composer]] (#132).
+Popping the row back would empty the box, remove the row, and leave the agent
+answering it a minute later — a gesture that reports success and is undone by
+the thing it was meant to undo. That is worse than not having it.
+
+What is still worth having, and none of these is this task:
+
+- **Up recalls the last message you sent, for editing.** The shell idiom, and
+  it is true whatever the adapter is doing: it does not claim to un-send, it
+  offers the text again. Costs one keypress and a `lastSent` on the panel.
+- **Cancel and re-send.** `session/cancel` settles everything, so the queued
+  one can be put back and the rest re-sent. Honest, and it throws away the
+  answer in flight — which is the thing somebody typing a correction is
+  usually reading.
+- **Hold it here instead**, so it really is retractable — and that is a
+  deliberate _reversal_ of the current design, not an addition to it. It puts
+  the settle-in-the-gap race back on this side, which is the one thing
+  `idleBehavior: "promptRequired"` exists to avoid. It needs an argument this
+  task does not make.
+
+Related: #133, which is what came out of the same measurement and is done.
 
 ## 134. A thread on a project's default checkout
 

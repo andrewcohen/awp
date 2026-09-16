@@ -609,8 +609,26 @@ function Title({
   // is the same rule the sidebar's row already states — where a row stands in
   // for its whole thread the title wins outright, and where it is one of
   // several the title is somewhere else on screen and the row says which
-  // *workspace* it is. `displayName` still wins over both: it is the one name
-  // a person chose by hand.
+  // *workspace* it is.
+  //
+  // ── and it wins over `displayName` too, which this bar had backwards ─────
+  //
+  // That fix landed with `displayName` still in front of it, under a comment
+  // calling it "the one name a person chose by hand". It is not. It is the Go
+  // implementation's `~/.awp/workspace-state.json`, written by hooks, and it
+  // is *frozen* in exactly the way `identity.label` is — so renaming a thread
+  // still left this bar saying the old name, which is the whole fault the
+  // paragraph above sets out to repair, half repaired. Read off this machine:
+  //
+  //   thread title   amoeba                                   ← renameable
+  //   displayName    experimental rewrite from a clean slate  ← what was drawn
+  //
+  // The sidebar has always had the order right, and says why: the title is
+  // the only one of these that is neither shortened, sanitized nor
+  // second-hand. `Sidebar.tsx` and this now agree, which matters more than
+  // either ranking on its own — the two strips name the same thing, and a
+  // window whose header and whose selected row disagree gives a person no
+  // reading that says which is true.
   const alone = thread !== undefined && thread.members.length === 1;
   const threadName = alone && thread.title !== "" ? thread.title : undefined;
 
@@ -638,7 +656,7 @@ function Title({
     ) : (
       <span {...stylex.props(styles.named)}>
         <span {...stylex.props(styles.where)}>{at.project}/</span>
-        {named(facts?.displayName ?? threadName ?? at.workspace)}
+        {named(threadName ?? facts?.displayName ?? at.workspace)}
       </span>
     );
   }
@@ -648,13 +666,13 @@ function Title({
     return <span {...stylex.props(styles.where, styles.title)}>{session.name}</span>;
   }
 
-  // The best name there is, in the order they are worth: what a person called
-  // it, what the model called it, and the directory as the name of last
-  // resort. The slug is a fallback rather than a field — a workspace whose
-  // display name is its slug says the slug once, not twice.
+  // The best name there is, in the order they are worth: the live title of
+  // the work, then the two frozen copies of it, then the directory as the
+  // name of last resort. The slug is a fallback rather than a field — a
+  // workspace whose display name is its slug says the slug once, not twice.
   const title =
-    facts?.displayName ??
     threadName ??
+    facts?.displayName ??
     session.identity?.label ??
     session.identity?.workspace ??
     session.name;

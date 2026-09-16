@@ -1889,6 +1889,19 @@ export const ChatUpdate = Schema.Struct({
    * field of its own because it is asking for the same thing the other two
    * are: the name of the row, and therefore what makes applying an update
    * twice a no-op.
+   *
+   * ── and a `turn` carries the key of the message that caused it ──────────
+   *
+   * Which is the same question again: *which row is this about*. A turn is
+   * the daemon's own bracket around one `session/prompt`, so the message
+   * that prompted it is the row it belongs to.
+   *
+   * It is on the wire because nothing else can put it there. A window can see
+   * that turns started and ended; it cannot see **whose**, and with two
+   * messages behind one slow answer that is the whole question — the first
+   * end belongs to the turn they are both waiting behind, and a client
+   * without the key has to guess that it released both. See `queued` in
+   * `conversation.ts`, which used to guess exactly that.
    */
   id: Schema.optional(Schema.String),
   title: Schema.optional(Schema.String),
