@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { PullRequest, Viewer } from "./github-parse";
-import { bucketOf, inboxItems, reviewKey, reviewNumber, reviewOf, reviewWorkspace } from "./inbox";
+import {
+  bucketOf,
+  reviewQueueItems,
+  reviewKey,
+  reviewNumber,
+  reviewOf,
+  reviewWorkspace,
+} from "./review-queue";
 
 // The precedence, pinned. Every clause of `bucketOf` is a decision somebody
 // could reasonably make the other way, and none of them is visible by looking
@@ -109,7 +116,7 @@ describe("the key a review's job is enqueued under", () => {
 
 describe("the order rows come out in", () => {
   it("sections first, then a re-review ahead of a first request", () => {
-    const items = inboxItems(
+    const items = reviewQueueItems(
       [
         {
           project: "thicket",
@@ -131,7 +138,7 @@ describe("the order rows come out in", () => {
   });
 
   it("a stack stays together, root first, under one heading", () => {
-    const items = inboxItems(
+    const items = reviewQueueItems(
       [
         {
           project: "thicket",
@@ -160,7 +167,7 @@ describe("the order rows come out in", () => {
   });
 
   it("a PR on an ancestor that cannot merge is blocked", () => {
-    const items = inboxItems(
+    const items = reviewQueueItems(
       [
         {
           project: "thicket",
@@ -188,7 +195,7 @@ describe("the order rows come out in", () => {
     // Cannot happen on GitHub — a branch has one PR — but a listing is a
     // hundred rows read out of a repository that is being pushed to. A walk
     // that trusted the data to be a tree would not return.
-    const items = inboxItems(
+    const items = reviewQueueItems(
       [
         {
           project: "thicket",
@@ -206,7 +213,7 @@ describe("the order rows come out in", () => {
   });
 
   it("a row says which workspace is already reviewing it", () => {
-    const items = inboxItems(
+    const items = reviewQueueItems(
       [{ project: "thicket", repo: "/repos/thicket", prs: [pr({ number: 4 })] }],
       me,
       (project, number) =>

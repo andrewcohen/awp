@@ -323,7 +323,7 @@ describe("withProcesses", () => {
     // whether the last thing `zmx run` typed in has finished — and the bug was
     // reading it as a statement about the session.
     const line =
-      "  name=awp.awp.review-inbox.agent\tpid=357\tclients=1\tstart_dir=/w\t" +
+      "  name=awp.awp.review-reviewQueue.agent\tpid=357\tclients=1\tstart_dir=/w\t" +
       "ended=2\texit_code=1\tawp_kind=agent";
     const parsed = parseSessionLine(line);
     const [seen] = withProcesses([parsed as Session], TABLE);

@@ -2,7 +2,7 @@
 //
 // Every review workspace made before `thread_prs` existed says which PR it is
 // about only in its own name — `pr-2418`, or the Go implementation's
-// `pr-<n>-<branch>`. The inbox still finds those by parsing the name, so
+// `pr-<n>-<branch>`. The reviewQueue still finds those by parsing the name, so
 // nothing is broken; what is missing is the *record*, and a record half of the
 // data has is worse than one none of it has.
 //
@@ -13,7 +13,7 @@
 
 import { Effect } from "effect";
 import * as client from "@awp-kit/protocol/client";
-import { reviewNumber } from "../inbox";
+import { reviewNumber } from "../review-queue";
 
 const url = process.argv[2] ?? client.DEFAULT_DAEMON_URL;
 

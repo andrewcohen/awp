@@ -565,7 +565,7 @@ export const Composer = ({
               {/* ── the window's two are marked, not the agent's dozens ────
                   An agent on a real machine advertises twenty commands and
                   the window has two, so marking the majority is marking the
-                  baseline — the same arithmetic as the inbox's leading icon
+                  baseline — the same arithmetic as the reviewQueue's leading icon
                   and the accent's four sites. What a person needs to know
                   here is which rows do NOT reach their agent. */}
               {command.mine && <span {...stylex.props(typeset.label, styles.slashMine)}>awp</span>}

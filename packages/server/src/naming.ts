@@ -128,7 +128,7 @@ const MAX_LABEL = 48;
  * That is the right distinction and the wrong conclusion: zmx validates every
  * value it is given, whatever the value means to awp.
  *
- *   zmx set <name> awp_label=Review: Inbox UI
+ *   zmx set <name> awp_label=Review: ReviewQueue UI
  *   error: key-value kvs can only contain [a-z, A-Z, 0-9, -_.] characters:
  *          value=[Review:]
  *
@@ -159,14 +159,14 @@ const MAX_LABEL = 48;
  * So the two names are deliberately different things, and the split is the
  * point rather than a compromise:
  *
- *   threads.title   `Review: Inbox UI`   what a person called the work, exact,
+ *   threads.title   `Review: ReviewQueue UI`   what a person called the work, exact,
  *                                        durable, and what the window shows
- *   awp_label       `Review-Inbox-UI`    terse, legal, and short enough to
+ *   awp_label       `Review-ReviewQueue-UI`    terse, legal, and short enough to
  *                                        read in a column of `zmx ls`
  *
  * A run of illegal characters becomes a single `-` rather than one each, so a
- * sentence reads as words: `Review: Inbox UI` → `Review-Inbox-UI`, not
- * `Review--Inbox-UI`. Leading and trailing separators are trimmed, so nothing
+ * sentence reads as words: `Review: ReviewQueue UI` → `Review-ReviewQueue-UI`, not
+ * `Review--ReviewQueue-UI`. Leading and trailing separators are trimmed, so nothing
  * comes back looking like it was cut off mid-word when it was not.
  *
  * Answers the empty string when there is nothing legal left, which is what

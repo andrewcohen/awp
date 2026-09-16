@@ -1,10 +1,10 @@
-import type { Inbox } from "@awp-kit/protocol";
+import type { ReviewQueue } from "@awp-kit/protocol";
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { useEffect } from "react";
-import { inboxAtom, inboxFailureAtom, inboxReadingAtom } from "./atoms";
-import { listInbox, onReconnect, said } from "./daemon";
+import { reviewQueueAtom, reviewQueueFailureAtom, reviewQueueReadingAtom } from "./atoms";
+import { listReviewQueue, onReconnect, said } from "./daemon";
 
-// The inbox, held where a tab switch cannot destroy it.
+// The reviewQueue, held where a tab switch cannot destroy it.
 //
 // The fetching is unchanged — a call, not a subscription, because a pull request
 // changes on somebody else's machine and there is nothing here to subscribe to.
@@ -24,12 +24,12 @@ import { listInbox, onReconnect, said } from "./daemon";
 // socket round trip and finishes out of order. The flag is module scope for the
 // same reason the atoms are: it has to outlive the component that set it.
 
-export interface UseInbox {
-  /** Absent until the first answer, which is not the same as an empty inbox. */
-  readonly inbox: Inbox | undefined;
+export interface UseReviewQueue {
+  /** Absent until the first answer, which is not the same as an empty reviewQueue. */
+  readonly reviewQueue: ReviewQueue | undefined;
   /** True while a read is in flight — including one over rows already shown. */
   readonly reading: boolean;
-  /** The whole call failed — the daemon, not a project. See `Inbox.sources`. */
+  /** The whole call failed — the daemon, not a project. See `ReviewQueue.sources`. */
   readonly failure: string | undefined;
   /** Ask again. `refresh` goes past the daemon's cache to GitHub. */
   readonly reload: (refresh?: boolean) => void;
@@ -47,7 +47,7 @@ let inFlight = false;
 const load = (
   refresh: boolean,
   set: {
-    readonly inbox: (found: Inbox) => void;
+    readonly reviewQueue: (found: ReviewQueue) => void;
     readonly reading: (busy: boolean) => void;
     readonly failure: (reason: string | undefined) => void;
   },
@@ -57,9 +57,9 @@ const load = (
   }
   inFlight = true;
   set.reading(true);
-  listInbox(refresh)
+  listReviewQueue(refresh)
     .then((found) => {
-      set.inbox(found);
+      set.reviewQueue(found);
       set.failure(undefined);
     })
     .catch((error: unknown) => {
@@ -71,14 +71,14 @@ const load = (
     });
 };
 
-export function useInbox(): UseInbox {
-  const inbox = useAtomValue(inboxAtom);
-  const reading = useAtomValue(inboxReadingAtom);
-  const failure = useAtomValue(inboxFailureAtom);
+export function useReviewQueue(): UseReviewQueue {
+  const reviewQueue = useAtomValue(reviewQueueAtom);
+  const reading = useAtomValue(reviewQueueReadingAtom);
+  const failure = useAtomValue(reviewQueueFailureAtom);
   const set = {
-    inbox: useAtomSet(inboxAtom),
-    reading: useAtomSet(inboxReadingAtom),
-    failure: useAtomSet(inboxFailureAtom),
+    reviewQueue: useAtomSet(reviewQueueAtom),
+    reading: useAtomSet(reviewQueueReadingAtom),
+    failure: useAtomSet(reviewQueueFailureAtom),
   };
 
   useEffect(() => {
@@ -95,5 +95,5 @@ export function useInbox(): UseInbox {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  return { inbox, reading, failure, reload: (refresh = false) => load(refresh, set) };
+  return { reviewQueue, reading, failure, reload: (refresh = false) => load(refresh, set) };
 }

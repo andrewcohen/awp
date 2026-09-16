@@ -6,7 +6,7 @@ import {
   type AgentTask,
   AttachRefused,
   AwpRpcs,
-  type Inbox,
+  type ReviewQueue,
   type Patch,
   type Project,
   type ReviewComment,
@@ -201,7 +201,7 @@ const task: AgentTask = {
   status: "pending",
 };
 
-const inbox: Inbox = {
+const reviewQueue: ReviewQueue = {
   items: [
     {
       project: "thicket",
@@ -329,7 +329,7 @@ const handlers = AwpRpcs.toLayer({
   WorkspaceCreate: () => Effect.succeed(job),
   ThreadBases: () => Effect.succeed([{ revset: "trunk()", label: "trunk", workspace: undefined }]),
   ThreadStart: () => Effect.succeed({ thread, job }),
-  InboxList: () => Effect.succeed(inbox),
+  ReviewQueueList: () => Effect.succeed(reviewQueue),
   PullRequestView: () =>
     Effect.succeed({
       project: "thicket",

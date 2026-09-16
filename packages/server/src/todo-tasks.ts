@@ -155,7 +155,7 @@ export const candidates = (root: string, project: string, home: string): Readonl
  * true.
  *
  * A project with none is not a failure and says nothing. Most repositories on
- * a real machine keep no such file, and the inbox's rule applies: a sentence
+ * a real machine keep no such file, and the reviewQueue's rule applies: a sentence
  * that is true and unactionable for every project trains a person to stop
  * reading them.
  */

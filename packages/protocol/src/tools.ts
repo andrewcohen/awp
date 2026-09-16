@@ -128,7 +128,7 @@ export const toolTitleOf = (
  *
  * ── a label on the majority is a label on the baseline ──────────────────
  *
- * The same arithmetic as the accent and as the inbox's leading icon: most of
+ * The same arithmetic as the accent and as the reviewQueue's leading icon: most of
  * what an agent does in a terminal is `Bash`, so a column that says `bash`
  * on every other row has spent its left edge on the thing nobody is scanning
  * for. What is worth a word is the row that is *not* a command.

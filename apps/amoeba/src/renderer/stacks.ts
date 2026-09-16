@@ -1,4 +1,4 @@
-import type { InboxItem } from "@awp-kit/protocol";
+import type { ReviewQueueItem } from "@awp-kit/protocol";
 
 // Drawing a stack of pull requests as a tree.
 //
@@ -20,7 +20,7 @@ import type { InboxItem } from "@awp-kit/protocol";
  * a picture it cannot see the end of.
  *
  * The rows arrive in pre-order within a stack: a root, then its descendants,
- * depth increasing. That is the daemon's ordering guarantee — see `inboxItems` —
+ * depth increasing. That is the daemon's ordering guarantee — see `reviewQueueItems` —
  * and this is the standard reading of such a list:
  *
  *   for each level above mine   `│ ` if the level continues below me, else two
@@ -38,7 +38,7 @@ import type { InboxItem } from "@awp-kit/protocol";
  * at a parent that is not on screen. A lone pull request has no `stack` at all —
  * see the field — so it never reaches this.
  */
-export const guide = (rows: ReadonlyArray<InboxItem>, index: number): string => {
+export const guide = (rows: ReadonlyArray<ReviewQueueItem>, index: number): string => {
   const row = rows[index];
   if (row?.stack === undefined || row.depth === 0) {
     return "";

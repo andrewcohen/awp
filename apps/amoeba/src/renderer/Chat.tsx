@@ -365,7 +365,7 @@ const Panel = ({
     //
     // This was asked *once*, when the panel opened, and it was the only read
     // in the renderer that was: `useThreads`, `useProjects`, `useSessions`,
-    // `useJobs`, `useInbox`, `usePullRequest` and `Tasks` all take
+    // `useJobs`, `useReviewQueue`, `usePullRequest` and `Tasks` all take
     // `onReconnect`. The rule this repo states twice already is that **a
     // subscription answers what changes and a question answers what is**, so
     // anything that resubscribes has to ask again as well.

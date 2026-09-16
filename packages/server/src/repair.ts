@@ -78,7 +78,7 @@ interface Issue {
  * Whether this pull request looks like your own work.
  *
  * By the head branch and the configured prefix, which is the same question the
- * inbox's link inference asks. An unset prefix answers true: with nothing to
+ * reviewQueue's link inference asks. An unset prefix answers true: with nothing to
  * compare against, the honest default is that this is your branch, because the
  * cost of being wrong that way is a prompt that offers to fix rather than one
  * that quietly declines to.

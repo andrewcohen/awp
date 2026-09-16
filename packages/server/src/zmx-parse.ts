@@ -149,7 +149,7 @@ export const parseSessionLine = (line: string): Session | undefined => {
       // whose `startDir` is empty, so *no project was ever derived from a
       // running session* — measured on 2026-09-15, with four labelled
       // `thicket` sessions live and `thicket` absent from the project list.
-      // Tasks and the inbox both read that list, so both quietly narrowed to
+      // Tasks and the reviewQueue both read that list, so both quietly narrowed to
       // whatever had been imported by hand.
       //
       // Both are accepted, because a parser that knows one spelling has now

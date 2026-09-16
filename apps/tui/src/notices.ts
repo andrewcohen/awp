@@ -10,7 +10,7 @@
 // The copy happens in `clipboard.ts`, off a renderer event, outside React
 // entirely. So the announcement cannot start life as component state: what is
 // wanted is a value *plus* a subscription, which is the same argument the
-// window's `atoms.ts` makes for the inbox.
+// window's `atoms.ts` makes for the reviewQueue.
 //
 // `notices.ts` and not `toast.ts`, because `Toast.tsx` is beside it and this
 // filesystem is case-insensitive: the two would be one module, the import

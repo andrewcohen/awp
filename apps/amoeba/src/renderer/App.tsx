@@ -8,7 +8,7 @@ import { Boundary } from "./Boundary";
 import { AppearanceToggle } from "./Appearance";
 import { AgentBar, TopBar } from "./Bars";
 import { Divider } from "./Divider";
-import { InboxDialog } from "./InboxDialog";
+import { ReviewQueueDialog } from "./ReviewQueueDialog";
 import { LeftColumn } from "./LeftColumn";
 import { NewThread } from "./NewThread";
 import { Chat } from "./Chat";
@@ -533,11 +533,11 @@ function Window() {
   // deliberately — see `newThreadAtom`.
   const newThread = useAtomValue(newThreadAtom);
   const setNewThread = useAtomSet(newThreadAtom);
-  // The inbox, which is a modal rather than a panel — see `InboxDialog`. Held
+  // The reviewQueue, which is a modal rather than a panel — see `ReviewQueueDialog`. Held
   // here and not in the left column: that column folds to nothing and goes
   // `inert` with it, so an overlay it owned would be unreachable exactly when
   // somebody had put the sidebar away.
-  const [inbox, setInbox] = useState(false);
+  const [reviewQueue, setReviewQueue] = useState(false);
 
   // ── why a job finishing re-reads the sessions ────────────────────────────
   //
@@ -627,6 +627,11 @@ function Window() {
   // consumes, and a shortcut is the physical key. `preventDefault` because
   // Chromium would otherwise open the print dialog, which is the one thing in
   // this window nobody wants.
+  //
+  // Shift is deliberately not read here, and cmd+shift+P is deliberately not
+  // claimed: it is the command-palette chord in every editor a person using
+  // this has open, and taking it for a list of pull requests would spend it on
+  // the wrong thing. See the pull requests chord below, which tried it first.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.code !== "KeyP" || !(event.metaKey || event.ctrlKey) || event.altKey) {
@@ -641,22 +646,36 @@ function Window() {
     return () => window.removeEventListener("keydown", onKey, { capture: true });
   }, []);
 
-  // cmd+I: the inbox. Capture at `window` and `event.code`, for the two reasons
-  // cmd+N's note gives at length.
+  // cmd+shift+R: the pull requests.
+  //
+  // Neither initial was available. `P` is the switcher and `cmd+shift+P` is
+  // reserved for an action palette; `cmd+R` is the menu's reload. So the
+  // letter is `R` for review, on the shift the menu does not claim — it names
+  // `CommandOrControl+R` and `CommandOrControl+Alt+R` and nothing else, and an
+  // accelerator matches an exact set of modifiers, so plain cmd+R still
+  // reloads. The only habit it crosses is a browser's hard reload, and this
+  // window has no such thing to offer.
+  //
+  // This was cmd+I while the list was called the reviewQueue. The letter named the
+  // list and names nothing now, so it went with the word.
   //
   // A chord as well as a menu item, because the menu item is in a column that
-  // folds — and `menu.ts` claims nothing on I, so nothing takes this key before
-  // the page sees it. Toggles rather than only opening, unlike cmd+N and cmd+P:
-  // those two hold something somebody is part way through typing and pressing
-  // them again means "make sure", where this holds a list and pressing it again
-  // means "put it away".
+  // folds. Toggles rather than only opening, unlike cmd+N and cmd+P: those two
+  // hold something somebody is part way through typing and pressing them again
+  // means "make sure", where this holds a list and pressing it again means
+  // "put it away".
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.code !== "KeyI" || !(event.metaKey || event.ctrlKey) || event.altKey) {
+      if (
+        event.code !== "KeyR" ||
+        !event.shiftKey ||
+        !(event.metaKey || event.ctrlKey) ||
+        event.altKey
+      ) {
         return;
       }
       event.preventDefault();
-      setInbox((was) => !was);
+      setReviewQueue((was) => !was);
     };
     window.addEventListener("keydown", onKey, { capture: true });
     return () => window.removeEventListener("keydown", onKey, { capture: true });
@@ -744,7 +763,7 @@ function Window() {
                 onSelect={(session) => {
                   void navigate({ to: pathOf(addressOf(session)) });
                 }}
-                // The address, not a session: an inbox row knows the
+                // The address, not a session: an reviewQueue row knows the
                 // `(project, workspace)` pair — which is what the daemon records
                 // — and not which of its sessions happens to be running. The
                 // address resolves that, and answers with nothing while a job is
@@ -762,7 +781,7 @@ function Window() {
                 // half and the `progress` effect above is what catches up.
                 onThreadsChanged={reloadSessions}
                 failure={failure}
-                onInbox={() => setInbox(true)}
+                onReviewQueue={() => setReviewQueue(true)}
                 onNew={() =>
                   setNewThread({
                     project: open?.identity?.project,
@@ -931,10 +950,10 @@ function Window() {
           is in — see the state above. The jobs are the ones this window already
           streams: `JobChanges` is a request, so a second listener would be a
           second feed over the same socket for the same records. */}
-      <InboxDialog
-        open={inbox}
+      <ReviewQueueDialog
+        open={reviewQueue}
         jobs={jobs}
-        onClose={() => setInbox(false)}
+        onClose={() => setReviewQueue(false)}
         onOpen={(project, workspace) => {
           void navigate({ to: pathOf({ at: "workspace", project, workspace, kind: PRIMARY }) });
         }}

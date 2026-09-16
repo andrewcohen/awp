@@ -44,7 +44,7 @@
     "probe:jobs-store": "bun packages/jobs/src/probe/sqlite-under-bun.ts",
     "probe:workspace": "bun packages/server/src/probe/workspace-create.ts",
     "probe:thread-parent": "bun packages/server/src/probe/thread-parent.ts",
-    "probe:inbox": "bun packages/server/src/probe/inbox.ts",
+    "probe:review-queue": "bun packages/server/src/probe/review-queue.ts",
     "probe:ask": "bun packages/server/src/probe/daemon-ask.ts",
     "probe:session-start": "bun packages/server/src/probe/session-start.ts",
     "probe:acp": "bun packages/server/src/probe/acp.ts",

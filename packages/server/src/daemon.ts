@@ -17,7 +17,10 @@ import { Bootstrap, layer as bootstrapLayer } from "./bootstrap";
 import { Chat, layer as chatLayer, migrations as chatMigrations } from "./chat";
 import { Github } from "./github";
 import * as githubCli from "./github-cli";
-import { layer as inboxLayer, migrations as inboxMigrations } from "./inbox-feed";
+import {
+  layer as reviewQueueLayer,
+  migrations as reviewQueueMigrations,
+} from "./review-queue-feed";
 import { archiveThread } from "./jobs/archive-thread";
 import { createWorkspace } from "./jobs/create-workspace";
 import { Jj } from "./jj";
@@ -130,7 +133,7 @@ export const db = Layer.orDie(
     ...threadMigrations,
     ...reviewMigrations,
     ...projectMigrations,
-    ...inboxMigrations,
+    ...reviewQueueMigrations,
     ...chatMigrations,
     ...taskMigrations,
     ...faceMigrations,
@@ -257,7 +260,7 @@ export const layer = RpcServer.layer(AwpRpcs).pipe(
   Layer.provide(tasks),
   Layer.provide(reviews),
   Layer.provide(projects),
-  Layer.provide(inboxLayer),
+  Layer.provide(reviewQueueLayer),
   Layer.provide(pagesLayer),
   Layer.provide(workspaceState.layer()),
   Layer.provide(db),

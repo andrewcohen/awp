@@ -1,4 +1,4 @@
-import type { InboxItem } from "@awp-kit/protocol";
+import type { ReviewQueueItem } from "@awp-kit/protocol";
 import { describe, expect, it } from "vitest";
 import { guide } from "./stacks";
 
@@ -7,11 +7,11 @@ import { guide } from "./stacks";
 // two is most stacks.
 
 /** Only the four fields the guides read. */
-const row = (number: number, depth: number, stack: string | undefined): InboxItem =>
-  ({ number, depth, stack, project: "thicket" }) as InboxItem;
+const row = (number: number, depth: number, stack: string | undefined): ReviewQueueItem =>
+  ({ number, depth, stack, project: "thicket" }) as ReviewQueueItem;
 
 /** The whole list, drawn — which is the only way to read a tree. */
-const drawn = (rows: ReadonlyArray<InboxItem>): ReadonlyArray<string> =>
+const drawn = (rows: ReadonlyArray<ReviewQueueItem>): ReadonlyArray<string> =>
   rows.map((one, at) => `${guide(rows, at)}#${one.number}`);
 
 describe("drawing a stack as a tree", () => {

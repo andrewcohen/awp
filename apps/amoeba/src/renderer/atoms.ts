@@ -1,4 +1,4 @@
-import type { Inbox, Page, PullRequest } from "@awp-kit/protocol";
+import type { ReviewQueue, Page, PullRequest } from "@awp-kit/protocol";
 import { Atom } from "effect/unstable/reactivity";
 import type { NewThreadRequest } from "./NewThread";
 import { rememberedPages } from "./remembered";
@@ -13,7 +13,7 @@ import { rememberedPages } from "./remembered";
 // prevent. This is that day, and the reason is Base UI: a hidden tab is
 // **unmounted**, so every panel's `useState` is destroyed by switching away from
 // it. For the diff that is a feature — it re-reads the patch on the way back.
-// For the inbox it is a list of forty-five pull requests, fetched over a socket,
+// For the reviewQueue it is a list of forty-five pull requests, fetched over a socket,
 // thrown away because somebody looked at the diff for a second.
 //
 // What that looked like: an empty panel with `reading…` in the corner, every
@@ -33,19 +33,19 @@ import { rememberedPages } from "./remembered";
 // runtime's worth of that decision here.
 
 /**
- * The last inbox the daemon answered with, or nothing before the first.
+ * The last reviewQueue the daemon answered with, or nothing before the first.
  *
  * Kept whole rather than as rows: the sources and the login are part of the
  * answer, and a panel showing rows from one read beside a `read at` from another
  * would be lying about both.
  */
-export const inboxAtom = Atom.make<Inbox | undefined>(undefined);
+export const reviewQueueAtom = Atom.make<ReviewQueue | undefined>(undefined);
 
 /** True while a read is in flight, so the panel can say so over the old rows. */
-export const inboxReadingAtom = Atom.make(false);
+export const reviewQueueReadingAtom = Atom.make(false);
 
 /** The daemon-level failure, when the whole call failed. Not a per-project one. */
-export const inboxFailureAtom = Atom.make<string | undefined>(undefined);
+export const reviewQueueFailureAtom = Atom.make<string | undefined>(undefined);
 
 /**
  * Pull requests the window has read, by `<project>#<number>`.
@@ -87,7 +87,7 @@ export const prKey = (project: string, number: number): string => `${project}#${
  *
  * ── an atom because the subscriber outlives the panel ─────────────────────
  *
- * The same argument as the inbox above, one step further. The inbox is an atom
+ * The same argument as the reviewQueue above, one step further. The reviewQueue is an atom
  * so a *fetch* that finishes after the panel unmounted is not wasted; this is
  * an atom because the thing that writes it — `PageChanges`, an agent asking for
  * a page — arrives at a window whose web panel is very probably not mounted at
@@ -125,7 +125,7 @@ export const pageAskedAtom = Atom.make<Page | undefined>(undefined);
  * The tasks panel is the first opener that is not. It sits inside `Accessory`,
  * behind a Base UI tab, and threading `onFanOut` down to it would put a prop
  * about a dialog through two components that have nothing to do with either.
- * Same shape as the inbox: the value plus a subscription, which is what an atom
+ * Same shape as the reviewQueue: the value plus a subscription, which is what an atom
  * is and what a `let` is not.
  *
  * Held here rather than in App's `useState` so there is **one** of it. An atom

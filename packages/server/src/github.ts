@@ -28,9 +28,9 @@ export type { PullRequest, PullRequestDetail, Remark, Viewer } from "./github-pa
  * `gh` could not answer, said in `gh`'s own words where there are any.
  *
  * A declared failure and not a defect, because every cause is ordinary: `gh` is
- * not installed, the token expired, the remote is not GitHub at all. The inbox
+ * not installed, the token expired, the remote is not GitHub at all. The reviewQueue
  * shows the sentence beside the project it belongs to and keeps the other
- * projects' rows — see `InboxSource` in the contract.
+ * projects' rows — see `ReviewQueueSource` in the contract.
  */
 export class GithubError extends Data.TaggedError("GithubError")<{
   readonly op: string;
@@ -99,7 +99,7 @@ export class Github extends Context.Service<
      * Whether this checkout has a remote on a host `gh` knows.
      *
      * Asked before the pull requests are, and it is the difference between a
-     * project the inbox has nothing to say about and one it failed on. A vault
+     * project the reviewQueue has nothing to say about and one it failed on. A vault
      * of notes has no remote; an internal repository may be on a host nobody
      * has logged into. Both are ordinary, neither is actionable, and `gh` can
      * only report either as an error — see `onKnownHost`.

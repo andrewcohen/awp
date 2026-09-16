@@ -15,7 +15,7 @@ import type {
   CommentSide,
   Effort,
   Face,
-  Inbox,
+  ReviewQueue,
   McpStatus,
   Page,
   PageNote,
@@ -387,7 +387,7 @@ export const forgetProject = (name: string): Promise<boolean> =>
 // the reply to the change is the update. It turned out to be false in every
 // case the window then had to work around: a create job claims the workspace
 // minutes after its reply, a review links a pull request from inside the job,
-// the inbox join adopts one by its head commit, and a second daemon on the same
+// the reviewQueue join adopts one by its head commit, and a second daemon on the same
 // store has a writer that is not this window at all.
 //
 // The pair is the rule this file already applies to jobs: `listThreads` answers
@@ -537,21 +537,21 @@ export const startThread = (payload: {
 }): Promise<ThreadStarted> =>
   runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.ThreadStart(payload)));
 
-// ── the inbox ──────────────────────────────────────────────────────────────
+// ── the reviewQueue ──────────────────────────────────────────────────────────────
 
 /**
  * Every open pull request awp can see, sectioned and in order.
  *
  * One call for every project, and the sections and the order are the daemon's —
- * see `InboxList` in the contract. What comes back is a list to draw top to
+ * see `ReviewQueueList` in the contract. What comes back is a list to draw top to
  * bottom, plus a row per project saying when it was read and what went wrong if
  * it could not be.
  *
  * `refresh` asks GitHub again. Left off, the daemon answers from what it last
  * read, which is what makes opening the tab cheap.
  */
-export const listInbox = (refresh?: boolean): Promise<Inbox> =>
-  runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.InboxList({ refresh })));
+export const listReviewQueue = (refresh?: boolean): Promise<ReviewQueue> =>
+  runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.ReviewQueueList({ refresh })));
 
 /**
  * Start reviewing a pull request: a thread, and the job that builds its

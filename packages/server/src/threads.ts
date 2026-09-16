@@ -83,7 +83,7 @@ export const migrations: ReadonlyArray<Migration> = [
     // `ThreadPr` in the contract. The UNIQUE is on `(project, number)` and not
     // on `(thread_id, project, number)`, which is the whole rule: a pull request
     // belongs to at most one thread, the same way a workspace does, so the
-    // inbox row pointing at a thread always has one answer.
+    // reviewQueue row pointing at a thread always has one answer.
     //
     // `on delete cascade` for the reason `thread_members` has it: deleting a
     // thread must not leave rows pointing at nothing. It also means the
@@ -111,7 +111,7 @@ export class Threads extends Context.Service<
      * Every thread again, each time any of them changes.
      *
      * Here rather than beside the handlers, because the handlers are not the
-     * only writer: a job step claims a workspace, the inbox join adopts a pull
+     * only writer: a job step claims a workspace, the reviewQueue join adopts a pull
      * request, an agent's own tool renames a thread. A feed fed by the calls a
      * window happens to make is a feed that is right about the window's own
      * edits and silent about everything else — which is the state three
@@ -168,7 +168,7 @@ export class Threads extends Context.Service<
        *
        * Here rather than left to a later step because this is the one place a
        * rolled-back thread is rebuilt, and the link is part of what it was. A
-       * retry that came back without it would leave the inbox row unable to
+       * retry that came back without it would leave the reviewQueue row unable to
        * find the thread that is being built for it, which is exactly the state
        * this function exists to prevent for the thread itself.
        */
@@ -456,7 +456,7 @@ export const make = Effect.gen(function* () {
         // a thread in the sidebar's ordering where the evidence does not.
         insertThread.run(thread, title.trim(), Date.now(), null, parent ?? null);
         // Part of what the thread was, so it goes back with it. A retry whose
-        // thread came back without its pull request would leave the inbox row
+        // thread came back without its pull request would leave the reviewQueue row
         // unable to find the thread being built for it.
         if (pr !== undefined) {
           linkPr.run(thread, pr.project, pr.number);

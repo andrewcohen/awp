@@ -62,7 +62,7 @@ export const typeset = stylex.create({
   heading: { fontFamily: text.ui, fontSize: text.lead, fontWeight: text.medium },
 
   /**
-   * A heading *inside* a panel — an inbox section, a thread's name.
+   * A heading *inside* a panel — an reviewQueue section, a thread's name.
    *
    * Caption size and heavy, which is the window's way of separating hierarchy
    * without another size: the floor is 14px and there is nothing below it to

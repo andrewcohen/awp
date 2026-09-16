@@ -1357,7 +1357,7 @@ places has two answers to "is it open", and the one that loses is whichever a
 later reader believed. The tasks panel is the first opener that is not App's:
 it is inside `Accessory`, behind a Base UI tab, and threading a callback down
 to it would put a prop about a dialog through two components that have nothing
-to do with either. The same argument the inbox made — the value _plus_ a
+to do with either. The same argument the review queue made — the value _plus_ a
 subscription, which is what a `let` is not.
 
 ### A rename is a double click, in the two places the title is drawn
@@ -1491,12 +1491,12 @@ popup inside a scrolling column is clipped by it.
 for the day the window needed shared state. **That day arrived, and it was Base
 UI's doing.** A hidden tab is unmounted, so every panel's `useState` is destroyed
 by switching away from it — which the diff panel _wants_ (it re-reads the patch
-on the way back) and the inbox does not: forty-five pull requests, fetched over a
+on the way back) and the review queue does not: forty-five pull requests, fetched over a
 socket, thrown away because somebody glanced at the diff. What that looked like
 was an empty panel saying `reading…` every single time the tab was opened, for a
 list the daemon already had in memory.
 
-So `atoms.ts` holds the inbox, and `useInbox` reads and writes it. Three things
+So `atoms.ts` holds the review queue, and `useReviewQueue` reads and writes it. Three things
 about that shape:
 
 - **An atom rather than a module-level `let`**, because a `let` holds the value
@@ -1566,7 +1566,7 @@ something changes how long the proxy takes.
 ### A stream carries changes from now, so it is not a substitute for asking
 
 Every list in the window re-asks the daemon when the socket comes back —
-`onReconnect`, in `useThreads`, `useProjects`, `useInbox`, `usePullRequest`.
+`onReconnect`, in `useThreads`, `useProjects`, `useReviewQueue`, `usePullRequest`.
 The jobs hook was the only one that did not, and its own stream is exactly
 why it had to.
 
@@ -2469,14 +2469,14 @@ number, which earns it by being the only thing on that strip pointing outside
 the window.
 
 **An accent marks a deviation from the rows around it, so the same field earns
-it in one list and not in another.** The inbox found this the second way round:
+it in one list and not in another.** The review queue found this the second way round:
 its rows drew the PR number in the accent, on exactly the argument above, and
 the window came back as "too much orange". In the sidebar a PR number is an
-exception — most rows have none. In the inbox _every_ row is a pull request, so
+exception — most rows have none. In the review queue _every_ row is a pull request, so
 the number is the baseline, and an accent on the baseline is thirty accents in a
 column.
 
-It is the same arithmetic as the inbox's leading state icon having no icon for
+It is the same arithmetic as the review queue's leading state icon having no icon for
 the ordinary case, and the same as `waiting` and `live` in the sidebar: a colour
 that appears on most rows is not emphasis, it is the body text of that column.
 Counted after the fix, the whole window spends the accent in four places:
@@ -2490,7 +2490,7 @@ Counted after the fix, the whole window spends the accent in four places:
 
 ### Two vocabularies, and a colour belongs to one
 
-The inbox also borrowed the _agent_ state colours for **review** states, which
+The review queue also borrowed the _agent_ state colours for **review** states, which
 put one green on two subjects: "a session is alive" in one column and "a pull
 request is approved" in the next.
 
@@ -2601,7 +2601,7 @@ own slower clock so the shape changes rather than the pair merely moving.
 **One state, deliberately.** Not every running row — most workspaces on a real
 machine have no reported status and fall back to "something is live", so
 spending the shape there would put it on the baseline. The same arithmetic as
-the accent and the inbox's leading icon.
+the accent and the review queue's leading icon.
 
 ## StyleX fails quietly, twice
 
@@ -3161,16 +3161,16 @@ one moment it exists for.
 
 ## The left column is a menu and a list, not two tabs
 
-`work` and `inbox` used to sit beside each other as a pair of tabs, which said
+`work` and `review queue` used to sit beside each other as a pair of tabs, which said
 the column held two lists of the same kind. It does not: the threads **are**
 this column — they fill it, they are what is selected, they are what the
-address points at — and the inbox is a list of work happening elsewhere that
+address points at — and the review queue is a list of work happening elsewhere that
 somebody opens on purpose. A tab strip made the second one cost the first its
 whole column, and made the first one look like a mode.
 
 ```
   ⊕  new thread                    ⌘N
-  ⊟  inbox
+  ⑂  pull requests
   ─────────────────────────────────────
   ▸ tabular exports
       rowan · agent
@@ -3182,12 +3182,12 @@ apart. It was the only way to make a workspace from this window and it is now
 the first line of the menu, which is where somebody looks for it — a second
 copy at the other end of the same column is two controls for one act.
 
-**The inbox opens over the window.** A pull request row carries a number, a
+**The review queue opens over the window.** A pull request row carries a number, a
 title, a project, an author, a branch, a stack guide and up to three chips, and
 in 260px the title is what truncates — the one field that cannot be
 reconstructed from the others. The accessory column was the other candidate and
 is wrong for the reason the tabs' own comment gave: that column is about the
-thing already on screen, and the inbox is about everywhere else. So it is
+thing already on screen, and the review queue is about everywhere else. So it is
 modal, bounded at 56rem rather than the whole window — a row's action sits at
 its right edge, and every rem past what the titles need is distance between the
 thing read and the thing pressed.
@@ -3196,7 +3196,7 @@ thing read and the thing pressed.
 and is deliberately absent: the count is a `gh` call per project, seconds each,
 and a row that is always on screen would pay for it whether or not anybody
 asked. The rows are fetched when the dialog mounts, which is the promise
-`useInbox` was written around — and the atoms are what make a second open show
+`useReviewQueue` was written around — and the atoms are what make a second open show
 the last answer at once.
 
 **Not remembered across launches**, unlike the tab it replaces. A tab is where
@@ -3211,11 +3211,22 @@ way to reach it went with the column. `NewThread` has always been App's, and
 that is the shape: **a modal belongs to the window, and the control that opens
 it belongs to whichever column has room for it.**
 
-`⌘I` lives beside `⌘N` for the same reason — the menu item is the discoverable
+`⌘⇧R` lives beside `⌘N` for the same reason — the menu item is the discoverable
 half and the chord is the half that still works with the column folded away.
 It toggles, where `⌘N` and `⌘P` only open: those two hold something somebody is
 part way through typing, so pressing again means "make sure", and this holds a
-list, so pressing again means "put it away". Nothing in `menu.ts` claims I.
+list, so pressing again means "put it away".
+
+**Neither initial was available, and the obvious spare is reserved.** It was
+`⌘I` while the list was called the inbox; the letter named the list and names
+nothing now. `P` is the switcher, and `⌘⇧P` is deliberately **left unclaimed**
+— it is the action-palette chord in every editor somebody using this has open,
+and spending it on a list of pull requests would spend it on the wrong thing.
+`⌘K` is left for the same reason. That leaves `R` for review, on the shift the
+menu does not claim: `menu.ts` names `CommandOrControl+R` and
+`CommandOrControl+Alt+R` and nothing else, and an accelerator matches an exact
+set of modifiers, so plain `⌘R` still reloads. The only habit it crosses is a
+browser's hard reload, which this window has no equivalent of.
 
 ## Debug tools live in the accessory column
 
@@ -4290,7 +4301,7 @@ Two repairs, and the second is the one to copy:
   renderer could reach, and the slot rule takes it down on the next create
   without anything having to ask.
 
-## The inbox is a list of pull requests, not of workspaces
+## The review queue is a list of pull requests, not of workspaces
 
 The deck's inbox scope was built out of **workspace** rows, and a pull request
 with no local checkout had to be invented as a "virtual" row. That took three
@@ -4319,7 +4330,7 @@ every stack whose tip is what makes it your problem:
               and the chain drew broken, under two headings
 ```
 
-`inbox.test.ts`'s "a stack stays together" is the test that caught it.
+`review-queue.test.ts`'s "a stack stays together" is the test that caught it.
 
 **The daemon classifies, sections and orders.** Same argument as
 `SessionIdentity` being on the wire: `bucketOf`'s precedence is subtle enough
@@ -4364,11 +4375,11 @@ a jj workspace with no colocated git is.
 
 **A failure is per project.** One repository's `gh` being unauthenticated, or
 its remote not being GitHub at all, must not cost the others their rows — so
-`InboxSource` carries a sentence per project and the call has no error channel
+`ReviewQueueSource` carries a sentence per project and the call has no error channel
 at all. The one global failure is the login, and it is not fatal either: what it
-costs is every viewer-relative bucket, which is why `Inbox.viewer` is on the
-answer. An inbox that is empty because nobody is signed in looks exactly like an
-inbox with nothing in it.
+costs is every viewer-relative bucket, which is why `ReviewQueue.viewer` is on the
+answer. A review queue that is empty because nobody is signed in looks exactly like an
+review queue with nothing in it.
 
 ### The icons are Phosphor, and the baseline row has none
 
@@ -4422,7 +4433,7 @@ So every call in `github-cli.ts` names its repository by **running in it** —
 `ChildProcess.make(…, { cwd })` — and `gh` resolves owner and name off the
 remote. The Go implementation did the same thing, its runner taking a directory.
 
-Two consequences found by `bun run probe:inbox`, which is what a fake could
+Two consequences found by `bun run probe:review-queue`, which is what a fake could
 never have said:
 
 - **A secondary jj workspace is not a git repository.** `gh` needs one, and
@@ -4432,7 +4443,7 @@ never have said:
   `fatal: not a git repository`.
 - **`gh pr list` with `statusCheckRollup` is seconds, not milliseconds.**
   Measured 4.5s for eleven pull requests on a repository with real CI. That is
-  the whole reason `InboxFeed` has a cache with a lifetime rather than a refresh
+  the whole reason `ReviewQueueFeed` has a cache with a lifetime rather than a refresh
   button alone: the panel is mounted every time its tab is opened.
 
 ### Pressing a row has to change the row
@@ -4500,7 +4511,7 @@ already there. Found by reading a real session list, not by a test.
 
 ### The pull request cache, and the four things wrong with the first one
 
-`gh pr list` with `statusCheckRollup` is seconds, and the inbox is asked every
+`gh pr list` with `statusCheckRollup` is seconds, and the review queue is asked every
 time its tab is opened — so there is a cache. What that cache went through is
 worth keeping, because three of the four faults were invisible and one killed
 the daemon.
@@ -4531,7 +4542,7 @@ and instantly judged stale, and the read pays the full `gh` call anyway.
 ```
 
 They now mean different things. `DISK_TTL_MS` answers "is there anything worth
-saying" — an hour-old inbox with `read at 09:14` under it beats a spinner —
+saying" — an hour-old queue with `read at 09:14` under it beats a spinner —
 and `TTL_MS` answers "is it worth re-reading", **behind** the answer rather than
 in front of it: `Effect.forkDetach`, guarded by a set of in-flight repositories
 so three tab switches are not three `gh` calls. `refresh` stays synchronous,
@@ -4551,7 +4562,7 @@ recorded, the statement never executed, and:
 
 ```
   ERROR: SQLiteError: no such table: gh_viewer
-    at <anonymous> (packages/server/src/inbox-feed.ts:217:25)
+    at <anonymous> (packages/server/src/review-queue-feed.ts:217:25)
 ```
 
 Which is this file's own rule — a migration's name is fixed the moment it has
@@ -4580,9 +4591,9 @@ expensive fields, and the reason to write the measurement down.
 
 So the listing asks for everything and asks again without that field when
 refused. What it costs is `conflicts` and `behind base` being unknown there, and
-`InboxSource.degraded` says so in a sentence — muted rather than red, because
+`ReviewQueueSource.degraded` says so in a sentence — muted rather than red, because
 nothing is broken. **Silence was the alternative and is worse:** a clean-looking
-inbox for the one repository where nothing is _able_ to report a conflict.
+clean-looking queue for the one repository where nothing is _able_ to report a conflict.
 
 **The sentence named the ceiling, not a count.** It read "for 100 pull requests
 here", where 100 is `LIMIT` — the number the query _asks_ for — so the one
@@ -4647,7 +4658,7 @@ tree bends.
    └─ #30
 ```
 
-Drawn from the _list_, not from the row, and that is why `InboxItem.stack` came
+Drawn from the _list_, not from the row, and that is why `ReviewQueueItem.stack` came
 back after being removed as "an implementation of contiguity": a guide character
 is a statement about what comes **after** a row — `└─` means nothing else hangs
 off my parent below me — and only the client is holding the list. A client
@@ -4692,7 +4703,7 @@ workspace answers "nothing to repair" rather than claiming a stale checkout that
 is not there.
 
 **The daemon asks jj; the feed asks the daemon.** The head commit is in the
-listing, which is `InboxFeed`'s, and answering the question means asking jj about
+listing, which is `ReviewQueueFeed`'s, and answering the question means asking jj about
 a workspace, which is the handler's — so `read` takes a `contains` callback. It
 is asked only for rows that have a workspace, which on a real machine is a
 handful of forty-eight, concurrently, and locally.
@@ -4763,7 +4774,7 @@ So it is recorded, for the same reason `parentId` is: a name is an address, and
 this is a claim about the work. `thread_prs` with **UNIQUE (project, number)** —
 one thread per pull request, the same rule a workspace's single claim has, and
 for the same reason: two threads about one PR has no rendering, because the
-inbox row would have to pick which to point at.
+review queue row would have to pick which to point at.
 
 **Several per thread, though.** A thread already holds several workspaces in
 several repositories, and each has its own pull request — a frontend change and
@@ -4780,7 +4791,7 @@ Three writers, and each is a different moment:
   ThreadLinkPr  a person saying so, for the cases above that no name encodes
 ```
 
-The inbox join reads the link **after** the name-based recovery, so the link
+The review queue join reads the link **after** the name-based recovery, so the link
 wins. The name path stays because this machine is full of workspaces that
 predate the field — including the Go implementation's `pr-<n>-<branch>` — and a
 row that could not find its thread would offer to build a second one.
@@ -4788,7 +4799,7 @@ row that could not find its thread would offer to build a second one.
 No chip for it in the sidebar, deliberately: a review thread's title already
 begins `#2418`, and the workspace row already shows `facts.pr`. A third copy of
 the same number is duplication, not information. The link exists to be the
-record the inbox joins on.
+record the review queue joins on.
 
 ### A review is the same job, with one step turned on
 
@@ -5908,7 +5919,7 @@ the rule **both faces** read it by:
 
 **And then most rows do not draw it.** `toolLabel` is what a row actually
 puts in front of its title, and for a command that is nothing at all — the
-same arithmetic as the accent and the inbox's leading icon: most of what an
+same arithmetic as the accent and the review queue's leading icon: most of what an
 agent does in a terminal is `Bash`, so a column saying `bash` on every other
 row has spent its left edge on the thing nobody is scanning for.
 

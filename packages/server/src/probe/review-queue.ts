@@ -1,4 +1,4 @@
-// The inbox, against real `gh` in a real repository.
+// The reviewQueue, against real `gh` in a real repository.
 //
 // What only this can answer: whether the fields `gh pr list` is asked for are
 // the fields the installed `gh` actually has, and whether the token in this
@@ -11,12 +11,12 @@
 // refusal to run inside a zmx session. It does not even need a daemon: the
 // services are built directly, which is the point of them being layers.
 //
-//     bun run probe:inbox            the repository this file is in
-//     bun run probe:inbox <path>     any other checkout
+//     bun run probe:reviewQueue            the repository this file is in
+//     bun run probe:reviewQueue <path>     any other checkout
 //
 // What a pass looks like — and the first line is the one that matters, because
-// with no login every viewer-relative section is empty and an inbox that is
-// empty for that reason looks exactly like an inbox with nothing in it:
+// with no login every viewer-relative section is empty and an reviewQueue that is
+// empty for that reason looks exactly like an reviewQueue with nothing in it:
 //
 //   viewer   someone
 //   read     14 open pull requests in 120ms
@@ -25,18 +25,22 @@
 
 import { NodeChildProcessSpawner, NodeFileSystem, NodePath } from "@effect/platform-node-shared";
 import { Effect, Layer, Result } from "effect";
-import { bucketLabel, inboxBuckets } from "@awp-kit/protocol";
+import { bucketLabel, reviewQueueBuckets } from "@awp-kit/protocol";
 import { AWP_DB } from "../daemon";
 import { Github } from "../github";
 import * as githubCli from "../github-cli";
-import { InboxFeed, layer as inboxLayer, migrations as inboxMigrations } from "../inbox-feed";
+import {
+  ReviewQueueFeed,
+  layer as reviewQueueLayer,
+  migrations as reviewQueueMigrations,
+} from "../review-queue-feed";
 import { layer as dbLayer } from "@awp-kit/store";
 
 const root = process.argv[2] ?? process.cwd();
 
 const program = Effect.gen(function* () {
   const gh = yield* Github;
-  const feed = yield* InboxFeed;
+  const feed = yield* ReviewQueueFeed;
 
   // Asked separately from the listing so the two failures read differently: a
   // login that cannot be read is `gh auth login`, and a listing that cannot be
@@ -46,7 +50,7 @@ const program = Effect.gen(function* () {
   console.log(`viewer   ${login ?? "NOT SIGNED IN — every viewer bucket will be empty"}`);
 
   const started = Date.now();
-  const inbox = yield* feed.read({
+  const reviewQueue = yield* feed.read({
     projects: [{ name: root.split("/").at(-1) ?? "project", root, importedAt: undefined }],
     refresh: true,
     // Nothing is claimed: this probe is about the GitHub half. Which pull
@@ -59,17 +63,17 @@ const program = Effect.gen(function* () {
     contains: () => Effect.succeed(true),
   });
   console.log(
-    `read     ${inbox.items.length} open pull requests in ${Date.now() - started}ms  (${root})`,
+    `read     ${reviewQueue.items.length} open pull requests in ${Date.now() - started}ms  (${root})`,
   );
 
-  for (const source of inbox.sources) {
+  for (const source of reviewQueue.sources) {
     if (source.failure !== undefined) {
       console.log(`FAILED   ${source.project}: ${source.failure}`);
     }
   }
 
-  for (const bucket of inboxBuckets) {
-    const rows = inbox.items.filter((item) => item.bucket === bucket);
+  for (const bucket of reviewQueueBuckets) {
+    const rows = reviewQueue.items.filter((item) => item.bucket === bucket);
     if (rows.length === 0) {
       continue;
     }
@@ -98,11 +102,11 @@ const program = Effect.gen(function* () {
 await Effect.runPromise(
   program.pipe(
     Effect.provide(
-      inboxLayer.pipe(
+      reviewQueueLayer.pipe(
         // The daemon's own database, so a probe run beside it reads and writes
         // the same cache — which is the point: "is this cached" is a question
         // about that file, not about a fresh one.
-        Layer.provide(Layer.orDie(dbLayer(AWP_DB, [...inboxMigrations]))),
+        Layer.provide(Layer.orDie(dbLayer(AWP_DB, [...reviewQueueMigrations]))),
         // `provideMerge`, not `provide`: this probe asks the Github service the
         // login directly as well as going through the feed, so the layer has to
         // stay visible rather than being consumed on the way in.

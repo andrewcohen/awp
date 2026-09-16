@@ -315,7 +315,7 @@ export const createWorkspace = (deps: WorkspaceDeps): JobKind<CreateWorkspace> =
                   input.threadParent,
                   // Part of what the thread was. A review whose rollback took
                   // the thread and whose retry put it back without the link
-                  // would leave the inbox row unable to find the work being
+                  // would leave the reviewQueue row unable to find the work being
                   // done for it — which is the same failure this step exists to
                   // prevent for the thread itself.
                   input.review === undefined

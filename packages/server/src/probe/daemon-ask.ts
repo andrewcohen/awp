@@ -39,19 +39,19 @@ const program = Effect.gen(function* () {
         .join(" | ") || "none"
     }`,
   );
-  // How long the inbox takes to answer, which is the cache question made
+  // How long the reviewQueue takes to answer, which is the cache question made
   // measurable: cold in memory but warm on disk should be milliseconds, and a
   // real `gh pr list` is seconds.
   const started = Date.now();
-  const inbox = yield* rpc.InboxList({});
+  const reviewQueue = yield* rpc.ReviewQueueList({});
   console.log(
-    `  inbox         ${inbox.items.length} rows from ${inbox.sources.length} project(s) in ${Date.now() - started}ms`,
+    `  reviewQueue         ${reviewQueue.items.length} rows from ${reviewQueue.sources.length} project(s) in ${Date.now() - started}ms`,
   );
 
   // The rows a repair could act on: a workspace, and whether it still contains
   // what the pull request is. Printed because "moved" is invisible from outside
   // — the checkout looks exactly as it did.
-  const checked = inbox.items.filter((item) => item.workspace !== undefined);
+  const checked = reviewQueue.items.filter((item) => item.workspace !== undefined);
   console.log(
     `  checkouts     ${
       checked

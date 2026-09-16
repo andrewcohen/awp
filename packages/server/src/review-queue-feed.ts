@@ -1,19 +1,19 @@
-// The inbox, assembled and remembered.
+// The reviewQueue, assembled and remembered.
 //
-// Two things live here that `inbox.ts` deliberately does not have: the calls to
+// Two things live here that `reviewQueue.ts` deliberately does not have: the calls to
 // GitHub, and the memory of what they answered.
 //
 // ── why there is a cache at all ────────────────────────────────────────────
 // `gh pr list` against a busy repository is a couple of seconds, and this is
 // asked every time a panel is opened — which, for a panel in a tab strip, is
-// several times a minute. Without a cache the inbox is a spinner in the common
+// several times a minute. Without a cache the reviewQueue is a spinner in the common
 // case and a person stops opening it.
 //
 // ── and why it has a lifetime rather than only a refresh button ────────────
 // A cache that is only invalidated by hand is a cache that is silently wrong
 // for as long as nobody presses the button, and "is this list current" is not a
 // question a person should have to hold. The answer to it is on the wire —
-// `InboxSource.fetchedAt` — and the panel shows it, but a reading that is an
+// `ReviewQueueSource.fetchedAt` — and the panel shows it, but a reading that is an
 // hour old is worth re-taking whether or not anybody noticed.
 //
 // ── a failure is per project ───────────────────────────────────────────────
@@ -24,7 +24,7 @@
 // it costs is every viewer-relative bucket, which is why the login is on the
 // answer for a client to say so.
 
-import type { Inbox, InboxSource, Project } from "@awp-kit/protocol";
+import type { ReviewQueue, ReviewQueueSource, Project } from "@awp-kit/protocol";
 import { Db, type Migration, attempt } from "@awp-kit/store";
 import { Clock, Context, Data, Effect, Layer, Ref, Result } from "effect";
 import {
@@ -35,10 +35,10 @@ import {
   type Viewer,
 } from "./github";
 import { authored } from "./github-parse";
-import { type Claim, type Source, inboxItems } from "./inbox";
+import { type Claim, type Source, reviewQueueItems } from "./review-queue";
 
 /** The database would not answer. */
-export class InboxStoreError extends Data.TaggedError("InboxStoreError")<{
+export class ReviewQueueStoreError extends Data.TaggedError("ReviewQueueStoreError")<{
   readonly reason: string;
   readonly cause?: unknown;
 }> {}
@@ -51,7 +51,7 @@ export class InboxStoreError extends Data.TaggedError("InboxStoreError")<{
  * It was a `Ref<Map>`, which is a cache that a daemon restart empties — and a
  * daemon restarts every time this repository is worked on. The cost is not
  * theoretical: `gh pr list` with `statusCheckRollup` measured 4.5s for eleven
- * pull requests, so the first inbox after every restart was a five-second wait
+ * pull requests, so the first reviewQueue after every restart was a five-second wait
  * per project, which reads as the feature being slow rather than as a cold
  * cache.
  *
@@ -69,63 +69,63 @@ export class InboxStoreError extends Data.TaggedError("InboxStoreError")<{
  */
 export const migrations: ReadonlyArray<Migration> = [
   {
-    name: "inbox.001-cache",
+    // ── one migration, because the cache is the one thing here worth nothing ─
+    //
+    // This was three — `inbox.001-cache`, `inbox.002-viewer` and
+    // `inbox.003-projection` — and the rename could not keep those names. A
+    // migration's name is fixed the moment it has run anywhere, so a renamed
+    // one runs a second time, and the deliberate `create table` rather than
+    // `if not exists` turns that into a daemon that will not start. This file
+    // has already broken that rule once and says so, two paragraphs down.
+    //
+    // Renaming them was allowed here for a reason particular to these three
+    // tables and to nothing else in `awp.sqlite`: **every row in them is a
+    // copy of something GitHub still has.** Dropping the lot costs one slow
+    // first read — measured at 11.5s cold against 0.28s warm — and nothing
+    // that cannot simply be fetched again. A thread, a job or a task has no
+    // such property, which is why this is not a pattern to copy.
+    //
+    // `drop … if exists` then `create`, so this is the same statement on a
+    // machine that had the old tables and on one that never did. The old names
+    // stay recorded in `schema_migrations` and are referenced by nothing,
+    // which is harmless: that record is a list of what has run, not a list of
+    // what must exist.
+    name: "review-queue.001-cache",
     up: [
+      `drop table if exists pr_lists`,
+      `drop table if exists pr_details`,
+      `drop table if exists gh_viewer`,
+      // Two tables rather than one, because the grains differ: a listing is
+      // per repository and a detail is per pull request, and a shared table
+      // would need a discriminator column no query ever wants to see.
+      //
+      // `projection` says which shape wrote the row — see `PROJECTION`. A row
+      // written by an older one parses and comes back the wrong shape, which
+      // would fail on the wire rather than here.
       `create table pr_lists (
          repo       text primary key,
          fetched_at integer not null,
-         payload    text not null
+         payload    text not null,
+         projection integer not null default 0
        ) strict`,
       `create table pr_details (
          repo       text not null,
          number     integer not null,
          fetched_at integer not null,
          payload    text not null,
+         projection integer not null default 0,
          primary key (repo, number)
        ) strict`,
-    ],
-  },
-  {
-    // Who `gh` is signed in as. Its own migration, and the reason is the rule
-    // this file broke once: **a migration's name is fixed the moment it has
-    // run anywhere.** This table was first added as a third statement inside
-    // `001`, which had already run — so the name was recorded, the statement
-    // was never executed, and the daemon died on the first `prepare` against a
-    // table that did not exist:
-    //
-    //   ERROR: SQLiteError: no such table: gh_viewer
-    //     at <anonymous> (packages/server/src/inbox-feed.ts:217:25)
-    //
-    // Loudly, at least, and at startup rather than later — which is what the
-    // deliberate `create table` (rather than `if not exists`) buys.
-    //
-    // One row per login, upserted. It changes when somebody runs
-    // `gh auth login`, which is rare enough to keep for a day — and reading it
-    // is two `gh api` calls, one paginated, which measured about 1.7s. Without
-    // it a restarted daemon paid that before it could answer anything, which
-    // was most of what a warm inbox still cost.
-    name: "inbox.002-viewer",
-    up: [
+      // Who `gh` is signed in as, one row per login, upserted. It changes when
+      // somebody runs `gh auth login`, which is rare enough to keep for a day
+      // — and reading it is two `gh api` calls, one paginated, measured at
+      // about 1.7s. Without it a restarted daemon paid that before it could
+      // answer anything, which was most of what a warm queue still cost.
       `create table gh_viewer (
          login      text primary key,
          teams      text not null,
          fetched_at integer not null
        ) strict`,
-    ],
-  },
-  {
-    // Which projection wrote each row. See `PROJECTION` — a row from an older
-    // one parses and comes back the wrong shape, which fails on the wire rather
-    // than here.
-    //
-    // `default 0` is what makes it safe over the rows already there: none of
-    // them was written by a version that stamped anything, and 0 is a value no
-    // projection uses — so every existing row is a miss, once, which is exactly
-    // right.
-    name: "inbox.003-projection",
-    up: [
-      `alter table pr_lists add column projection integer not null default 0`,
-      `alter table pr_details add column projection integer not null default 0`,
     ],
   },
 ];
@@ -209,7 +209,7 @@ interface Cached {
    * What had to be given up to read them at all, if anything.
    *
    * A repository big enough that GitHub refuses to compute mergeability for a
-   * hundred pull requests still gets its inbox — with conflicts and
+   * hundred pull requests still gets its reviewQueue — with conflicts and
    * behind-base unknown, and this sentence saying so. See `github-cli.ts`.
    */
   readonly degraded: string | undefined;
@@ -228,8 +228,8 @@ export interface UnclaimedHead {
   readonly headOid: string;
 }
 
-export class InboxFeed extends Context.Service<
-  InboxFeed,
+export class ReviewQueueFeed extends Context.Service<
+  ReviewQueueFeed,
   {
     /**
      * Every open pull request across these projects, sectioned and ordered.
@@ -256,7 +256,7 @@ export class InboxFeed extends Context.Service<
         member: { readonly project: string; readonly workspace: string },
         headOid: string,
       ) => Effect.Effect<boolean>;
-    }) => Effect.Effect<Inbox & { readonly unclaimed: ReadonlyArray<UnclaimedHead> }>;
+    }) => Effect.Effect<ReviewQueue & { readonly unclaimed: ReadonlyArray<UnclaimedHead> }>;
 
     /**
      * One pull request, from what was last read or by asking.
@@ -295,7 +295,7 @@ export class InboxFeed extends Context.Service<
       refresh?: boolean,
     ) => Effect.Effect<PullRequestDetail | undefined, GithubError>;
   }
->()("awp/InboxFeed") {}
+>()("awp/ReviewQueueFeed") {}
 
 const make = Effect.gen(function* () {
   const gh = yield* Github;
@@ -340,7 +340,7 @@ const make = Effect.gen(function* () {
    *
    * Every failure is a miss rather than an error: a payload written by a version
    * whose projection has since changed is exactly as useful as no payload, and
-   * refusing to serve an inbox because a cache row is stale-shaped would be the
+   * refusing to serve an reviewQueue because a cache row is stale-shaped would be the
    * cache making things worse than not having one.
    */
   const stored = <A>(
@@ -363,7 +363,7 @@ const make = Effect.gen(function* () {
         return undefined;
       }
     }).pipe(
-      Effect.mapError((error) => new InboxStoreError({ reason: error.reason, cause: error })),
+      Effect.mapError((error) => new ReviewQueueStoreError({ reason: error.reason, cause: error })),
       Effect.orElseSucceed(() => undefined),
     );
   // The viewer is one answer for the whole machine, not one per repository, and
@@ -383,7 +383,7 @@ const make = Effect.gen(function* () {
       if (!refresh) {
         // Off disk before `gh` is asked. Two `gh api` calls, one paginated,
         // measured about 1.7s — which was most of what a restarted daemon's
-        // "warm" inbox still cost.
+        // "warm" reviewQueue still cost.
         //
         // Read here rather than through `stored`, and that is not a style
         // choice: `stored` parses a column called `payload`, this table keeps
@@ -527,7 +527,7 @@ const make = Effect.gen(function* () {
    *
    * So the two lifetimes now mean different things rather than competing:
    *
-   *   is there anything to say      DISK_TTL_MS. An hour-old inbox with
+   *   is there anything to say      DISK_TTL_MS. An hour-old reviewQueue with
    *                                 `read at 09:14` under it beats a spinner
    *   is it worth re-reading        TTL_MS, and the re-read happens **behind**
    *                                 the answer rather than in front of it
@@ -605,7 +605,7 @@ const make = Effect.gen(function* () {
           { concurrency: 4 },
         );
 
-        const sources: Array<InboxSource> = [];
+        const sources: Array<ReviewQueueSource> = [];
         const feed: Array<Source> = [];
         for (const { project, entry } of read) {
           if (entry.offGithub) {
@@ -625,7 +625,7 @@ const make = Effect.gen(function* () {
 
         // ── which checkouts no longer contain their pull request ───────────
         //
-        // Here rather than in `inbox.ts` because it is the one part of a row
+        // Here rather than in `reviewQueue.ts` because it is the one part of a row
         // that cannot be computed from the listing alone, and here rather than
         // in the handler because this is where the head commits are. Only rows
         // with a workspace are asked about, concurrently, and a claim that has
@@ -654,7 +654,7 @@ const make = Effect.gen(function* () {
         };
 
         return {
-          items: inboxItems(feed, login, settled),
+          items: reviewQueueItems(feed, login, settled),
           sources,
           viewer: login?.login,
           // ── the heads nothing has claimed ─────────────────────────────
@@ -741,4 +741,5 @@ const make = Effect.gen(function* () {
   };
 });
 
-export const layer: Layer.Layer<InboxFeed, never, Github | Db> = Layer.effect(InboxFeed)(make);
+export const layer: Layer.Layer<ReviewQueueFeed, never, Github | Db> =
+  Layer.effect(ReviewQueueFeed)(make);

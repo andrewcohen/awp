@@ -25,7 +25,7 @@
 //
 // **A missing binary and a refusal are different sentences.** `gh` not being
 // installed is the one failure where `gh`'s own words do not exist, so it is
-// named explicitly — otherwise the inbox reports "command failed" for the most
+// named explicitly — otherwise the reviewQueue reports "command failed" for the most
 // likely first-run problem there is.
 
 import { homedir } from "node:os";
@@ -68,7 +68,7 @@ const json = <A>(op: string, out: string, fallback: A): Effect.Effect<A, GithubE
       }),
   });
 
-/** How many open pull requests a repository's inbox is built from. */
+/** How many open pull requests a repository's reviewQueue is built from. */
 const LIMIT = 100;
 
 /**
@@ -182,7 +182,7 @@ const make = Effect.gen(function* () {
         // `--state open` and not `--state all`. Asking for everything makes
         // GitHub compute `statusCheckRollup` for a hundred mostly-closed PRs
         // that nothing renders, which the archive measured at ~7s against ~2s
-        // on a busy repository. The inbox has nothing to say about a merged PR.
+        // on a busy repository. The reviewQueue has nothing to say about a merged PR.
         const list = (fields: string) =>
           run(op, repo, "gh", [
             "pr",
@@ -204,7 +204,7 @@ const make = Effect.gen(function* () {
         // where the same query without that one field answered in 4.6s.
         //
         // So the choice is between one repository losing its conflicts signal
-        // and that repository having no inbox at all. It asks for everything,
+        // and that repository having no reviewQueue at all. It asks for everything,
         // and asks again without the expensive field when that is refused.
         //
         // ── and it stops asking a repository that has already said no ───────

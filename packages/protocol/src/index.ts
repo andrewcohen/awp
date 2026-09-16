@@ -379,7 +379,7 @@ export type ThreadMember = (typeof ThreadMember)["Type"];
  *
  * The reverse is *not* many-to-many: a pull request belongs to at most one
  * thread, enforced the way a workspace's single claim is. Two threads about one
- * PR has no rendering — the inbox row would have to pick which of them to point
+ * PR has no rendering — the reviewQueue row would have to pick which of them to point
  * at, and a person would have to work out which was lying.
  */
 export const ThreadPr = Schema.Struct({
@@ -1216,10 +1216,10 @@ export const ThreadStarted = Schema.Struct({ thread: Thread, job: Job });
 
 export type ThreadStarted = (typeof ThreadStarted)["Type"];
 
-// ── the inbox ──────────────────────────────────────────────────────────────
+// ── the reviewQueue ──────────────────────────────────────────────────────────────
 //
 // Every open pull request awp can see, sectioned by what the next move is.
-// Ported from the deck's inbox scope, and one thing about it is inverted.
+// Ported from the deck's reviewQueue scope, and one thing about it is inverted.
 //
 //   deck    the rows were WORKSPACES, and a PR with no local checkout had to
 //           be synthesized as a "virtual" row — three passes of it (review
@@ -1235,7 +1235,7 @@ export type ThreadStarted = (typeof ThreadStarted)["Type"];
 // **The daemon classifies, sections and orders.** A client receives rows it can
 // render top to bottom, for the same reason `SessionIdentity` is on the wire: a
 // client re-deriving a rule is a second implementation of it, and the copy that
-// drifts is the one nobody tests. The rule here is `PRInboxBucket`'s
+// drifts is the one nobody tests. The rule here is `PRReviewQueueBucket`'s
 // precedence, which is subtle enough that the archive locked it with tests.
 
 /** How CI rolls up. `none` is a PR with no checks, which is not a failure. */
@@ -1247,7 +1247,7 @@ export type CIState = (typeof CIState)["Type"];
  * GitHub's branch-protection verdict, or `none` when nobody has reviewed.
  *
  * Not the same question as "did anyone leave feedback" — see
- * {@link InboxItem.hasReviewComments}, which is the only signal that catches a
+ * {@link ReviewQueueItem.hasReviewComments}, which is the only signal that catches a
  * reviewer who commented without formally requesting changes.
  */
 export const ReviewDecision = Schema.Literals([
@@ -1280,11 +1280,11 @@ export const MergeState = Schema.Literals([
 export type MergeState = (typeof MergeState)["Type"];
 
 /**
- * Which section of the inbox a row belongs to, and the order the sections are
+ * Which section of the reviewQueue a row belongs to, and the order the sections are
  * drawn in: most-your-problem first.
  *
  * Sections rather than the attention scope's flat list of reasons, because the
- * question the inbox answers is "what is my next move", and the five answers
+ * question the reviewQueue answers is "what is my next move", and the five answers
  * are stable enough to be headings. The archive's precedence, kept:
  *
  *   needs-your-review   somebody asked you — wins over everything, including
@@ -1294,7 +1294,7 @@ export type MergeState = (typeof MergeState)["Type"];
  *   other-open          neither yours nor waiting on you
  *   mine                yours, and the ball is elsewhere — or still a draft
  */
-export const InboxBucket = Schema.Literals([
+export const ReviewQueueBucket = Schema.Literals([
   "needs-your-review",
   "needs-action",
   "ready-to-merge",
@@ -1302,10 +1302,10 @@ export const InboxBucket = Schema.Literals([
   "mine",
 ]);
 
-export type InboxBucket = (typeof InboxBucket)["Type"];
+export type ReviewQueueBucket = (typeof ReviewQueueBucket)["Type"];
 
 /** The heading for a bucket. One place, so two surfaces cannot disagree. */
-export const bucketLabel = (bucket: InboxBucket): string => {
+export const bucketLabel = (bucket: ReviewQueueBucket): string => {
   switch (bucket) {
     case "needs-your-review":
       return "Needs your review";
@@ -1321,7 +1321,7 @@ export const bucketLabel = (bucket: InboxBucket): string => {
 };
 
 /** The order the sections are drawn in. */
-export const inboxBuckets: ReadonlyArray<InboxBucket> = [
+export const reviewQueueBuckets: ReadonlyArray<ReviewQueueBucket> = [
   "needs-your-review",
   "needs-action",
   "ready-to-merge",
@@ -1334,13 +1334,13 @@ export const inboxBuckets: ReadonlyArray<InboxBucket> = [
  *
  * The viewer-relative fields — `mine`, `reviewRequested`, `reviewRerequested` —
  * are reduced to booleans by the daemon against the authenticated `gh` login,
- * so nothing downstream has to know whose inbox it is rendering. With no login
- * they are all false, which is why {@link Inbox.viewer} is on the answer: every
- * bucket that names the viewer is empty in that case, and an inbox that is
- * empty because nobody is signed in must not look like an inbox with nothing in
+ * so nothing downstream has to know whose reviewQueue it is rendering. With no login
+ * they are all false, which is why {@link ReviewQueue.viewer} is on the answer: every
+ * bucket that names the viewer is empty in that case, and an reviewQueue that is
+ * empty because nobody is signed in must not look like an reviewQueue with nothing in
  * it.
  */
-export const InboxItem = Schema.Struct({
+export const ReviewQueueItem = Schema.Struct({
   /** The project this PR's repository is, by awp's name for it. */
   project: Schema.String,
   /** That repository's root, so an action does not have to resolve it again. */
@@ -1374,7 +1374,7 @@ export const InboxItem = Schema.Struct({
    */
   hasReviewComments: Schema.Boolean,
 
-  bucket: InboxBucket,
+  bucket: ReviewQueueBucket,
   /**
    * How deep in its stack: 0 for a PR based on the trunk, 1+ for one based on
    * another open PR's branch. Drives the row's indent.
@@ -1457,7 +1457,7 @@ export const InboxItem = Schema.Struct({
   job: Schema.optional(Schema.String),
 });
 
-export type InboxItem = (typeof InboxItem)["Type"];
+export type ReviewQueueItem = (typeof ReviewQueueItem)["Type"];
 
 /**
  * Where one project's rows came from, and what went wrong if they did not.
@@ -1466,9 +1466,9 @@ export type InboxItem = (typeof InboxItem)["Type"];
  * `gh` is missing, or a repository's remote is not GitHub, or a token expired —
  * and the honest answer is the other projects' pull requests plus a sentence
  * about the one that could not be read. A single error for the whole call would
- * turn one unauthenticated repository into an empty inbox.
+ * turn one unauthenticated repository into an empty reviewQueue.
  */
-export const InboxSource = Schema.Struct({
+export const ReviewQueueSource = Schema.Struct({
   project: Schema.String,
   root: Schema.String,
   /** When these rows were read from GitHub. Absent when they never were. */
@@ -1482,18 +1482,18 @@ export const InboxSource = Schema.Struct({
    * *are* rows and one signal is missing from them — GitHub refuses to compute
    * mergeability for a hundred pull requests on a busy repository, so conflicts
    * and behind-base are unknown there. Said out loud rather than degrading
-   * silently, which would leave a person reading a clean-looking inbox for a
+   * silently, which would leave a person reading a clean-looking reviewQueue for a
    * repository where nothing can say a PR is in conflict.
    */
   degraded: Schema.optional(Schema.String),
 });
 
-export type InboxSource = (typeof InboxSource)["Type"];
+export type ReviewQueueSource = (typeof ReviewQueueSource)["Type"];
 
-export const Inbox = Schema.Struct({
-  /** Every row, already sectioned and ordered. See {@link InboxItem.bucket}. */
-  items: Schema.Array(InboxItem),
-  sources: Schema.Array(InboxSource),
+export const ReviewQueue = Schema.Struct({
+  /** Every row, already sectioned and ordered. See {@link ReviewQueueItem.bucket}. */
+  items: Schema.Array(ReviewQueueItem),
+  sources: Schema.Array(ReviewQueueSource),
   /**
    * The authenticated `gh` login, or absent when there is none.
    *
@@ -1504,7 +1504,7 @@ export const Inbox = Schema.Struct({
   viewer: Schema.optional(Schema.String),
 });
 
-export type Inbox = (typeof Inbox)["Type"];
+export type ReviewQueue = (typeof ReviewQueue)["Type"];
 
 /**
  * ── `Schema.optional`, not `Schema.UndefinedOr`, for anything absent-able ────
@@ -1545,7 +1545,7 @@ export type PullRequestRemark = (typeof PullRequestRemark)["Type"];
 /**
  * One pull request, in the detail a panel shows and a briefing reads.
  *
- * Deliberately a different shape from {@link InboxItem}, which is a *row*: this
+ * Deliberately a different shape from {@link ReviewQueueItem}, which is a *row*: this
  * carries the description and the conversation, and the listing cannot afford
  * either — `gh pr list` asks for a hundred at once. The fields they share are
  * projected by the same functions in the daemon, so the state a row shows and
@@ -1585,12 +1585,12 @@ export const PullRequest = Schema.Struct({
   /**
    * The workspace reviewing this pull request, if a thread names one.
    *
-   * Here as well as on {@link InboxItem} because the panel is opened *from* a
-   * workspace and has to be able to offer the repair below without the inbox
+   * Here as well as on {@link ReviewQueueItem} because the panel is opened *from* a
+   * workspace and has to be able to offer the repair below without the reviewQueue
    * having been read at all.
    */
   workspace: Schema.optional(Schema.String),
-  /** That workspace does not contain this head. See {@link InboxItem.moved}. */
+  /** That workspace does not contain this head. See {@link ReviewQueueItem.moved}. */
   moved: Schema.Boolean,
   /** The size of the change, which is the first thing a reviewer wants. */
   additions: Schema.Int,
@@ -2889,7 +2889,7 @@ export class AwpRpcs extends RpcGroup.make(
    *   a create job    claims the workspace at its second-to-last step, minutes
    *                   after the reply the window already acted on
    *   a review        links the pull request from inside the job
-   *   the inbox join  adopts a pull request by its head commit, on a read
+   *   the reviewQueue join  adopts a pull request by its head commit, on a read
    *                   nobody made from this window
    *   another daemon  a second instance on the same store — see the note in
    *                   CLAUDE.md. Its writer is not this window at all
@@ -3237,26 +3237,26 @@ export class AwpRpcs extends RpcGroup.make(
    * daemon already knows how to sort.
    *
    * **No declared error.** A per-project failure is a field on the answer — see
-   * {@link InboxSource} — because one repository whose `gh` is unauthenticated
+   * {@link ReviewQueueSource} — because one repository whose `gh` is unauthenticated
    * must not cost the others their rows.
    *
    * `refresh` asks GitHub again rather than answering from what was last read.
    * The default is the cache, because this is called every time a panel is
    * opened and `gh pr list` against a busy repository is a couple of seconds.
    */
-  Rpc.make("InboxList", {
+  Rpc.make("ReviewQueueList", {
     payload: { refresh: Schema.optional(Schema.Boolean) },
-    success: Inbox,
+    success: ReviewQueue,
   }),
 
   /**
    * One pull request, by project and number.
    *
-   * Its own call rather than a fatter {@link Rpc InboxList}, because the two
+   * Its own call rather than a fatter {@link Rpc ReviewQueueList}, because the two
    * are asked at different times for different reasons: the listing fills a
    * panel that is open all day, and this answers "what is this pull request"
    * for the one a workspace is about. It also answers for a merged one, which
-   * the inbox by definition does not.
+   * the reviewQueue by definition does not.
    *
    * `undefined` when `gh` has no such pull request in that project — a number
    * typed wrongly, or a project that is not on GitHub at all.
@@ -3268,7 +3268,7 @@ export class AwpRpcs extends RpcGroup.make(
       /**
        * Ask GitHub again rather than answering from what was last read.
        *
-       * The panel needs it for the same reason the inbox does, and slightly
+       * The panel needs it for the same reason the reviewQueue does, and slightly
        * more: a description is edited while somebody reads it, and a comment
        * arrives on a pull request the whole time. The cache is what makes
        * switching tabs instant; this is the way to say "that is not what it

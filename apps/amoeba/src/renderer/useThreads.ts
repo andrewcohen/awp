@@ -12,7 +12,7 @@ import { listThreads, onReconnect, said, watchThreads } from "./daemon";
 //   a create job    claims the workspace at its second-to-last step, minutes
 //                   after the reply this window acted on. `progressKey`
 //   a review        links the pull request from inside the job. `onStarted`
-//   the inbox join  adopts one by its head commit, on a read nobody made
+//   the reviewQueue join  adopts one by its head commit, on a read nobody made
 //                   here. `useAdoptions`
 //
 // Three implementations of "read the threads again" is exactly the shape this

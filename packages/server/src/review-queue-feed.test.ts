@@ -6,7 +6,12 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { Github, type PullRequest, type PullRequestDetail } from "./github";
 import { DatabaseSync } from "node:sqlite";
-import { InboxFeed, PROJECTION, layer as inboxLayer, migrations } from "./inbox-feed";
+import {
+  ReviewQueueFeed,
+  PROJECTION,
+  layer as reviewQueueLayer,
+  migrations,
+} from "./review-queue-feed";
 
 // What only a real database can answer: that the cache survives the process.
 //
@@ -16,7 +21,7 @@ import { InboxFeed, PROJECTION, layer as inboxLayer, migrations } from "./inbox-
 // 4.5s for eleven pull requests, so a cold cache is five seconds of nothing per
 // project at exactly the moment somebody opens a window.
 //
-// A second `InboxFeed` over the same file stands in for the restart. It is the
+// A second `ReviewQueueFeed` over the same file stands in for the restart. It is the
 // same substitution `runner.test.ts` makes for the jobs runner, and for the same
 // reason: nothing about one instance's behaviour can demonstrate what the next
 // one finds.
@@ -67,11 +72,11 @@ const project = { name: "thicket", root: "/repos/thicket", importedAt: undefined
 
 /** One database file, and as many feeds over it as a test asks for. */
 const over = (file: string, gh: Layer.Layer<Github>) =>
-  inboxLayer.pipe(Layer.provide(gh), Layer.provide(Layer.orDie(dbLayer(file, migrations))));
+  reviewQueueLayer.pipe(Layer.provide(gh), Layer.provide(Layer.orDie(dbLayer(file, migrations))));
 
 const read = (file: string, gh: Layer.Layer<Github>, refresh = false) =>
   Effect.gen(function* () {
-    const feed = yield* InboxFeed;
+    const feed = yield* ReviewQueueFeed;
     return yield* feed.read({
       projects: [project],
       refresh,
@@ -82,7 +87,7 @@ const read = (file: string, gh: Layer.Layer<Github>, refresh = false) =>
 
 const detail = (file: string, gh: Layer.Layer<Github>) =>
   Effect.gen(function* () {
-    const feed = yield* InboxFeed;
+    const feed = yield* ReviewQueueFeed;
     return yield* feed.detail(project.root, 7);
   }).pipe(Effect.provide(over(file, gh)), Effect.scoped, Effect.runPromise);
 

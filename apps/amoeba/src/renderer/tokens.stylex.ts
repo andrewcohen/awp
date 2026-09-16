@@ -160,7 +160,7 @@ export const hue = stylex.defineConsts({
 //
 // The tokens below are grouped by what they describe, not by hue, because the
 // mistake available here is reaching for a colour that is already spoken for by
-// a different subject. Both were being drawn with one set until the inbox
+// a different subject. Both were being drawn with one set until the reviewQueue
 // arrived, and the result was a green that meant "a session is alive" in one
 // column and "a pull request is approved" in the next.
 //
@@ -276,7 +276,7 @@ export const colors = stylex.defineVars({
    *
    * It was `accent` first, and the window came back as "too much orange". The
    * reason is arithmetic rather than taste: the accent is for one thing on a
-   * screen — see its own note — and the inbox draws a review state on *every*
+   * screen — see its own note — and the reviewQueue draws a review state on *every*
    * row of a section, so a single list spent the accent thirty times.
    *
    * `ready` is the near miss and is worse than it looks. It is blue and it does

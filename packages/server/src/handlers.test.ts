@@ -21,7 +21,10 @@ import { Chat } from "./chat";
 import { Faces } from "./faces";
 import { Github, GithubError, type Remark } from "./github";
 import type { PullRequest } from "./github-parse";
-import { layer as inboxLayer, migrations as inboxMigrations } from "./inbox-feed";
+import {
+  layer as reviewQueueLayer,
+  migrations as reviewQueueMigrations,
+} from "./review-queue-feed";
 import * as handlers from "./handlers";
 import { IntentError, WorkspaceIntent } from "./intent";
 import { type DiffOf, Jj, JjError, type RevisionsIn } from "./jj";
@@ -70,7 +73,7 @@ const all = [session({}), session({ name: DEAD, ended: true, exitCode: 130 })];
 /**
  * The listing, plus a review session when a test asks for one.
  *
- * A function of the fakes rather than a constant, because one thing the inbox
+ * A function of the fakes rather than a constant, because one thing the reviewQueue
  * joins against is the *session* list — a review workspace is openable as soon
  * as its session exists, which is a step before the thread claims it.
  */
@@ -471,18 +474,18 @@ const run = <A>(body: (rpc: Client) => Effect.Effect<A, unknown, Scope.Scope>, f
         // `(project, workspace)` pair a thread claims it by, and separating
         // them here would hide any future statement that joins the two.
         Layer.provide(
-          // The inbox feed joins this group because its cache is rows now too —
+          // The reviewQueue feed joins this group because its cache is rows now too —
           // and it goes on the same connection for the reason the daemon uses
           // one file: a listing read from disk and a thread that claims the
           // workspace it names are two halves of one answer.
-          Layer.mergeAll(threadsLayer, reviewsLayer, projectsLayer, inboxLayer).pipe(
+          Layer.mergeAll(threadsLayer, reviewsLayer, projectsLayer, reviewQueueLayer).pipe(
             Layer.provide(
               Layer.orDie(
                 dbLayer(join(scratch, `stores-${(files += 1)}.sqlite`), [
                   ...threadMigrations,
                   ...reviewMigrations,
                   ...projectMigrations,
-                  ...inboxMigrations,
+                  ...reviewQueueMigrations,
                 ]),
               ),
             ),
@@ -492,10 +495,10 @@ const run = <A>(body: (rpc: Client) => Effect.Effect<A, unknown, Scope.Scope>, f
         // the contract and the runner, and a file on disk would make these
         // tests share state with each other and with the developer's daemon.
         Layer.provide(jobsLayer([erase(createWorkspace(inert))]).pipe(Layer.provide(layerMemory))),
-        // A fake `gh`, and the *real* inbox feed over it — provided with the
+        // A fake `gh`, and the *real* reviewQueue feed over it — provided with the
         // stores below, because its cache is rows. The feed is where the cache,
         // the per-project failure and the assembly live, so faking it instead
-        // would leave the whole of `InboxList` untested: what the fake has to
+        // would leave the whole of `ReviewQueueList` untested: what the fake has to
         // stand in for is the subprocess, and nothing above it.
         Layer.provide(
           Layer.succeed(Github)({
@@ -2161,16 +2164,16 @@ describe("projects over the contract", () => {
   });
 });
 
-// ── the inbox over the contract ────────────────────────────────────────────
+// ── the reviewQueue over the contract ────────────────────────────────────────────
 //
 // What only this suite can check: the join between GitHub's answer and awp's
 // own records. The bucket rules and the ordering are pure and live in
-// `inbox.test.ts`; what is here is the seam — that a derived project is asked
+// `reviewQueue.test.ts`; what is here is the seam — that a derived project is asked
 // about at all, that a thread member called `pr-<n>` is found and reported as
 // the row's workspace, and that one repository's failure keeps the others.
-describe("InboxList", () => {
+describe("ReviewQueueList", () => {
   it("sections the pull requests of every project awp knows", async () => {
-    const inbox = await run((rpc) => rpc.InboxList({}), {
+    const reviewQueue = await run((rpc) => rpc.ReviewQueueList({}), {
       viewer: "me",
       prs: [
         pr({ number: 1, headRef: "theirs", author: "someone", requested: ["me"] }),
@@ -2181,28 +2184,28 @@ describe("InboxList", () => {
 
     // The fixture's sessions imply the project `awp`, which is the only one
     // here — so every PR appears once, under the heading its state earns.
-    expect(inbox.viewer).toBe("me");
-    expect(inbox.items.map((item) => [item.number, item.bucket])).toEqual([
+    expect(reviewQueue.viewer).toBe("me");
+    expect(reviewQueue.items.map((item) => [item.number, item.bucket])).toEqual([
       [1, "needs-your-review"],
       [3, "needs-action"],
       [2, "ready-to-merge"],
     ]);
-    expect(inbox.sources.map((source) => source.project)).toEqual(["awp"]);
-    expect(inbox.sources[0]?.fetchedAt).toBeInstanceOf(Date);
-    expect(inbox.sources[0]?.failure).toBeUndefined();
+    expect(reviewQueue.sources.map((source) => source.project)).toEqual(["awp"]);
+    expect(reviewQueue.sources[0]?.fetchedAt).toBeInstanceOf(Date);
+    expect(reviewQueue.sources[0]?.failure).toBeUndefined();
   });
 
   it("with nobody signed in, nothing is yours and nothing wants you", async () => {
     // The failure mode this guards: every viewer-relative bucket is empty, and
-    // an inbox that is empty because `gh` is not authenticated looks exactly
-    // like an inbox with nothing in it. The login on the answer is what lets a
+    // an reviewQueue that is empty because `gh` is not authenticated looks exactly
+    // like an reviewQueue with nothing in it. The login on the answer is what lets a
     // client say which it is.
-    const inbox = await run((rpc) => rpc.InboxList({}), {
+    const reviewQueue = await run((rpc) => rpc.ReviewQueueList({}), {
       prs: [pr({ number: 1, author: "me", requested: ["me"] })],
     });
-    expect(inbox.viewer).toBeUndefined();
-    expect(inbox.items.map((item) => item.bucket)).toEqual(["other-open"]);
-    expect(inbox.items[0]?.mine).toBe(false);
+    expect(reviewQueue.viewer).toBeUndefined();
+    expect(reviewQueue.items.map((item) => item.bucket)).toEqual(["other-open"]);
+    expect(reviewQueue.items[0]?.mine).toBe(false);
   });
 
   it("names the job building a review, so the row can show its progress", async () => {
@@ -2212,12 +2215,12 @@ describe("InboxList", () => {
       (rpc) =>
         Effect.gen(function* () {
           const started = yield* rpc.ReviewStart({ project: "awp", number: 44 });
-          return { started, inbox: yield* rpc.InboxList({}) };
+          return { started, reviewQueue: yield* rpc.ReviewQueueList({}) };
         }),
       { viewer: "me", prs: [pr({ number: 44, title: "a change" })] },
     );
 
-    const row = answer.inbox.items.find((item) => item.number === 44);
+    const row = answer.reviewQueue.items.find((item) => item.number === 44);
     expect(row?.job).toBe(answer.started.job?.id);
   });
 
@@ -2236,12 +2239,12 @@ describe("InboxList", () => {
             thread: thread.id,
             member: { project: "awp", workspace: "lantern" },
           });
-          const inbox = yield* rpc.InboxList({});
+          const reviewQueue = yield* rpc.ReviewQueueList({});
           // Read again, from the store, to show the link was written down and
           // not merely reported — which is what makes it survive the branch
           // being renamed.
           const every = yield* rpc.ThreadList();
-          return { inbox, thread: every.find((one) => one.id === thread.id) };
+          return { reviewQueue, thread: every.find((one) => one.id === thread.id) };
         }),
       {
         viewer: "me",
@@ -2250,7 +2253,7 @@ describe("InboxList", () => {
       },
     );
 
-    const row = answer.inbox.items.find((item) => item.number === 51);
+    const row = answer.reviewQueue.items.find((item) => item.number === 51);
     expect(row?.thread).toBe(answer.thread?.id);
     // And the row now offers to open rather than to create: it said "makes a
     // workspace" for a workspace already on disk.
@@ -2275,11 +2278,11 @@ describe("InboxList", () => {
             thread: thread.id,
             member: { project: "awp", workspace: "lantern" },
           });
-          const inbox = yield* rpc.InboxList({});
+          const reviewQueue = yield* rpc.ReviewQueueList({});
           // Read back from the store: what makes this survive the branch being
           // renamed is that it was written down, not that it was reported.
           const every = yield* rpc.ThreadList();
-          return { inbox, thread: every.find((one) => one.id === thread.id) };
+          return { reviewQueue, thread: every.find((one) => one.id === thread.id) };
         }),
       {
         viewer: "me",
@@ -2290,7 +2293,7 @@ describe("InboxList", () => {
       },
     );
 
-    const row = answer.inbox.items.find((item) => item.number === 61);
+    const row = answer.reviewQueue.items.find((item) => item.number === 61);
     expect(row?.thread).toBe(answer.thread?.id);
     expect(row?.workspace).toBe("lantern");
     expect(answer.thread?.prs).toEqual([{ project: "awp", number: 61 }]);
@@ -2308,7 +2311,7 @@ describe("InboxList", () => {
             thread: thread.id,
             member: { project: "awp", workspace: "lantern" },
           });
-          return yield* rpc.InboxList({});
+          return yield* rpc.ReviewQueueList({});
         }),
       {
         viewer: "me",
@@ -2333,7 +2336,7 @@ describe("InboxList", () => {
             thread: thread.id,
             member: { project: "awp", workspace: "lantern" },
           });
-          return yield* rpc.InboxList({});
+          return yield* rpc.ReviewQueueList({});
         }),
       {
         viewer: "me",
@@ -2358,7 +2361,7 @@ describe("InboxList", () => {
             thread: thread.id,
             member: { project: "awp", workspace: "lantern" },
           });
-          return yield* rpc.InboxList({});
+          return yield* rpc.ReviewQueueList({});
         }),
       {
         viewer: "me",
@@ -2382,7 +2385,7 @@ describe("InboxList", () => {
             thread: thread.id,
             member: { project: "awp", workspace: "lantern" },
           });
-          return yield* rpc.InboxList({});
+          return yield* rpc.ReviewQueueList({});
         }),
       {
         viewer: "me",
@@ -2410,15 +2413,15 @@ describe("InboxList", () => {
             thread: thread.id,
             pr: { project: "awp", number: 88 },
           });
-          return { linked, inbox: yield* rpc.InboxList({}) };
+          return { linked, reviewQueue: yield* rpc.ReviewQueueList({}) };
         }),
       { viewer: "me", prs: [pr({ number: 88 })] },
     );
 
     expect(answer.linked.prs).toEqual([{ project: "awp", number: 88 }]);
-    expect(answer.inbox.items[0]?.thread).toBe(answer.linked.id);
+    expect(answer.reviewQueue.items[0]?.thread).toBe(answer.linked.id);
     // And no workspace: the link says which thread, not that anything is built.
-    expect(answer.inbox.items[0]?.workspace).toBeUndefined();
+    expect(answer.reviewQueue.items[0]?.workspace).toBeUndefined();
   });
 
   it("a pull request belongs to one thread, and the second claim wins", async () => {
@@ -2464,7 +2467,7 @@ describe("InboxList", () => {
     // The fixture's own sessions stand in for a review workspace's: the claim
     // is the create job's second-to-last step, so a row that waited for it said
     // nothing for the thirty seconds a person is actually watching.
-    const inbox = await run((rpc) => rpc.InboxList({}), {
+    const reviewQueue = await run((rpc) => rpc.ReviewQueueList({}), {
       viewer: "me",
       // `session()` in this suite names `awp.awp.<workspace>.agent`, and
       // `identities` recovers the pair from the labels — so a session called
@@ -2473,29 +2476,29 @@ describe("InboxList", () => {
       prs: [pr({ number: 31, requested: ["me"] })],
     });
 
-    expect(inbox.items[0]?.workspace).toBe("pr-31");
+    expect(reviewQueue.items[0]?.workspace).toBe("pr-31");
     // And no thread has claimed it, which the row has to be able to tell apart:
     // it is what says whether the job finished.
-    expect(inbox.items[0]?.thread).toBeUndefined();
+    expect(reviewQueue.items[0]?.thread).toBeUndefined();
   });
 
   it("a project with no GitHub remote is not a source, and not a complaint", async () => {
     // Reported from a real window: a vault of notes and a scratch repository
     // with no remote each produced a red sentence on every refresh — both true,
     // neither actionable. A permanent warning is a warning that gets skipped.
-    const inbox = await run((rpc) => rpc.InboxList({}), {
+    const reviewQueue = await run((rpc) => rpc.ReviewQueueList({}), {
       viewer: "me",
       // The derived project `awp` resolves to this root through the fake jj.
       offGithub: "/repos/tmp",
       prs: [pr({ number: 1 })],
     });
 
-    expect(inbox.sources).toEqual([]);
-    expect(inbox.items).toEqual([]);
+    expect(reviewQueue.sources).toEqual([]);
+    expect(reviewQueue.items).toEqual([]);
   });
 
   it("reports the workspace already reviewing a pull request", async () => {
-    const inbox = await run(
+    const reviewQueue = await run(
       (rpc) =>
         Effect.gen(function* () {
           const thread = yield* rpc.ThreadCreate({ title: "#7 a change" });
@@ -2505,13 +2508,13 @@ describe("InboxList", () => {
             thread: thread.id,
             member: { project: "awp", workspace: "pr-7" },
           });
-          return { inbox: yield* rpc.InboxList({}), thread };
+          return { reviewQueue: yield* rpc.ReviewQueueList({}), thread };
         }),
       { viewer: "me", prs: [pr({ number: 7, requested: ["me"] })] },
     );
 
-    expect(inbox.inbox.items[0]?.workspace).toBe("pr-7");
-    expect(inbox.inbox.items[0]?.thread).toBe(inbox.thread.id);
+    expect(reviewQueue.reviewQueue.items[0]?.workspace).toBe("pr-7");
+    expect(reviewQueue.reviewQueue.items[0]?.thread).toBe(reviewQueue.thread.id);
   });
 });
 
@@ -2526,7 +2529,7 @@ describe("a checkout that is behind its pull request", () => {
   };
 
   it("says a row has moved when its checkout does not contain the head", async () => {
-    const inbox = await run(
+    const reviewQueue = await run(
       (rpc) =>
         Effect.gen(function* () {
           const thread = yield* rpc.ThreadCreate({ title: "#70 a change" });
@@ -2534,18 +2537,18 @@ describe("a checkout that is behind its pull request", () => {
             thread: thread.id,
             member: { project: "awp", workspace: "pr-70" },
           });
-          return yield* rpc.InboxList({});
+          return yield* rpc.ReviewQueueList({});
         }),
       { ...wanted, contains: false },
     );
 
-    expect(inbox.items[0]?.moved).toBe(true);
+    expect(reviewQueue.items[0]?.moved).toBe(true);
   });
 
   it("says nothing has moved when the checkout has the head behind it", async () => {
     // Asked as "is it an ancestor", not "is it equal": somebody who committed
     // something of their own on top is still reviewing the right code.
-    const inbox = await run(
+    const reviewQueue = await run(
       (rpc) =>
         Effect.gen(function* () {
           const thread = yield* rpc.ThreadCreate({ title: "#70 a change" });
@@ -2553,12 +2556,12 @@ describe("a checkout that is behind its pull request", () => {
             thread: thread.id,
             member: { project: "awp", workspace: "pr-70" },
           });
-          return yield* rpc.InboxList({});
+          return yield* rpc.ReviewQueueList({});
         }),
       { ...wanted, contains: true },
     );
 
-    expect(inbox.items[0]?.moved).toBe(false);
+    expect(reviewQueue.items[0]?.moved).toBe(false);
   });
 });
 

@@ -42,10 +42,10 @@ import { basename } from "node:path";
 import { Clock, Effect, FileSystem, Option, Path, Ref, Schema, Stream } from "effect";
 import { Chat } from "./chat";
 import { Faces } from "./faces";
-import { InboxFeed } from "./inbox-feed";
+import { ReviewQueueFeed } from "./review-queue-feed";
 import { type Repairable, looksMine, repairPrompt } from "./repair";
 import { authored, reviewRequested, reviewRerequested } from "./github-parse";
-import { type Claim, reviewKey, reviewNumber, reviewOf, reviewWorkspace } from "./inbox";
+import { type Claim, reviewKey, reviewNumber, reviewOf, reviewWorkspace } from "./review-queue";
 import { Jj } from "./jj";
 import { archiveThreadRef } from "./jobs/archive-thread";
 import { createWorkspaceRef, workspacePath } from "./jobs/create-workspace";
@@ -430,7 +430,7 @@ export const layer = AwpRpcs.toLayer(
     const threads = yield* Threads;
     const reviews = yield* Reviews;
     const projects = yield* Projects;
-    const inbox = yield* InboxFeed;
+    const reviewQueue = yield* ReviewQueueFeed;
     const facts = yield* WorkspaceState;
     const config = yield* Settings;
     const jj = yield* Jj;
@@ -723,7 +723,7 @@ export const layer = AwpRpcs.toLayer(
      * Every project awp knows about: the imported rows, plus what the running
      * sessions imply.
      *
-     * A closure rather than the body of `ProjectList`, because the inbox is
+     * A closure rather than the body of `ProjectList`, because the reviewQueue is
      * over projects too and a second way of working out which those are would
      * be a second answer to the same question. Merged here rather than in a
      * client because only the daemon holds both halves; the imported row wins,
@@ -1382,14 +1382,14 @@ export const layer = AwpRpcs.toLayer(
         }),
 
       /**
-       * Every open pull request, sectioned and ordered. See `inbox.ts`.
+       * Every open pull request, sectioned and ordered. See `reviewQueue.ts`.
        *
        * Thin, like every handler here: the projects come from `allProjects`,
-       * the rows and their cache from `InboxFeed`, and the only thing composed
+       * the rows and their cache from `ReviewQueueFeed`, and the only thing composed
        * on the spot is the join between the two records awp holds — a thread
        * and its members — and the pull request a workspace's name identifies.
        */
-      InboxList: ({ refresh }) =>
+      ReviewQueueList: ({ refresh }) =>
         Effect.gen(function* () {
           const projectList = yield* allProjects();
           const held = yield* threads.list().pipe(Effect.orDie);
@@ -1492,7 +1492,7 @@ export const layer = AwpRpcs.toLayer(
 
           const claimed: Claim = (project, number) => found.get(`${project}:${number}`);
 
-          const answer = yield* inbox.read({
+          const answer = yield* reviewQueue.read({
             projects: projectList,
             refresh: refresh === true,
             claimed,
@@ -1673,7 +1673,7 @@ export const layer = AwpRpcs.toLayer(
           // Through the feed, not straight at `gh`: the panel is unmounted every
           // time somebody looks at the diff instead, so an uncached read here
           // would be a second of nothing on every tab switch.
-          const detail = yield* inbox
+          const detail = yield* reviewQueue
             .detail(found.root, number, refresh === true)
             .pipe(
               Effect.mapError(
@@ -1686,11 +1686,11 @@ export const layer = AwpRpcs.toLayer(
 
           // Which workspace is reviewing it, and whether that checkout still
           // contains it. Both are on the answer so the panel can offer the
-          // repair without the inbox having been read at all — it is opened
-          // *from* a workspace, and the inbox may never have been looked at.
+          // repair without the reviewQueue having been read at all — it is opened
+          // *from* a workspace, and the reviewQueue may never have been looked at.
           //
           // The recorded link first, then the `pr-<n>` naming, which is the same
-          // order `InboxList` uses and for the same reason: the link is the
+          // order `ReviewQueueList` uses and for the same reason: the link is the
           // claim and the name is the convention.
           const held = yield* threads.list().pipe(Effect.orDie);
           const live = held.filter((thread) => thread.archivedAt === undefined);
@@ -1739,7 +1739,7 @@ export const layer = AwpRpcs.toLayer(
             );
           }
 
-          const pr = yield* inbox
+          const pr = yield* reviewQueue
             .find(found.root, number)
             .pipe(
               Effect.mapError(
@@ -1756,7 +1756,7 @@ export const layer = AwpRpcs.toLayer(
             );
           }
 
-          const who = yield* inbox.who();
+          const who = yield* reviewQueue.who();
           const settings = yield* config.read();
           const target: Repairable = {
             number: pr.number,
@@ -1846,7 +1846,7 @@ export const layer = AwpRpcs.toLayer(
           }
 
           const workspace = reviewWorkspace(number);
-          // Shared with `InboxList`, which has to find the same job — see
+          // Shared with `ReviewQueueList`, which has to find the same job — see
           // `reviewKey`.
           const key = reviewKey(project, number);
 
@@ -1881,7 +1881,7 @@ export const layer = AwpRpcs.toLayer(
             }
           }
 
-          const pr = yield* inbox
+          const pr = yield* reviewQueue
             .find(found.root, number)
             .pipe(Effect.mapError((error) => declined(error.reason)));
           if (pr === undefined) {
@@ -1900,7 +1900,7 @@ export const layer = AwpRpcs.toLayer(
 
           const thread = yield* threads.create(label).pipe(Effect.orDie);
           // Linked here, at the moment the thread exists, so the sidebar and
-          // the inbox row can name the pull request immediately rather than
+          // the reviewQueue row can name the pull request immediately rather than
           // waiting for a job that takes half a minute. The job restores the
           // link if a rollback takes the thread — see the `thread` step, which
           // is the one place a thread is rebuilt.

@@ -488,7 +488,7 @@ const said = (text: string, failed = false): unknown => ({
  *
  * `[in progress]` rather than a column of every status, because pending is the
  * ordinary case and marking it would be marking every row — the same
- * arithmetic as the inbox's leading icon having none for the common state.
+ * arithmetic as the reviewQueue's leading icon having none for the common state.
  */
 export const tasksSaid = (tasks: ReadonlyArray<Task>, scope: string): string => {
   if (tasks.length === 0) {

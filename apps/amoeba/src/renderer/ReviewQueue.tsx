@@ -10,8 +10,8 @@ import { ProhibitIcon } from "@phosphor-icons/react/Prohibit";
 import { WarningIcon } from "@phosphor-icons/react/Warning";
 import { XCircleIcon } from "@phosphor-icons/react/XCircle";
 import { type Job, isTerminal } from "@awp-kit/jobs";
-import type { InboxItem } from "@awp-kit/protocol";
-import { bucketLabel, inboxBuckets } from "@awp-kit/protocol";
+import type { ReviewQueueItem } from "@awp-kit/protocol";
+import { bucketLabel, reviewQueueBuckets } from "@awp-kit/protocol";
 import * as stylex from "@stylexjs/stylex";
 import { GitPullRequestIcon } from "@phosphor-icons/react/GitPullRequest";
 import { Nothing } from "./Nothing";
@@ -20,12 +20,12 @@ import { said, startReview } from "./daemon";
 import { guide } from "./stacks";
 import { typeset } from "./typeset";
 import { colors, space, text } from "./tokens.stylex";
-import { useInbox } from "./useInbox";
+import { useReviewQueue } from "./useReviewQueue";
 
 // Every open pull request, sectioned by what the next move is.
 //
-// Ported from the deck's inbox scope. The sections, their order and the order of
-// the rows inside them all arrive decided — see `inbox.ts` in the daemon — so
+// Ported from the deck's reviewQueue scope. The sections, their order and the order of
+// the rows inside them all arrive decided — see `reviewQueue.ts` in the daemon — so
 // this file is only about what a row says and what pressing it does.
 //
 // ── what a row has to carry, and what it must not ─────────────────────────
@@ -216,7 +216,7 @@ const styles = stylex.create({
  * a flag reads as a verdict.
  */
 const lead = (
-  item: InboxItem,
+  item: ReviewQueueItem,
 ):
   | { readonly Icon: typeof WarningIcon; readonly tone: Tone; readonly says: string }
   | undefined => {
@@ -256,10 +256,10 @@ type Tone = "bad" | "waiting" | "asked" | "live" | "muted";
  *
  * `notes` is only on your own pull request and only when GitHub's verdict did
  * not move, which is precisely the case a reviewer's comment leaves invisible
- * everywhere else — see `InboxItem.hasReviewComments`.
+ * everywhere else — see `ReviewQueueItem.hasReviewComments`.
  */
 const also = (
-  item: InboxItem,
+  item: ReviewQueueItem,
 ): ReadonlyArray<{
   readonly key: string;
   readonly Icon: typeof WarningIcon;
@@ -342,7 +342,7 @@ const toned = (tone: Tone | undefined): stylex.StyleXStyles | undefined => {
  * makes the title unreadable. The states are said here instead, once, in the
  * order they are drawn.
  */
-const spoken = (item: InboxItem, state: Doing | undefined): string => {
+const spoken = (item: ReviewQueueItem, state: Doing | undefined): string => {
   const marks = [lead(item)?.says, ...also(item).map((mark) => mark.says)].filter(
     (one): one is string => one !== undefined,
   );
@@ -388,7 +388,11 @@ interface Doing {
   readonly why?: string | undefined;
 }
 
-const doing = (item: InboxItem, jobs: ReadonlyArray<Job>, starting: boolean): Doing | undefined => {
+const doing = (
+  item: ReviewQueueItem,
+  jobs: ReadonlyArray<Job>,
+  starting: boolean,
+): Doing | undefined => {
   if (starting) {
     return { says: "starting…", tone: "muted" };
   }
@@ -423,7 +427,7 @@ const doing = (item: InboxItem, jobs: ReadonlyArray<Job>, starting: boolean): Do
 const clock = (at: Date): string =>
   `${String(at.getHours()).padStart(2, "0")}:${String(at.getMinutes()).padStart(2, "0")}`;
 
-export function Inbox({
+export function ReviewQueue({
   jobs,
   onOpen,
   onStarted,
@@ -435,7 +439,7 @@ export function Inbox({
   /** A review was started, so the threads and jobs App holds are out of date. */
   readonly onStarted: () => void;
 }) {
-  const { inbox, reading, failure, reload } = useInbox();
+  const { reviewQueue, reading, failure, reload } = useReviewQueue();
   // The refusal from the last press, if there was one. One at a time, because
   // there is one pointer and the sentence is about what it just did.
   const [refused, setRefused] = useState<string | undefined>();
@@ -447,7 +451,7 @@ export function Inbox({
   // the reply would be a second source of truth about the same work.
   const [starting, setStarting] = useState<ReadonlySet<string>>(new Set());
 
-  const press = (item: InboxItem): void => {
+  const press = (item: ReviewQueueItem): void => {
     if (item.workspace !== undefined) {
       onOpen(item.project, item.workspace);
       return;
@@ -487,24 +491,26 @@ export function Inbox({
     return <div {...stylex.props(styles.trouble)}>{failure}</div>;
   }
 
-  const items = inbox?.items ?? [];
+  const items = reviewQueue?.items ?? [];
   // Read once here rather than per section: the sections are a fixed list and
   // most of them are empty on any given day.
   const bySection = new Map(
-    inboxBuckets.map((bucket) => [bucket, items.filter((item) => item.bucket === bucket)] as const),
+    reviewQueueBuckets.map(
+      (bucket) => [bucket, items.filter((item) => item.bucket === bucket)] as const,
+    ),
   );
-  const newest = (inbox?.sources ?? [])
+  const newest = (reviewQueue?.sources ?? [])
     .map((source) => source.fetchedAt)
     .filter((at): at is Date => at !== undefined)
     .toSorted((a, b) => b.getTime() - a.getTime())[0];
-  const broken = (inbox?.sources ?? []).filter((source) => source.failure !== undefined);
+  const broken = (reviewQueue?.sources ?? []).filter((source) => source.failure !== undefined);
 
   return (
     <div {...stylex.props(styles.panel)}>
       <div {...stylex.props(styles.controls)}>
         <span {...stylex.props(styles.when)}>
           {/* The rows stay on screen while this says so, which is what the
-              atoms are for — see `useInbox`. So it reads as an annotation on a
+              atoms are for — see `useReviewQueue`. So it reads as an annotation on a
               list rather than as a replacement for one. */}
           {reading ? "refreshing" : newest === undefined ? "" : `read at ${clock(newest)}`}
         </span>
@@ -520,9 +526,9 @@ export function Inbox({
 
       <div {...stylex.props(styles.list)}>
         {/* Said before the rows, because it changes what the rows *mean*: with
-            no login every viewer-relative section is empty, and an inbox that is
+            no login every viewer-relative section is empty, and an reviewQueue that is
             empty for that reason looks exactly like one with nothing in it. */}
-        {inbox !== undefined && inbox.viewer === undefined && (
+        {reviewQueue !== undefined && reviewQueue.viewer === undefined && (
           <div {...stylex.props(styles.trouble)}>
             gh is not signed in, so nothing here can be yours or waiting on you —{" "}
             <code>gh auth login</code>
@@ -540,9 +546,9 @@ export function Inbox({
         {/* Rows arrived, and one signal in them did not. Muted rather than
             warn: nothing is broken and nothing needs fixing — it is a fact
             about what these rows can say. Silence would be worse than either:
-            a clean-looking inbox for a repository where nothing is *able* to
+            a clean-looking reviewQueue for a repository where nothing is *able* to
             report a conflict. */}
-        {(inbox?.sources ?? [])
+        {(reviewQueue?.sources ?? [])
           .filter((source) => source.degraded !== undefined)
           .map((source) => (
             <div key={`${source.project}-degraded`} {...stylex.props(styles.empty)}>
@@ -552,7 +558,7 @@ export function Inbox({
 
         {refused !== undefined && <div {...stylex.props(styles.trouble)}>{refused}</div>}
 
-        {inbox !== undefined && items.length === 0 && (
+        {reviewQueue !== undefined && items.length === 0 && (
           <Nothing
             mark={<GitPullRequestIcon size={22} weight="light" />}
             say="no open pull requests"
@@ -560,7 +566,7 @@ export function Inbox({
           />
         )}
 
-        {inboxBuckets.map((bucket) => {
+        {reviewQueueBuckets.map((bucket) => {
           const rows = bySection.get(bucket) ?? [];
           if (rows.length === 0) {
             return undefined;

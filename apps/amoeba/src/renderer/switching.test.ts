@@ -20,7 +20,7 @@ describe("the order", () => {
   const threads = [
     thread("a", "tabular exports"),
     thread("b", "the flaky login test"),
-    thread("c", "paginate the inbox"),
+    thread("c", "paginate the reviewQueue"),
   ];
 
   test("the previous thread is first, and the current one is not", () => {

@@ -1,4 +1,4 @@
-// The inbox's read model: which section a pull request belongs in, where it
+// The reviewQueue's read model: which section a pull request belongs in, where it
 // sits in its stack, and what order the rows come out in.
 //
 // Pure, and tested without a subprocess or a socket — the same split
@@ -6,8 +6,8 @@
 // in here is a rule about precedence, and precedence is exactly what a test can
 // pin and a person cannot check by looking.
 
-import type { InboxBucket, InboxItem } from "@awp-kit/protocol";
-import { inboxBuckets } from "@awp-kit/protocol";
+import type { ReviewQueueBucket, ReviewQueueItem } from "@awp-kit/protocol";
+import { reviewQueueBuckets } from "@awp-kit/protocol";
 import type { PullRequest, Viewer } from "./github-parse";
 import { authored, reviewRequested, reviewRerequested } from "./github-parse";
 
@@ -39,7 +39,7 @@ import { authored, reviewRequested, reviewRerequested } from "./github-parse";
  * queued without being either lands in "Mine", which is a row in the right
  * place with the wrong heading rather than a row nobody can find.
  */
-export const bucketOf = (pr: PullRequest, viewer: Viewer | undefined): InboxBucket => {
+export const bucketOf = (pr: PullRequest, viewer: Viewer | undefined): ReviewQueueBucket => {
   if (reviewRequested(pr, viewer)) {
     return "needs-your-review";
   }
@@ -68,9 +68,9 @@ export const bucketOf = (pr: PullRequest, viewer: Viewer | undefined): InboxBuck
 };
 
 /** Where a bucket sits in the running order. */
-const rank = (bucket: InboxBucket): number => {
-  const found = inboxBuckets.indexOf(bucket);
-  return found < 0 ? inboxBuckets.length : found;
+const rank = (bucket: ReviewQueueBucket): number => {
+  const found = reviewQueueBuckets.indexOf(bucket);
+  return found < 0 ? reviewQueueBuckets.length : found;
 };
 
 /**
@@ -78,7 +78,7 @@ const rank = (bucket: InboxBucket): number => {
  *
  * A stack edge is one PR's base branch being another open PR's head branch, so
  * the whole graph is already in the listing — no extra query, and no synthesis.
- * That is the payoff of the inbox being a list of pull requests rather than of
+ * That is the payoff of the reviewQueue being a list of pull requests rather than of
  * workspaces: the deck needed a third virtual-row pass here purely because a
  * stack's middle link is often somebody else's PR, which its rows could not
  * represent.
@@ -95,7 +95,7 @@ interface Placed {
   readonly members: number;
   /** The most actionable bucket in the whole stack, which is the heading
    * every member of it draws under. */
-  readonly section: InboxBucket;
+  readonly section: ReviewQueueBucket;
 }
 
 /**
@@ -108,7 +108,7 @@ interface Placed {
  */
 const place = (
   prs: ReadonlyArray<PullRequest>,
-  buckets: ReadonlyMap<number, InboxBucket>,
+  buckets: ReadonlyMap<number, ReviewQueueBucket>,
 ): Map<number, Placed> => {
   const byHead = new Map<string, PullRequest>();
   for (const pr of prs) {
@@ -148,7 +148,7 @@ const place = (
   /** The head branch of a row's topmost open ancestor — the stack's identity. */
   const rootOf = (pr: PullRequest): string => (chains.get(pr.number)?.at(-1) ?? pr).headRef;
 
-  const sections = new Map<string, InboxBucket>();
+  const sections = new Map<string, ReviewQueueBucket>();
   const sizes = new Map<string, number>();
   for (const pr of prs) {
     const root = rootOf(pr);
@@ -220,7 +220,7 @@ export type Claim = (project: string, number: number) => Claimed | undefined;
  * The idempotency key a review's job is enqueued under.
  *
  * Here rather than in the handler because two call sites need the identical
- * string — `ReviewStart` to refuse a second job, `InboxList` to find the one a
+ * string — `ReviewStart` to refuse a second job, `ReviewQueueList` to find the one a
  * row is waiting on — and a key composed twice is a key that eventually differs
  * by a colon. It names the *project*, not the repository, because a project is
  * what the rest of awp is addressed by and two projects can hold one PR number.
@@ -232,7 +232,7 @@ export const reviewKey = (project: string, number: number): string => `review:${
  *
  * The inverse, beside it, because the two directions are the same fact and a
  * format read in one file and written in another is a format that drifts by a
- * colon. `InboxList` reads it: matching a job by its key is one string
+ * colon. `ReviewQueueList` reads it: matching a job by its key is one string
  * comparison per job, where reading the job's stored input would be a schema
  * decode per job on every listing.
  *
@@ -268,15 +268,15 @@ export const reviewOf = (
  * rule with two implementations has one that drifts, and this one has four
  * clauses.
  */
-export const inboxItems = (
+export const reviewQueueItems = (
   sources: ReadonlyArray<Source>,
   viewer: Viewer | undefined,
   claimed: Claim,
-): ReadonlyArray<InboxItem> => {
-  const rows: Array<InboxItem & { readonly root: string }> = [];
+): ReadonlyArray<ReviewQueueItem> => {
+  const rows: Array<ReviewQueueItem & { readonly root: string }> = [];
 
   for (const source of sources) {
-    const buckets = new Map<number, InboxBucket>(
+    const buckets = new Map<number, ReviewQueueBucket>(
       source.prs.map((pr) => [pr.number, bucketOf(pr, viewer)]),
     );
     const placed = place(source.prs, buckets);

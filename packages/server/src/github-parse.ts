@@ -63,7 +63,7 @@ export interface RawPullRequest {
  * Measured on a real repository, and it is worth knowing which way round the
  * cost lies: the field is not slow, it is *fatal*. So the listing asks for it
  * and falls back to asking without it, which is the difference between one
- * repository having no conflict signal and it having no inbox at all.
+ * repository having no conflict signal and it having no reviewQueue at all.
  */
 export const EXPENSIVE_FIELD = "mergeStateStatus";
 
@@ -267,7 +267,7 @@ const hasReviewComments = (reviews: RawPullRequest["reviews"]): boolean =>
  * One row of gh's answer, projected — or `undefined` when it is not an open PR.
  *
  * **Open only, and dropped here rather than filtered by the caller.** The
- * inbox has nothing to say about a merged PR, and every bucket rule below
+ * reviewQueue has nothing to say about a merged PR, and every bucket rule below
  * assumes the PR is open: a closed one with a review request on it would read
  * as "needs your review" for ever.
  */
@@ -602,7 +602,7 @@ export const remoteHost = (url: string): string => {
  * Because "this repository has no GitHub remote" is not a failure, and `gh`
  * can only report it as one. A vault of notes, a scratch repo with no remote at
  * all, an internal repository on a host nobody has logged into — every one of
- * them produced a red sentence in the inbox on every refresh:
+ * them produced a red sentence in the reviewQueue on every refresh:
  *
  *   orchard: no git remotes found
  *   harbor-works: none of the git remotes configured for this repository

@@ -6,7 +6,7 @@ import { onReconnect, readPullRequest, said } from "./daemon";
 
 // One pull request, held where a tab switch cannot destroy it.
 //
-// The same treatment `useInbox` got, and the same cause: Base UI unmounts a
+// The same treatment `useReviewQueue` got, and the same cause: Base UI unmounts a
 // hidden tab, so switching to the diff and back destroyed the answer and the
 // panel came back empty while it re-asked. What was on screen for that moment
 // was nothing at all — a title, a description and a conversation replaced by the

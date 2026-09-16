@@ -1,6 +1,6 @@
 import type { SessionInfo, Thread } from "@awp-kit/protocol";
 import { PlusIcon } from "@phosphor-icons/react/Plus";
-import { TrayIcon } from "@phosphor-icons/react/Tray";
+import { GitPullRequestIcon } from "@phosphor-icons/react/GitPullRequest";
 import * as stylex from "@stylexjs/stylex";
 import type { ComponentType } from "react";
 import { Sidebar } from "./Sidebar";
@@ -11,22 +11,22 @@ import type { Facts } from "./useFacts";
 // The left column: a short menu, a rule, and the threads.
 //
 //   ⊕  new thread                    ⌘N
-//   ⊟  inbox
+//   ⊟  reviewQueue
 //   ─────────────────────────────────────
 //   ▸ tabular exports
 //       rowan · agent
 //
 // ── this used to be two tabs, and the tabs were the wrong shape ───────────
 //
-// `work` and `inbox` sat beside each other as a pair of peers, which said the
+// `work` and `reviewQueue` sat beside each other as a pair of peers, which said the
 // column held two lists of the same kind. It does not: the threads *are* this
 // column — they fill it, they are what is selected, they are what the address
-// points at — and the inbox is a list of work happening elsewhere that somebody
+// points at — and the reviewQueue is a list of work happening elsewhere that somebody
 // opens on purpose. A tab strip made the second one cost the first its whole
 // column, and made the first one look like a mode.
 //
-// So the two acts are a menu and the threads are the column. The inbox opens
-// over the window instead — see `InboxDialog` for why that, rather than a panel
+// So the two acts are a menu and the threads are the column. The reviewQueue opens
+// over the window instead — see `ReviewQueueDialog` for why that, rather than a panel
 // in the accessory strip.
 //
 // ── the dialog is App's, and the menu only asks for it ────────────────────
@@ -47,13 +47,13 @@ import type { Facts } from "./useFacts";
 // the menu, which is where somebody looks for it — a second copy at the other
 // end of the same column is two controls for one act.
 //
-// ── nothing counts the inbox ──────────────────────────────────────────────
+// ── nothing counts the reviewQueue ──────────────────────────────────────────────
 //
-// A badge on `inbox` reading "3 to review" is the obvious next thing and is
+// A badge on `reviewQueue` reading "3 to review" is the obvious next thing and is
 // deliberately absent: the count is a `gh` call per project, seconds each, and
 // putting it on a row that is always on screen means paying for it whether or
 // not anybody asked. The rows are fetched when the dialog mounts, which is the
-// promise `useInbox` was written around.
+// promise `useReviewQueue` was written around.
 
 const styles = stylex.create({
   column: { display: "flex", flexDirection: "column", height: "100%", minHeight: 0 },
@@ -159,7 +159,7 @@ export function LeftColumn({
   at,
   onSelect,
   onNew,
-  onInbox,
+  onReviewQueue,
   onThreadsChanged,
   onOpenWorkspace,
   failure,
@@ -172,11 +172,11 @@ export function LeftColumn({
   readonly at: { readonly project: string; readonly workspace: string } | undefined;
   readonly onSelect: (session: SessionInfo) => void;
   readonly onNew: () => void;
-  /** Open the inbox. The dialog itself is App's — see the note above. */
-  readonly onInbox: () => void;
+  /** Open the reviewQueue. The dialog itself is App's — see the note above. */
+  readonly onReviewQueue: () => void;
   readonly onThreadsChanged: () => void;
   /** Go to a workspace's agent, named rather than handed as a session: an
-   * inbox row knows the pair and not which session is running. */
+   * reviewQueue row knows the pair and not which session is running. */
   readonly onOpenWorkspace: (project: string, workspace: string) => void;
   readonly failure: string | undefined;
 }) {
@@ -184,7 +184,7 @@ export function LeftColumn({
     <div {...stylex.props(styles.column)}>
       <nav aria-label="actions" {...stylex.props(styles.menu)}>
         <Item icon={PlusIcon} word="new thread" chord="⌘N" onPress={onNew} />
-        <Item icon={TrayIcon} word="inbox" chord="⌘I" onPress={onInbox} />
+        <Item icon={GitPullRequestIcon} word="pull requests" chord="⌘⇧R" onPress={onReviewQueue} />
       </nav>
 
       <div {...stylex.props(styles.rule)} />
@@ -196,7 +196,7 @@ export function LeftColumn({
         selected={selected}
         at={at}
         onSelect={onSelect}
-        // The same callback the inbox opens a row with: both of them name a
+        // The same callback the reviewQueue opens a row with: both of them name a
         // pair rather than a session, because neither knows — or needs to know
         // — which of a workspace's sessions happens to be running.
         onOpen={onOpenWorkspace}

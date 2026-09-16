@@ -96,7 +96,7 @@ say("  the parser strips it regardless, which is the safe direction");
 // ── 4. what a label value may hold ──────────────────────────────────────────
 //
 // Added after a colon in a sentence failed a real job. `create-workspace`
-// labels the session it made, so `awp_label=Review: Inbox UI` refused the step,
+// labels the session it made, so `awp_label=Review: ReviewQueue UI` refused the step,
 // and the compensation took the whole workspace back out — the person got no
 // workspace and a message about key-value pairs.
 //
@@ -129,7 +129,7 @@ if (!labelHost.accepted) {
   // The raw values first, to state what is actually refused rather than to
   // assume the error message is complete.
   say("CLAIM 4a — what zmx refuses, unfiltered:");
-  for (const raw of ["Review:", "Review Inbox", "fifty%", "a/b", "plain-legal_1.0"]) {
+  for (const raw of ["Review:", "Review ReviewQueue", "fifty%", "a/b", "plain-legal_1.0"]) {
     const r = setLabel(raw);
     say(
       `  ${JSON.stringify(raw).padEnd(20)} accepted=${r.accepted} back=${JSON.stringify(r.back)}`,
@@ -144,12 +144,12 @@ if (!labelHost.accepted) {
   // the output against a regex written here, and this checks it against zmx.
   say("CLAIM 4b — every labelValue result is accepted, and reads back unchanged:");
   const said = [
-    "Review: Inbox UI",
+    "Review: ReviewQueue UI",
     "fix(jobs): trust a new workspace before its agent starts",
     "50% faster!",
     "a/b\\c",
     "tabular-exports",
-    "port the review capability from the deck starting with the inbox scope",
+    "port the review capability from the deck starting with the reviewQueue scope",
   ];
   let held = true;
   for (const one of said) {

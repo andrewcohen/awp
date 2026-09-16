@@ -281,9 +281,9 @@ describe("identityLabels", () => {
     // somebody typed failed the labelling step of `create-workspace`, and the
     // compensation then took the workspace back out. Removing `labelValue`
     // from `identityLabels` fails here.
-    expect(identityLabels("awp", "review-inbox", "agent", "Review: Inbox UI")[LABEL_LABEL]).toBe(
-      "Review-Inbox-UI",
-    );
+    expect(
+      identityLabels("awp", "review-reviewQueue", "agent", "Review: ReviewQueue UI")[LABEL_LABEL],
+    ).toBe("Review-ReviewQueue-UI");
   });
 
   test("a label with nothing legal in it is no label at all", () => {
@@ -297,7 +297,7 @@ describe("labelValue", () => {
   //   error: key-value kvs can only contain [a-z, A-Z, 0-9, -_.] characters
   //
   // and, hidden inside the same message, a second one: it reported the value
-  // as `Review:` rather than `Review: Inbox UI`, so it had split the pair on
+  // as `Review:` rather than `Review: ReviewQueue UI`, so it had split the pair on
   // whitespace before validating. A space is as fatal as the colon.
   const LEGAL = /^[A-Za-z0-9\-_.]*$/u;
 
@@ -307,8 +307,8 @@ describe("labelValue", () => {
   });
 
   test("a run of illegal characters becomes one separator, so words survive", () => {
-    // One each would give `Review--Inbox-UI`, which reads as a mistake.
-    expect(labelValue("Review: Inbox UI")).toBe("Review-Inbox-UI");
+    // One each would give `Review--ReviewQueue-UI`, which reads as a mistake.
+    expect(labelValue("Review: ReviewQueue UI")).toBe("Review-ReviewQueue-UI");
     expect(labelValue("a  —  b")).toBe("a-b");
   });
 
@@ -324,7 +324,7 @@ describe("labelValue", () => {
   });
 
   test("a long sentence is bounded, and not left ending in a separator", () => {
-    const said = "port the review capability from the deck starting with the inbox scope";
+    const said = "port the review capability from the deck starting with the reviewQueue scope";
     const value = labelValue(said);
     expect(value.length).toBeLessThanOrEqual(48);
     expect(value.endsWith("-")).toBe(false);
@@ -334,7 +334,7 @@ describe("labelValue", () => {
     // The property, rather than the examples: everything above is one case of
     // this, and this is the thing the labelling step actually depends on.
     for (const said of [
-      "Review: Inbox UI",
+      "Review: ReviewQueue UI",
       "fix(jobs): trust a new workspace",
       "50% faster!",
       "a/b\\c",

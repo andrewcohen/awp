@@ -628,7 +628,7 @@ function Row({
    * `~/.awp/workspace-state.json` — so it exists for a checkout something has
    * reported on, and for no other. awp's own record is the thread's link,
    * which is written when a review is started and, since the adoption pass,
-   * whenever the inbox recognises a pull request opened from a checkout.
+   * whenever the reviewQueue recognises a pull request opened from a checkout.
    *
    * Only the first was drawn, and AGENTS.md argued a third copy of the number
    * would be duplication — true while every linked thread was a *review*
@@ -668,8 +668,8 @@ function Row({
   //                       this machine have one
   //   workspace.label     `awp_label`, which amoeba writes for what it makes.
   //                       Terse and legal rather than exact — zmx validates a
-  //                       label value, so `Review: Inbox UI` is written as
-  //                       `Review-Inbox-UI`. See `labelValue`.
+  //                       label value, so `Review: ReviewQueue UI` is written as
+  //                       `Review-ReviewQueue-UI`. See `labelValue`.
   //   workspace.name      the slug, which every workspace has
   //
   // The exact sentence is the thread's title. Where the row stands in for its
@@ -1016,9 +1016,9 @@ function Group({
   // above a single row and the two said the same thing twice:
   //
   //   before                        after
-  //   ▸ Review: Inbox UI            ◉ Review: Inbox UI
-  //     ◉ Review-Inbox-UI             review-inbox · andrew/review-inbox
-  //       review-inbox · …
+  //   ▸ Review: ReviewQueue UI            ◉ Review: ReviewQueue UI
+  //     ◉ Review-ReviewQueue-UI             review-reviewQueue · andrew/review-reviewQueue
+  //       review-reviewQueue · …
   //
   // Two lines of chrome to name one thing, and an indent implying a structure
   // with one member. So the heading appears when it earns its line — when the

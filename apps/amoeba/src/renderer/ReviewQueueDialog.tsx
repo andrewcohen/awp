@@ -2,12 +2,12 @@ import type { Job } from "@awp-kit/jobs";
 import { Dialog } from "@base-ui/react/dialog";
 import { XIcon } from "@phosphor-icons/react/X";
 import * as stylex from "@stylexjs/stylex";
-import { Inbox } from "./Inbox";
+import { ReviewQueue } from "./ReviewQueue";
 import { useOverlay } from "./overlays";
 import { typeset } from "./typeset";
 import { colors, lift, space, timing } from "./tokens.stylex";
 
-// The inbox, in a window of its own.
+// The reviewQueue, in a window of its own.
 //
 // ── why it is not a panel any more ─────────────────────────────────────────
 //
@@ -20,7 +20,7 @@ import { colors, lift, space, timing } from "./tokens.stylex";
 //
 // The accessory column was the other candidate and is the wrong one, for the
 // reason `LeftColumn` used to state: that column is about the thing already on
-// screen — this workspace's diff, a page beside it — and the inbox is about
+// screen — this workspace's diff, a page beside it — and the reviewQueue is about
 // everywhere else. A permanent tab there would be the one panel with nothing
 // to do with the session in the middle.
 //
@@ -28,8 +28,8 @@ import { colors, lift, space, timing } from "./tokens.stylex";
 // also what it is *for* — the rows are a list to pick from, and the pick lands
 // in the two columns behind it.
 //
-// **Mounted only while open**, which `useInbox` already leans on: the hook asks
-// the daemon on mount, so nothing fetches for an inbox nobody is looking at.
+// **Mounted only while open**, which `useReviewQueue` already leans on: the hook asks
+// the daemon on mount, so nothing fetches for an reviewQueue nobody is looking at.
 // The rows themselves live in atoms, so a second open shows the last answer at
 // once and backfills it.
 
@@ -107,7 +107,7 @@ const styles = stylex.create({
   body: { flex: 1, minHeight: 0, display: "flex", flexDirection: "column" },
 });
 
-export function InboxDialog({
+export function ReviewQueueDialog({
   open,
   jobs,
   onClose,
@@ -151,7 +151,9 @@ export function InboxDialog({
             the line. */}
         <Dialog.Popup {...stylex.props(typeset.prose, styles.popup)}>
           <div {...stylex.props(styles.head)}>
-            <Dialog.Title {...stylex.props(typeset.heading, styles.title)}>inbox</Dialog.Title>
+            <Dialog.Title {...stylex.props(typeset.heading, styles.title)}>
+              pull requests
+            </Dialog.Title>
             <button type="button" title="close" onClick={onClose} {...stylex.props(styles.close)}>
               <XIcon size={16} aria-hidden />
             </button>
@@ -161,7 +163,7 @@ export function InboxDialog({
                 the address it navigates to is drawn by the two columns this
                 dialog is covering. Starting a review is not — that leaves a job
                 running and a row that now says so. */}
-            <Inbox
+            <ReviewQueue
               jobs={jobs}
               onOpen={(project, workspace) => {
                 onClose();

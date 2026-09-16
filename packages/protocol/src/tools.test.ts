@@ -85,7 +85,7 @@ describe("what a row says", () => {
 describe("what a row puts before its title", () => {
   it("is nothing for a command, which is most rows", () => {
     // A label on the majority is a label on the baseline — the same
-    // arithmetic as the accent and the inbox's leading icon.
+    // arithmetic as the accent and the reviewQueue's leading icon.
     expect(toolLabel({ toolName: "Bash", title: "bun run lint" })).toBe("");
     // And nothing for the same tool reported by an older daemon, which
     // sends the kind and no name.
