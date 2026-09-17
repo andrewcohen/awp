@@ -684,11 +684,23 @@ export function Diff({
   readonly scheme: ColorScheme;
 }) {
   const [revisions, setRevisions] = useState<ReadonlyArray<Revision>>([]);
-  // The change id of the commit being shown, or absent for the working copy.
-  // Absent is the initial state and the one the panel returns to whenever the
-  // workspace changes, because the working copy is the row someone opened this
-  // to look at.
-  const [at, setAt] = useState<string | undefined>();
+  // The change id of the commit being shown, `STACK` for the whole thing, or
+  // absent for the working copy.
+  //
+  // ── the stack is what opens, and the working copy is not ─────────────────
+  //
+  // The working copy was the initial state on the argument that it is the row
+  // somebody opened the panel to look at. That is right while an agent is
+  // mid-edit and wrong the rest of the time: the working copy is **empty**
+  // whenever the last thing done was a commit, so opening the diff on a
+  // finished piece of work showed nothing at all — a panel that looks broken,
+  // in front of a workspace with a dozen commits in it.
+  //
+  // The stack has no such state. It is everything since the main line, so it
+  // is empty only when the work is, and it is the question somebody actually
+  // arrives with. Reset to it whenever the workspace changes, for the same
+  // reason.
+  const [at, setAt] = useState<string | undefined>(STACK);
   const [patch, setPatch] = useState<string | undefined>();
   const [failure, setFailure] = useState<string | undefined>();
 
@@ -700,7 +712,7 @@ export function Diff({
   const [shownFor, setShownFor] = useState(dir);
   if (shownFor !== dir) {
     setShownFor(dir);
-    setAt(undefined);
+    setAt(STACK);
     setPatch(undefined);
     setFailure(undefined);
   }
