@@ -8,6 +8,7 @@ import { Diff } from "./Diff";
 import { Gadgets, useGadgets } from "./Gadgets";
 import { Jobs } from "./Jobs";
 import { Pr } from "./Pr";
+import { Shell } from "./Shell";
 import { Tasks } from "./Tasks";
 import { Web } from "./Web";
 import { debugTools } from "../debug";
@@ -41,6 +42,10 @@ import { colors, space } from "../design/tokens.stylex";
 //   gadgets  what the agent wrote for a person to look at, beside the web
 //          panel because it is the same reach for the same reason: something
 //          to read that is not the code. Absent until the thread has one
+//   shell  a terminal of one's own in the workspace's checkout — run the test
+//          yourself, read a log, check what the agent just claimed. After the
+//          gadgets rather than beside the diff because it is reached for when
+//          something needs doing by hand, which is rarer than reading
 //   jobs   read when a job is running, which is a few seconds a day, and
 //          always with the count in the status bar already saying so
 //   debug  opened when something feels wrong, never on purpose
@@ -180,6 +185,18 @@ const panels: ReadonlyArray<Panel> = [
     keepMounted: true,
     render: ({ project, workspace, thread, shown }) => (
       <Web project={project} workspace={workspace} thread={thread} shown={shown} />
+    ),
+  },
+  // After the gadgets — `panelsFor` injects those directly after the web panel
+  // — and before the jobs list. The shells belong to the *workspace*, not to
+  // the thread, so unlike the gadgets tab this one is always in the strip: a
+  // workspace always has a checkout to open a shell in, and the panel's own
+  // empty state is an offer rather than a disappointment.
+  {
+    id: "shell",
+    label: "shell",
+    render: ({ project, workspace, scheme }) => (
+      <Shell project={project} workspace={workspace} scheme={scheme} />
     ),
   },
   { id: "jobs", label: "jobs", render: () => <Jobs /> },

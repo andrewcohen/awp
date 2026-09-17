@@ -69,6 +69,41 @@ export const SessionIdentity = Schema.Struct({
 
 export type SessionIdentity = (typeof SessionIdentity)["Type"];
 
+/**
+ * The kind of a workspace's nth shell.
+ *
+ * `shell_1`, `shell_2`, … — the spelling `action_<name>` and `service_<name>`
+ * already use, and short enough that a shell's kind is never shortened on its
+ * way into a session name.
+ *
+ * ── in the contract, and not in the daemon's naming module ─────────────────
+ *
+ * Both sides read it. The daemon spells a kind when it opens a shell; the
+ * window reads one back off {@link SessionIdentity} to know which tabs to
+ * draw and what to number them. That is the same argument that put
+ * `SessionIdentity` on the wire — a client re-deriving a rule is a second
+ * implementation of it, and the copy that drifts is the one nobody tests.
+ *
+ * The number is an **address**, not a position in the strip. A workspace with
+ * `shell_1` and `shell_3` has had its second shell closed, and the next one
+ * opened fills the hole rather than becoming a second `shell_3`: a session
+ * name is how a window re-finds a terminal after a reload, so renumbering
+ * would move somebody's shell out from under them.
+ */
+export const shellKind = (n: number): string => `shell_${String(n)}`;
+
+/**
+ * Which shell a kind names, or `undefined` for a kind that is not one.
+ *
+ * Deliberately strict about the spelling — `shell_01` and `shell_1x` are not
+ * shells — because on the daemon's side the answer decides whether a session
+ * may be **killed**.
+ */
+export const shellNumber = (kind: string): number | undefined => {
+  const found = /^shell_([1-9][0-9]*)$/u.exec(kind.trim());
+  return found?.[1] === undefined ? undefined : Number(found[1]);
+};
+
 export const SessionInfo = Schema.Struct({
   name: Schema.String,
   pid: Schema.Int,
@@ -2451,6 +2486,48 @@ export class AwpRpcs extends RpcGroup.make(
   Rpc.make("SessionStart", {
     payload: { project: Schema.String, workspace: Schema.String },
     success: Schema.String,
+    error: SessionStartFailed,
+  }),
+
+  /**
+   * Open another shell in a workspace, and answer with the session it made.
+   *
+   * ── why this is not `SessionStart` with a kind argument ───────────────────
+   *
+   * `SessionStart` is idempotent because its address is fixed: a workspace has
+   * exactly one agent, so asking twice is asking for the same session. A shell
+   * is the opposite — somebody pressing `+` a second time means a *second*
+   * shell — so the kind cannot come from the caller. The daemon picks the
+   * lowest free one and says which it picked, which is also what stops two
+   * windows racing onto one name.
+   *
+   * **The kinds are `shell_1`, `shell_2`, …** — the spelling `action_<name>`
+   * and `service_<name>` already use — and the number is an address rather
+   * than a position: closing the second of three leaves `shell_3` where
+   * it was, and the next `+` fills the hole. A name is how a client re-finds a
+   * session after a reload, so renumbering would move somebody's shell out
+   * from under them.
+   *
+   * A slot whose session is listed but has **ended** is reused: zmx keeps an
+   * exited session listed so its output can still be read, and without this a
+   * shell somebody typed `exit` into would take its number to the grave.
+   */
+  Rpc.make("ShellOpen", {
+    payload: { project: Schema.String, workspace: Schema.String },
+    success: Schema.String,
+    error: SessionStartFailed,
+  }),
+
+  /**
+   * End a shell, and everything running in it.
+   *
+   * Refused for any session that is not a shell this workspace owns — the
+   * check is the daemon's rather than the caller's for the reason every rule
+   * here is: a client re-deriving it is a second implementation, and this one
+   * kills processes.
+   */
+  Rpc.make("ShellClose", {
+    payload: { session: Schema.String },
     error: SessionStartFailed,
   }),
 

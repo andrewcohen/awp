@@ -35,6 +35,7 @@ import * as settings from "./settings";
 import { Multiplexer, type Session } from "./multiplexer";
 import { type WorkspaceDeps, createWorkspace, workspacePath } from "./jobs/create-workspace";
 import { sessionName } from "./naming";
+import { shellKind } from "@awp-kit/protocol";
 import { makeFake } from "./pty-fake";
 import * as sessions from "./sessions";
 import { migrations as reviewMigrations, layer as reviewsLayer } from "./reviews";
@@ -81,10 +82,29 @@ const all = [session({}), session({ name: DEAD, ended: true, exitCode: 130 })];
  * joins against is the *session* list — a review workspace is openable as soon
  * as its session exists, which is a step before the thread claims it.
  */
-const sessionsFor = (fakes: Fakes): ReadonlyArray<Session> =>
-  fakes.sessionWorkspace === undefined
-    ? all
-    : [...all, session({ name: `awp.awp.${fakes.sessionWorkspace}.agent` })];
+const sessionsFor = (fakes: Fakes): ReadonlyArray<Session> => {
+  const base =
+    fakes.sessionWorkspace === undefined
+      ? all
+      : [...all, session({ name: `awp.awp.${fakes.sessionWorkspace}.agent` })];
+  return [
+    ...base,
+    // Labelled, because that is what the daemon reads a kind back out of — a
+    // shell whose identity came from its name would be testing the fallback
+    // rather than the path a session awp opened actually takes.
+    ...(fakes.shells ?? []).map((shell) =>
+      session({
+        name: sessionName("rowan", "discounts", shellKind(shell.n)),
+        ended: shell.ended,
+        labels: {
+          awp_project: "rowan",
+          awp_workspace: "discounts",
+          awp_kind: shellKind(shell.n),
+        },
+      }),
+    ),
+  ];
+};
 
 const fakeMux = (fakes: Fakes) =>
   Layer.succeed(Multiplexer, {
@@ -102,7 +122,10 @@ const fakeMux = (fakes: Fakes) =>
       fakes.told?.pty.push(text);
       return Effect.void;
     },
-    kill: () => Effect.void,
+    kill: (name: string) => {
+      fakes.zmx?.killed.push(name);
+      return Effect.void;
+    },
     setLabels: (name: string, labels: Record<string, string>) => {
       fakes.zmx?.labels.push({ name, labels });
       return Effect.void;
@@ -218,7 +241,11 @@ interface Fakes {
   /** What has already been said on the pull request. */
   readonly remarks?: ReadonlyArray<Remark> | undefined;
   /** Somewhere for the fake multiplexer to write down what it was handed. */
-  readonly zmx?: { readonly start: unknown[]; readonly labels: unknown[] } | undefined;
+  readonly zmx?:
+    | { readonly start: unknown[]; readonly labels: unknown[]; readonly killed: string[] }
+    | undefined;
+  /** The shells the workspace `rowan/discounts` already has, live or ended. */
+  readonly shells?: ReadonlyArray<{ readonly n: number; readonly ended: boolean }> | undefined;
   /**
    * Somewhere for the fake task store to write down every ingest.
    *
@@ -2212,7 +2239,7 @@ describe("WorkspaceSwap", () => {
 // the pull request — and each of those already worked without a terminal once
 // the address stopped resolving through a session. The terminal is the only
 // thing genuinely gone, so it is the only thing with a call.
-const zmx = () => ({ start: [] as unknown[], labels: [] as unknown[] });
+const zmx = () => ({ start: [] as unknown[], labels: [] as unknown[], killed: [] as string[] });
 
 describe("starting a workspace's agent again", () => {
   it("starts the agent in the workspace, and answers with the session's name", async () => {
@@ -2261,6 +2288,115 @@ describe("starting a workspace's agent again", () => {
     // builtin — `import/no-nodejs-modules` is on for exactly this reason.
     const dir = await run((rpc) => rpc.WorkspaceDir({ project: "rowan", workspace: "discounts" }));
     expect(dir).toBe(workspacePath("rowan", "discounts"));
+  });
+});
+
+// ── a shell of one's own, and the number it gets ──────────────────────────
+//
+// The whole of `ShellOpen` is the choice of number: everything else it does,
+// `SessionStart` already did. So these are about the choice, and the one that
+// matters most is the third — a shell somebody typed `exit` into is still
+// listed, and `Multiplexer.start` leaves an existing name exactly as it was, so
+// without the kill a `+` on that workspace would report success and do nothing.
+describe("opening a shell", () => {
+  it("opens the first one in the workspace's checkout, running the person's shell", async () => {
+    const seen = zmx();
+    const name = await run((rpc) => rpc.ShellOpen({ project: "rowan", workspace: "discounts" }), {
+      zmx: seen,
+    });
+
+    expect(name).toBe(sessionName("rowan", "discounts", shellKind(1)));
+    expect(seen.start).toHaveLength(1);
+    expect(seen.start[0]).toMatchObject({
+      name,
+      cwd: workspacePath("rowan", "discounts"),
+    });
+    // Whatever SHELL says on the machine running the suite — asserting a
+    // spelling here would be asserting the tester's dotfiles. What is being
+    // checked is that it is one command and not an empty one, which is the
+    // failure an absent SHELL would produce.
+    const started = seen.start[0] as { readonly command: ReadonlyArray<string> };
+    expect(started.command).toHaveLength(1);
+    expect(started.command[0]).not.toBe("");
+  });
+
+  it("fills the lowest gap, because a number is an address and not a position", async () => {
+    const seen = zmx();
+    const name = await run((rpc) => rpc.ShellOpen({ project: "rowan", workspace: "discounts" }), {
+      zmx: seen,
+      shells: [
+        { n: 1, ended: false },
+        { n: 3, ended: false },
+      ],
+    });
+
+    expect(name).toBe(sessionName("rowan", "discounts", shellKind(2)));
+    expect(seen.killed).toEqual([]);
+  });
+
+  it("takes back the number of a shell that has ended, killing the corpse first", async () => {
+    // zmx keeps a session listed after its command exits so the output can
+    // still be read. `start` on a name that is already there does nothing and
+    // says nothing, so the button would appear to work and produce no shell.
+    const seen = zmx();
+    const name = await run((rpc) => rpc.ShellOpen({ project: "rowan", workspace: "discounts" }), {
+      zmx: seen,
+      shells: [{ n: 1, ended: true }],
+    });
+
+    expect(name).toBe(sessionName("rowan", "discounts", shellKind(1)));
+    expect(seen.killed).toEqual([name]);
+    expect(seen.start).toHaveLength(1);
+  });
+
+  it("labels it, because the name cannot be split back apart", async () => {
+    const seen = zmx();
+    await run((rpc) => rpc.ShellOpen({ project: "rowan", workspace: "discounts" }), { zmx: seen });
+
+    expect(seen.labels).toHaveLength(1);
+    expect(seen.labels[0]).toMatchObject({
+      labels: { awp_project: "rowan", awp_workspace: "discounts", awp_kind: "shell_1" },
+    });
+  });
+});
+
+describe("closing a shell", () => {
+  it("kills the session", async () => {
+    const seen = zmx();
+    const name = sessionName("rowan", "discounts", shellKind(1));
+    await run((rpc) => rpc.ShellClose({ session: name }), {
+      zmx: seen,
+      shells: [{ n: 1, ended: false }],
+    });
+
+    expect(seen.killed).toEqual([name]);
+  });
+
+  it("refuses anything that is not a shell", async () => {
+    // The guard that matters: this kills a process tree, and the agent is a
+    // session somebody is working in. A client that computed a name wrong must
+    // not be able to take one down by asking politely.
+    const seen = zmx();
+    const outcome = await run((rpc) => Effect.result(rpc.ShellClose({ session: LIVE })), {
+      zmx: seen,
+    });
+
+    expect(Result.isFailure(outcome)).toBe(true);
+    expect(seen.killed).toEqual([]);
+  });
+
+  it("says nothing about a session that has already gone", async () => {
+    // Closing twice is the ordinary way this happens — a tab pressed, and the
+    // listing not back yet. An error in front of somebody for an outcome they
+    // asked for and got is worse than silence.
+    const seen = zmx();
+    const outcome = await run(
+      (rpc) => Effect.result(rpc.ShellClose({ session: "awp.rowan.discounts.shell_9" })),
+      { zmx: seen },
+    );
+
+    expect(Result.isFailure(outcome)).toBe(false);
+    expect(seen.killed).toEqual([]);
   });
 });
 

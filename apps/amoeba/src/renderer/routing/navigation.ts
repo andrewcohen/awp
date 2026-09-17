@@ -122,7 +122,7 @@ export function useColumnKeys(collapsed: Collapsed): void {
     // so `enter` below reads the same for all three columns.
     const enter = (column: ColumnName): void => {
       if (column === "agent") {
-        focusPane();
+        focusPane("stage");
         return;
       }
       const remembered = last.current[column];

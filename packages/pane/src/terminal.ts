@@ -6,11 +6,15 @@ import { paneFontSize } from "./palette";
 import { WHEEL_DOWN, WHEEL_UP, wheelLines, wheelReport } from "./wheel";
 import { meterSent, meterWheel, meterWrite, startMeter } from "./meter";
 
-// One Terminal for the life of the window, reused by every pane.
+// One Terminal per slot for the life of the window, reused by every pane that
+// mounts into that slot, never disposed.
 //
-// Building a fresh one per view was the single cause behind four different
-// complaints, and the evidence is in the log of the tree this came from. ghostty-web's dispose()
-// frees wasm state the module-level Ghostty instance keeps handing out, so:
+// ── never disposed, and that is still the rule ─────────────────────────────
+//
+// Building a fresh Terminal per *view* was the single cause behind four
+// different complaints, and the evidence is in the log of the tree this came
+// from. ghostty-web's dispose() calls `ghostty_terminal_free`, and the wasm
+// allocator hands the same pointer back out, so:
 //
 //   - a second Terminal writes into freed memory and dies with "Out of bounds
 //     memory access" (this is what React StrictMode's double-mount hit);
@@ -22,19 +26,74 @@ import { meterSent, meterWheel, meterWrite, startMeter } from "./meter";
 //     font, which is where a "slow attach" went when Go's own timings showed the
 //     whole attach costing 25ms.
 //
-// Never disposing is not a leak worth worrying about — it is one terminal — and
-// it sidesteps the entire lifecycle. The font picker and session switching go
-// through the public setters instead, which is what they are for.
+// Every one of those is about *freeing* and then re-allocating. A terminal that
+// is never freed holds its own `ghostty_terminal_new` pointer for the life of
+// the window and shares nothing with its neighbour but the wasm module itself,
+// which is what `init()` loads once and what the library's own error message
+// calls "creating Terminal instances", plural.
 //
-// The canvas lives in a host element this module owns, so a component "mounting"
-// the pane re-parents that element rather than building a new one. React can
-// then mount and unmount views as it likes without the terminal noticing.
+// ── so why more than one ───────────────────────────────────────────────────
+//
+// Because two of them are on screen at once. The stage draws the workspace's
+// agent and the accessory column draws a shell, and a single terminal cannot
+// be in two places: `mountPaneTerminal` re-parents the host element, so the
+// second mount would take the canvas away from the first and leave it blank.
+//
+// **A slot is not a session.** The set of slots is fixed and small — it is the
+// window's layout, not its content — so the number of terminals is bounded by
+// the furniture rather than by how many workspaces somebody has visited. A slot
+// switches between sessions exactly as the single terminal used to: reset,
+// re-attach, replay.
+//
+// The canvas lives in a host element this module owns per slot, so a component
+// "mounting" the pane re-parents that element rather than building a new one.
+// React can then mount and unmount views as it likes without the terminal
+// noticing.
 
-let term: Terminal | undefined;
-let fit: FitAddon | undefined;
-let host: HTMLDivElement | undefined;
-let currentFont = "";
-let currentTheme: ITheme | undefined;
+/**
+ * Where on screen a terminal is drawn.
+ *
+ * Fixed, because each one costs a 10,000-line scrollback and a font
+ * measurement that are never given back. A new slot is a new piece of window
+ * furniture and should be added here on purpose; a new *session* is not one.
+ */
+export type PaneSlot = "stage" | "accessory";
+
+interface Pane {
+  term: Terminal | undefined;
+  fit: FitAddon | undefined;
+  host: HTMLDivElement | undefined;
+  font: string;
+  theme: ITheme | undefined;
+  // Where keystrokes go. Swapped per view rather than re-subscribed, because
+  // onData has no unsubscribe in the API and a stale handler would keep writing
+  // to a pane the user has left.
+  dataSink: ((data: string) => void) | undefined;
+  resizeSink: ((cols: number, rows: number) => void) | undefined;
+  // See the note on REPLAY_CAP: what a theme change writes back.
+  replay: string;
+}
+
+const panes = new Map<PaneSlot, Pane>();
+
+const paneAt = (slot: PaneSlot): Pane => {
+  const had = panes.get(slot);
+  if (had !== undefined) {
+    return had;
+  }
+  const made: Pane = {
+    term: undefined,
+    fit: undefined,
+    host: undefined,
+    font: "",
+    theme: undefined,
+    dataSink: undefined,
+    resizeSink: undefined,
+    replay: "",
+  };
+  panes.set(slot, made);
+  return made;
+};
 
 // ghostty-web compiles its wasm before a Terminal can exist — constructing one
 // first throws "ghostty-web not initialized".
@@ -49,12 +108,6 @@ const ready: Promise<void> = init();
 /** Resolves when the emulator can be used. Await before mounting. */
 export const paneReady = (): Promise<void> => ready;
 
-// dataSink is where keystrokes go. Swapped per view rather than re-subscribed,
-// because onData has no unsubscribe in the API and a stale handler would keep
-// writing to a pane the user has left.
-let dataSink: ((data: string) => void) | undefined;
-let resizeSink: ((cols: number, rows: number) => void) | undefined;
-
 export type PaneTerminal = {
   term: Terminal;
   fit: FitAddon;
@@ -65,24 +118,28 @@ export type PaneOptions = {
   readonly theme: ITheme;
 };
 
-// ensure builds the terminal on first use and returns it thereafter.
-export function ensurePaneTerminal(options: PaneOptions): PaneTerminal {
-  if (!term || !host || !fit) {
-    host = document.createElement("div");
+// ensure builds the slot's terminal on first use and returns it thereafter.
+export function ensurePaneTerminal(slot: PaneSlot, options: PaneOptions): PaneTerminal {
+  const pane = paneAt(slot);
+  if (!pane.term || !pane.host || !pane.fit) {
+    const host = document.createElement("div");
     host.style.height = "100%";
     host.style.width = "100%";
-    term = new Terminal({
+    const term = new Terminal({
       theme: options.theme,
       fontFamily: options.fontFamily,
       fontSize: paneFontSize,
       scrollback: 10_000,
     });
     startMeter();
-    fit = new FitAddon();
+    const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(host);
-    currentFont = options.fontFamily;
-    currentTheme = options.theme;
+    pane.host = host;
+    pane.term = term;
+    pane.fit = fit;
+    pane.font = options.fontFamily;
+    pane.theme = options.theme;
 
     // The wheel, decided by asking the terminal rather than by guessing.
     //
@@ -101,7 +158,7 @@ export function ensurePaneTerminal(options: PaneOptions): PaneTerminal {
     term.attachCustomWheelEventHandler((event: WheelEvent) => {
       // Normal screen: there is real scrollback, and ghostty-web moving through
       // it is the right behaviour. Returning false lets it.
-      if (term?.buffer.active.type !== "alternate") {
+      if (term.buffer.active.type !== "alternate") {
         return false;
       }
       // Full-screen, and it never asked about the mouse. Nothing to scroll and
@@ -110,16 +167,16 @@ export function ensurePaneTerminal(options: PaneOptions): PaneTerminal {
       if (term.wasmTerm?.hasMouseTracking() !== true) {
         return true;
       }
-      sendWheel(event);
+      sendWheel(pane, event);
       return true;
     });
 
-    installClipboard(host, () => term);
-    installKeys(host, (data) => dataSink?.(data));
+    installClipboard(host, () => pane.term);
+    installKeys(host, (data) => pane.dataSink?.(data));
     // Dictation, and anything else that inserts text without a keystroke. See
     // dictation.ts: the emulator cancels those before reading them, so this has
     // to get there first.
-    installDictation(host, (data) => dataSink?.(data));
+    installDictation(host, (data) => pane.dataSink?.(data));
 
     // Registered once, for the terminal's whole life. The indirection through
     // the sinks is what makes that safe.
@@ -128,29 +185,37 @@ export function ensurePaneTerminal(options: PaneOptions): PaneTerminal {
       // path every keystroke takes. `installDictation` counts its own, on the
       // other side of the split the meter exists to show.
       meterSent(data, true);
-      dataSink?.(data);
+      pane.dataSink?.(data);
     });
-    term.onResize(({ cols, rows }: { cols: number; rows: number }) => resizeSink?.(cols, rows));
+    term.onResize(({ cols, rows }: { cols: number; rows: number }) =>
+      pane.resizeSink?.(cols, rows),
+    );
   }
-  return { term, fit };
+  return { term: pane.term, fit: pane.fit };
 }
 
-// mountPaneTerminal moves the terminal into a view's container and fits it.
-export function mountPaneTerminal(parent: HTMLElement, options: PaneOptions): PaneTerminal {
-  const pane = ensurePaneTerminal(options);
-  if (host && host.parentElement !== parent) {
-    parent.appendChild(host);
+// mountPaneTerminal moves the slot's terminal into a view's container and fits
+// it.
+export function mountPaneTerminal(
+  slot: PaneSlot,
+  parent: HTMLElement,
+  options: PaneOptions,
+): PaneTerminal {
+  const built = ensurePaneTerminal(slot, options);
+  const pane = paneAt(slot);
+  if (pane.host && pane.host.parentElement !== parent) {
+    parent.appendChild(pane.host);
   }
-  setPaneFont(options.fontFamily);
-  setPaneTheme(options.theme);
-  pane.fit.fit();
+  setPaneFont(slot, options.fontFamily);
+  setPaneTheme(slot, options.theme);
+  built.fit.fit();
   // Re-armed on every mount, not once at construction. observeResize watches
   // the element the terminal is currently in, and this one moves between views
   // — so an observer set up against a previous parent stops seeing the window
   // change shape, which is a terminal that renders at yesterday's size and
   // never reflows.
-  pane.fit.observeResize();
-  return pane;
+  built.fit.observeResize();
+  return built;
 }
 
 // ── the retained stream, and what it is for ────────────────────────────────
@@ -175,8 +240,11 @@ export function mountPaneTerminal(parent: HTMLElement, options: PaneOptions): Pa
 // `reset()` does rebuild the config. What it costs is the scrollback, and for
 // a pane watching an agent work that used to be the worse of the two evils.
 // It stops being a cost once the bytes are still here to write back.
+//
+// **Per slot, not per module.** Two slots hold two screens, and a shared buffer
+// would replay the shell's output into the agent's terminal the next time
+// somebody changed the appearance.
 const REPLAY_CAP = 4 * 1024 * 1024;
-let replay = "";
 
 /**
  * The last point in a chunk after which everything before it stops mattering.
@@ -207,24 +275,24 @@ const lastRestart = (data: string): number => {
 };
 
 /** Remember a chunk, discarding what a restart or the cap makes irrelevant. */
-const remember = (data: string): void => {
-  replay += data;
+const remember = (pane: Pane, data: string): void => {
+  pane.replay += data;
   const at = lastRestart(data);
   if (at >= 0) {
-    replay = replay.slice(replay.length - data.length + at);
+    pane.replay = pane.replay.slice(pane.replay.length - data.length + at);
     return;
   }
-  if (replay.length > REPLAY_CAP) {
+  if (pane.replay.length > REPLAY_CAP) {
     // No restart to cut at, so cut after a newline — the next best boundary,
     // and the one a line-oriented program never straddles.
-    const from = replay.length - REPLAY_CAP;
-    const cut = replay.indexOf("\n", from);
-    replay = replay.slice(cut < 0 ? from : cut + 1);
+    const from = pane.replay.length - REPLAY_CAP;
+    const cut = pane.replay.indexOf("\n", from);
+    pane.replay = pane.replay.slice(cut < 0 ? from : cut + 1);
   }
 };
 
 /** Exposed for the probe, which has no other way to see what would be replayed. */
-export const replayLength = (): number => replay.length;
+export const replayLength = (slot: PaneSlot): number => paneAt(slot).replay.length;
 
 // setPaneTheme recolours the terminal, and it costs a rebuild.
 //
@@ -254,16 +322,18 @@ export const replayLength = (): number => replay.length;
 // rather than the theme's ground, and it reads "unchanged" for a swap that
 // worked and one that did nothing alike. Count the canvas' most common
 // colours instead.
-export function setPaneTheme(theme: ITheme): void {
-  if (!term || theme === currentTheme) {
+export function setPaneTheme(slot: PaneSlot, theme: ITheme): void {
+  const pane = paneAt(slot);
+  const term = pane.term;
+  if (!term || theme === pane.theme) {
     return;
   }
-  currentTheme = theme;
+  pane.theme = theme;
   term.options.theme = theme;
   term.reset();
   term.renderer?.setTheme(theme);
-  if (replay !== "") {
-    term.write(replay);
+  if (pane.replay !== "") {
+    term.write(pane.replay);
   }
   term.renderer?.clear();
   if (term.wasmTerm) {
@@ -278,8 +348,9 @@ export function setPaneTheme(theme: ITheme): void {
 // divided by the cell height. Capped at five, because a flick can carry a
 // four-figure delta and a program that redraws per event should not be handed
 // hundreds of them at once.
-function sendWheel(event: WheelEvent): void {
-  if (!term || !dataSink) {
+function sendWheel(pane: Pane, event: WheelEvent): void {
+  const term = pane.term;
+  if (!term || !pane.dataSink) {
     return;
   }
   const metrics = term.renderer?.getMetrics();
@@ -297,7 +368,7 @@ function sendWheel(event: WheelEvent): void {
   const button = event.deltaY > 0 ? WHEEL_DOWN : WHEEL_UP;
   const lines = wheelLines(event, { rows: term.rows });
   meterWheel(event.deltaY, event.deltaMode, lines);
-  dataSink(wheelReport(button, column, row, lines));
+  pane.dataSink(wheelReport(button, column, row, lines));
 }
 
 const clampCell = (value: number, max: number): number =>
@@ -308,38 +379,48 @@ const clampCell = (value: number, max: number): number =>
 // One function rather than reaching for `term` directly, so a pane never holds
 // the Terminal itself — which is what kept a stale handle alive in gdeck and
 // interleaved one session's bytes into another's cells.
-export function writePane(data: string): void {
+export function writePane(slot: PaneSlot, data: string): void {
+  const pane = paneAt(slot);
   meterWrite(data.length);
-  remember(data);
-  term?.write(data);
+  remember(pane, data);
+  pane.term?.write(data);
 }
 
 // setPaneFont changes the face without rebuilding anything. setFontFamily and
 // remeasureFont are public API precisely so this does not require a new
 // Terminal — which is the operation that corrupts state.
-export function setPaneFont(fontFamily: string): void {
-  if (!term || fontFamily === currentFont) {
+export function setPaneFont(slot: PaneSlot, fontFamily: string): void {
+  const pane = paneAt(slot);
+  if (!pane.term || fontFamily === pane.font) {
     return;
   }
-  currentFont = fontFamily;
-  term.renderer?.setFontFamily(fontFamily);
-  term.renderer?.setFontSize(paneFontSize);
-  term.renderer?.remeasureFont();
-  fit?.fit();
+  pane.font = fontFamily;
+  pane.term.renderer?.setFontFamily(fontFamily);
+  pane.term.renderer?.setFontSize(paneFontSize);
+  pane.term.renderer?.remeasureFont();
+  pane.fit?.fit();
 }
 
 // resetPane clears the screen and scrollback between panes, so one session's
 // output never appears above another's.
-export function resetPane(): void {
-  term?.clear();
+//
+// The retained stream goes with it. It is the screen in another form, and a
+// replay kept across a switch would paint the session just left back into the
+// terminal the moment somebody changed the appearance.
+export function resetPane(slot: PaneSlot): void {
+  const pane = paneAt(slot);
+  pane.replay = "";
+  pane.term?.clear();
 }
 
 export function setPaneSinks(
+  slot: PaneSlot,
   onData: (data: string) => void,
   onResize: (cols: number, rows: number) => void,
 ): void {
-  dataSink = onData;
-  resizeSink = onResize;
+  const pane = paneAt(slot);
+  pane.dataSink = onData;
+  pane.resizeSink = onResize;
 }
 
 // focusPane puts the keyboard back in the terminal.
@@ -347,11 +428,12 @@ export function setPaneSinks(
 // Needed on a tab switch as well as on mount: the terminal never unmounts, so
 // coming back from the chat runs no mount effect, and the keyboard is still
 // wherever the click left it.
-export function focusPane(): void {
-  term?.focus();
+export function focusPane(slot: PaneSlot): void {
+  paneAt(slot).term?.focus();
 }
 
-export function clearPaneSinks(): void {
-  dataSink = undefined;
-  resizeSink = undefined;
+export function clearPaneSinks(slot: PaneSlot): void {
+  const pane = paneAt(slot);
+  pane.dataSink = undefined;
+  pane.resizeSink = undefined;
 }

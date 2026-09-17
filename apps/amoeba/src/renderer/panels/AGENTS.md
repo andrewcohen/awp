@@ -188,6 +188,34 @@ written by hooks and frozen the same way. The thread title is the live one.
 **Nothing is re-read after a write**: every thread write announces itself on the
 store's feed. "The reply is the update" is the rule for calls with **no** feed.
 
+### The shell panel
+
+**The window has two terminals and they are addressed by slot.** `@awp-kit/pane`
+kept one for the whole window and re-parented it on mount, so two panes on
+screen at once took the canvas from each other — the loser goes blank, with no
+error anywhere. `PaneSlot` is `stage` or `accessory`; a slot is a place in the
+layout, never a session, because each one costs a 10,000-line scrollback that is
+never given back. Switching shells re-attaches the accessory terminal exactly as
+switching workspaces re-attaches the stage's, so **one shell is on screen at a
+time** whatever the strip says.
+
+**`+` is not `SessionStart`.** That call is idempotent because a workspace has
+one agent; a second press here means a second shell, so **the daemon picks the
+number** — two windows on one workspace would otherwise name the same session and
+`Multiplexer.start` would hand them both the same terminal. It answers with the
+name, and `shell_<n>` is an address rather than a position: closing the second of
+three leaves the third where it is.
+
+**An ended shell is not drawn**, and the daemon kills one before taking its
+number back. zmx keeps a session listed after its command exits, `start` leaves
+an existing name exactly as it was, and both halves of that fail silently — a
+tab that draws a dead screen and takes no keys, and a `+` that reports success
+and produces nothing.
+
+**The close is one control on the strip, not a cross per tab.** A Base UI tab
+_is_ a `<button>`, so a cross inside one is invalid markup with two owners for
+every click.
+
 ### Gadgets
 
 An agent's documents, drawn in this process, in a panel of their own after the

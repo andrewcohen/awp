@@ -921,6 +921,7 @@ function Window() {
           ) : (
             <Boundary where="the terminal">
               <Pane
+                slot="stage"
                 session={open?.name}
                 fixture={rendererFixture}
                 scheme={scheme}

@@ -1,11 +1,12 @@
 // A terminal pane: libghostty compiled to wasm, rendered to canvas.
 //
-// One Terminal for the life of the window, reused by every pane, never
-// disposed. ghostty-web's dispose() frees wasm state the module-level Ghostty
-// instance keeps handing out, so building one per view is what caused four
-// distinct bugs with a single cause — see terminal.ts. The canvas lives in a
-// host element this package owns and re-parents on mount, so React can mount
-// and unmount views without the terminal noticing.
+// One Terminal per slot for the life of the window, never disposed.
+// ghostty-web's dispose() frees wasm state the module-level Ghostty instance
+// keeps handing out, so building one per *view* is what caused four distinct
+// bugs with a single cause — see terminal.ts, which also has the argument for
+// why a fixed set of slots is not that. The canvas lives in a host element this
+// package owns per slot and re-parents on mount, so React can mount and unmount
+// views without the terminal noticing.
 //
 // The renderer itself is patched: `patches/ghostty-web@0.4.0.patch`, applied by
 // bun on install. Four fixes, each measured — row height from the font's line
@@ -26,6 +27,7 @@ export {
   setPaneTheme,
   writePane,
   type PaneOptions,
+  type PaneSlot,
   type PaneTerminal,
 } from "./terminal";
 

@@ -251,6 +251,20 @@ export const listSessions = (): Promise<ReadonlyArray<SessionInfo>> =>
 export const startSession = (project: string, workspace: string): Promise<string> =>
   runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.SessionStart({ project, workspace })));
 
+/**
+ * Open another shell in a workspace, and answer with the session it made.
+ *
+ * **Not** idempotent, unlike `startSession`, and that is the difference the
+ * contract is built around: pressing `+` twice means two shells. The daemon
+ * picks the number, so two windows cannot land on one session.
+ */
+export const openShell = (project: string, workspace: string): Promise<string> =>
+  runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.ShellOpen({ project, workspace })));
+
+/** End a shell and everything in it. Refused for anything that is not one. */
+export const closeShell = (session: string): Promise<void> =>
+  runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.ShellClose({ session })));
+
 /** Where a workspace's checkout is. Only asked when no session carries it. */
 export const workspaceDir = (project: string, workspace: string): Promise<string> =>
   runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.WorkspaceDir({ project, workspace })));

@@ -1,5 +1,6 @@
 import {
   type ColorScheme,
+  type PaneSlot,
   focusPane,
   mountPaneTerminal,
   paneFontFamily,
@@ -22,7 +23,9 @@ import { colors, space } from "../design/tokens.stylex";
 //
 // The terminal is borrowed rather than built. See @awp-kit/pane — building one
 // per view writes into freed wasm state, which is the single cause behind four
-// different complaints in gdeck.
+// different complaints in gdeck. `slot` says *which* borrowed terminal: the
+// stage's and the shell panel's are on screen at the same time, and one
+// terminal cannot be in two places.
 
 const styles = stylex.create({
   failure: {
@@ -44,11 +47,21 @@ const styles = stylex.create({
 });
 
 export function Pane({
+  slot,
   session,
   fixture,
   scheme,
   focus,
 }: {
+  /**
+   * Which of the window's terminals to draw in.
+   *
+   * Not derived from the session, deliberately — a slot is a place in the
+   * layout and there is one terminal per place. Two panes naming the same slot
+   * would take the canvas from each other, which is exactly what a single
+   * global terminal did.
+   */
+  readonly slot: PaneSlot;
   /** The session to attach to, or undefined to render `fixture` instead. */
   readonly session: string | undefined;
   readonly fixture: string;
@@ -86,7 +99,7 @@ export function Pane({
         if (cancelled) {
           return;
         }
-        const { term, fit } = mountPaneTerminal(parent, {
+        const { term, fit } = mountPaneTerminal(slot, parent, {
           fontFamily: paneFontFamily,
           // Read live rather than from the prop, deliberately. Mounting
           // replays the session and recolouring must not, so this effect does
@@ -94,14 +107,15 @@ export function Pane({
           // close over it either. The second effect below owns the scheme.
           theme: paneThemeFor(currentColorScheme()),
         });
-        resetPane();
+        resetPane(slot);
 
         if (session === undefined) {
           setPaneSinks(
+            slot,
             () => {},
             () => {},
           );
-          writePane(fixture);
+          writePane(slot, fixture);
           return;
         }
 
@@ -113,7 +127,7 @@ export function Pane({
           // Through writePane, not term.write. The pane has to read the
           // private modes out of the stream to know what the program wants from
           // a wheel, and this is the only place every byte passes through.
-          onChunk: (chunk) => writePane(chunk),
+          onChunk: (chunk) => writePane(slot, chunk),
           onRefused: (reason) => setFailure(reason),
         });
 
@@ -122,12 +136,13 @@ export function Pane({
         // unsubscribe — a stale handler would type into a session the user has
         // already left.
         setPaneSinks(
+          slot,
           (data) => write(session, data),
           (cols, rows) => resize(session, cols, rows),
         );
 
         fit.fit();
-        focusPane();
+        focusPane(slot);
       })
       .catch((error: unknown) => {
         // Reported in the pane rather than thrown. A rendering unit whose
@@ -143,7 +158,7 @@ export function Pane({
       // leaves a client attached to a session sized for a window that has gone.
       attachment?.detach();
     };
-  }, [session, fixture]);
+  }, [slot, session, fixture]);
 
   // Focus on arrival. Behind `paneReady()` for the same reason the recolour
   // below is: there is no terminal to focus until the wasm has compiled, and
@@ -158,13 +173,13 @@ export function Pane({
     let cancelled = false;
     void paneReady().then(() => {
       if (!cancelled) {
-        focusPane();
+        focusPane(slot);
       }
     });
     return () => {
       cancelled = true;
     };
-  }, [focus]);
+  }, [slot, focus]);
 
   // Recolour without remounting. Still behind paneReady() — the appearance can
   // change while the wasm is still compiling, and there is no renderer to talk
@@ -173,13 +188,13 @@ export function Pane({
     let cancelled = false;
     void paneReady().then(() => {
       if (!cancelled) {
-        setPaneTheme(paneThemeFor(scheme));
+        setPaneTheme(slot, paneThemeFor(scheme));
       }
     });
     return () => {
       cancelled = true;
     };
-  }, [scheme]);
+  }, [slot, scheme]);
 
   if (failure !== "") {
     return <pre {...stylex.props(styles.failure)}>{failure}</pre>;
@@ -209,7 +224,7 @@ export function Pane({
           return;
         }
         write(session, `${paths.join(" ")} `);
-        focusPane();
+        focusPane(slot);
       }}
       {...stylex.props(styles.backdrop(paletteFor(scheme).base))}
     />

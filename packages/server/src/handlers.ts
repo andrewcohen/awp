@@ -31,6 +31,8 @@ import {
   type SessionInfo,
   SessionNotFound,
   SessionStartFailed,
+  shellKind,
+  shellNumber,
   ThreadNotFound,
   ThreadStartFailed,
   type WorkspaceFacts,
@@ -119,6 +121,24 @@ const asReviewFailure = <A, R>(
 
 /** The kind a review is delivered to. Matches PRIMARY in the renderer. */
 const AGENT = "agent";
+
+/**
+ * What a shell pane runs: the person's own shell.
+ *
+ * Not configured, and not `agent` — a shell is the one thing here nobody needs
+ * to declare, and a setting would be a second answer to a question the
+ * environment already answers. `bash` is the floor rather than a preference:
+ * every machine has one, and a wrong guess at `zsh` is a session that starts
+ * and immediately exits.
+ *
+ * Empty is absent. `SHELL=""` reaches a `??` guard untouched and would be
+ * handed to zmx as a command with no name — see AGENTS.md, where this has cost
+ * weeks three times.
+ */
+const loginShell = (): string => {
+  const said = process.env["SHELL"];
+  return said === undefined || said === "" ? "/bin/bash" : said;
+};
 
 /**
  * A batch of comments, as one thing to say to an agent.
@@ -255,7 +275,13 @@ export const notePrompt = (note: PageNote): string => {
 };
 import { refusalFor } from "./attachment";
 import { readTasks, taskPrompt } from "./agent-tasks";
-import { Multiplexer, type Session, identities, isLive } from "./multiplexer";
+import {
+  Multiplexer,
+  type Session,
+  identities,
+  identity as sessionIdentity,
+  isLive,
+} from "./multiplexer";
 import { currentZmxSession } from "./zmx-session";
 import { Sessions } from "./sessions";
 import { changesUnder } from "./watch";
@@ -954,6 +980,110 @@ export const layer = AwpRpcs.toLayer(
             .pipe(Effect.mapError((error) => new SessionStartFailed({ reason: error.reason })));
 
           return name;
+        }),
+
+      /**
+       * Another shell in a workspace, and the name it got.
+       *
+       * ── the number is chosen here, and that is the whole call ────────────
+       *
+       * `SessionStart` can be idempotent because a workspace has exactly one
+       * agent. A second press of `+` means a second shell, so the caller
+       * cannot be the one naming it: two windows on one workspace would pick
+       * the same kind and `Multiplexer.start` — which leaves an existing name
+       * exactly as it was — would hand them both the same terminal.
+       *
+       * The lowest free number, so closing the second of three and opening
+       * another fills the hole rather than counting past it. The search is
+       * bounded by the shells that exist: the first gap ends it.
+       *
+       * **A listed shell that has ended is reused.** zmx keeps a session
+       * listed after its command exits so the output can still be read, and
+       * `start` would leave that corpse in place and report success — a `+`
+       * that appears to do nothing. It is killed first, and only ever one this
+       * workspace owns, whose kind this daemon spelled.
+       */
+      ShellOpen: ({ project, workspace }) =>
+        Effect.gen(function* () {
+          const dir = workspacePath(project, workspace);
+          const listed = yield* mux
+            .list()
+            .pipe(Effect.mapError((error) => new SessionStartFailed({ reason: error.reason })));
+          const byName = new Map(listed.map((session) => [session.name, session] as const));
+
+          let n = 1;
+          let name = sessionName(project, workspace, shellKind(n));
+          for (;;) {
+            const held = byName.get(name);
+            if (held === undefined) {
+              break;
+            }
+            if (held.ended) {
+              // Ours by construction: the name was generated from this pair
+              // and this kind, so nothing else can be answering to it.
+              yield* mux
+                .kill(name)
+                .pipe(Effect.mapError((error) => new SessionStartFailed({ reason: error.reason })));
+              break;
+            }
+            n += 1;
+            name = sessionName(project, workspace, shellKind(n));
+          }
+
+          const held = yield* threads.list().pipe(Effect.orDie);
+          const claimed = held.find(
+            (thread) =>
+              thread.archivedAt === undefined &&
+              thread.members.some(
+                (member) => member.project === project && member.workspace === workspace,
+              ),
+          );
+
+          yield* mux
+            .start({ name, cwd: dir, command: [loginShell()] })
+            .pipe(Effect.mapError((error) => new SessionStartFailed({ reason: error.reason })));
+
+          // Its own call for the same reason SessionStart makes it: the name is
+          // shortened and cannot be split back, so the labels are the only
+          // unshortened truth about which workspace this belongs to.
+          yield* mux
+            .setLabels(name, identityLabels(project, workspace, shellKind(n), claimed?.title))
+            .pipe(Effect.mapError((error) => new SessionStartFailed({ reason: error.reason })));
+
+          return name;
+        }),
+
+      /**
+       * A shell, ended.
+       *
+       * The refusal is the interesting half. This kills a process tree, so it
+       * asks the multiplexer what the session *is* rather than trusting the
+       * name it was handed — a client that computed a name wrong, or a caller
+       * that never was one, must not be able to take down an agent by asking
+       * politely.
+       */
+      ShellClose: ({ session }) =>
+        Effect.gen(function* () {
+          const found = yield* mux
+            .lookup(session)
+            .pipe(Effect.mapError((error) => new SessionStartFailed({ reason: error.reason })));
+          if (found === undefined) {
+            // Already gone is the outcome asked for. Reporting it as a failure
+            // would put an error in front of somebody for a tab that closed
+            // twice.
+            return;
+          }
+          const kind = sessionIdentity(found)?.kind;
+          if (kind === undefined || shellNumber(kind) === undefined) {
+            return yield* Effect.fail(
+              new SessionStartFailed({
+                reason: `${session} is not a shell — only a session awp opened as one can be closed here`,
+              }),
+            );
+          }
+          yield* mux
+            .kill(session)
+            .pipe(Effect.mapError((error) => new SessionStartFailed({ reason: error.reason })));
         }),
 
       Attach: ({ session, cols, rows }) =>

@@ -13,6 +13,8 @@ import {
   type Revision,
   type WorkspaceFacts,
   SessionInfo,
+  shellKind,
+  shellNumber,
   type Thread,
 } from "./index";
 
@@ -50,6 +52,25 @@ const example: SessionInfo = {
   },
   refusal: undefined,
 };
+
+// The spelling both sides read. The daemon writes a kind when it opens a shell
+// and the window reads one back to decide which tabs exist — so a change here
+// that only one side knew about is a workspace whose shells vanish from the
+// strip while every one of them is still running.
+describe("a shell's kind", () => {
+  it("round-trips", () => {
+    expect(shellNumber(shellKind(7))).toBe(7);
+  });
+
+  // Strict on purpose: on the daemon's side this answer decides whether a
+  // session may be killed.
+  it.each(["agent", "shell", "shell_", "shell_0", "shell_01", "shell_1x", "action_shell_1"])(
+    "does not read %s as a shell",
+    (kind) => {
+      expect(shellNumber(kind)).toBeUndefined();
+    },
+  );
+});
 
 describe("SessionInfo on the wire", () => {
   it("round-trips through the codec the transport uses", () => {
@@ -247,6 +268,8 @@ const handlers = AwpRpcs.toLayer({
   SessionList: () => Effect.succeed([example]),
   WorkspaceDir: (pair) => Effect.succeed(`/ws/${pair.project}/${pair.workspace}`),
   SessionStart: (pair) => Effect.succeed(`awp.${pair.project}.${pair.workspace}.agent`),
+  ShellOpen: (pair) => Effect.succeed(`awp.${pair.project}.${pair.workspace}.shell_1`),
+  ShellClose: () => Effect.void,
   Attach: ({ session }) =>
     session === "gone"
       ? Stream.fail(new AttachRefused({ session, reason: "no such session" }))
