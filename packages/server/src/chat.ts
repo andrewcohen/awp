@@ -55,6 +55,7 @@ import {
 import {
   Context,
   Data,
+  Deferred,
   Duration,
   Effect,
   Exit,
@@ -311,6 +312,19 @@ interface Conversation {
    * belongs to something else.
    */
   readonly sessionId: string;
+  /**
+   * Completes when the adapter has stopped answering, however it stopped.
+   *
+   * The reader's end is the one place this side can know, and until now all it
+   * did with that knowledge was fail the requests that were waiting. The
+   * conversation itself stayed in the `RcMap` — so the next message opened a
+   * fresh stream against a dead process and the sender was told nothing.
+   *
+   * Also completes when this scope closes, because a killed adapter is an
+   * adapter that stopped. Whoever waits on it has to tell those apart itself;
+   * `generations` below is how.
+   */
+  readonly gone: Effect.Effect<void>;
   /** The history so far, then everything that happens next. */
   readonly updates: Effect.Effect<Stream.Stream<ChatUpdate>, never, Scope.Scope>;
   /**
@@ -816,6 +830,11 @@ export const conversation = (
     // it started.
     const mine = yield* Effect.scope;
 
+    // The adapter stopping, as an edge somebody outside can wait on. The
+    // reader already knows — see `abandonWaiting` — and knowing was the whole
+    // of what this side did about it. See {@link Conversation.gone}.
+    const stopped = yield* Deferred.make<void>();
+
     const transcript = yield* Ref.make<ReadonlyArray<Numbered>>([]);
     const subscribers = yield* Ref.make(new Set<Queue.Queue<Numbered>>());
     const emit = (update: ChatUpdate) =>
@@ -1069,7 +1088,13 @@ export const conversation = (
     // was waiting on it — whether the stream finished (the process exited),
     // failed, or was interrupted by this scope closing.
     yield* Effect.forkScoped(
-      Effect.ensuring(Effect.ignore(reader), abandonWaiting("the ACP adapter stopped answering")),
+      Effect.ensuring(
+        Effect.ignore(reader),
+        Effect.andThen(
+          abandonWaiting("the ACP adapter stopped answering"),
+          Deferred.succeed(stopped, undefined),
+        ),
+      ),
     );
 
     const hello = yield* request("initialize", {
@@ -1456,6 +1481,8 @@ export const conversation = (
     return {
       sessionId,
 
+      gone: Deferred.await(stopped),
+
       updates: Effect.gen(function* () {
         const queue = yield* Queue.unbounded<Numbered>();
         // Register first, snapshot second. The other order drops anything that
@@ -1831,6 +1858,36 @@ export const oneAtATime = (where: Scope.Scope) => {
 };
 
 /**
+ * Which conversation a key currently means, so a dead one cannot speak for it.
+ *
+ * `RcMap.invalidate` followed by `RcMap.get` — `/new`, the fork, and now the
+ * adapter dying — runs the new lookup while the old entry's scope is still
+ * closing. A finalizer that reached for the key by name would be reaching past
+ * itself at whatever now answers to it, and the one thing it does is kill the
+ * entry: **a stale watcher invalidating the conversation `/new` just opened.**
+ *
+ * So a holder is handed a token and speaks only while it is still the one
+ * `take` last gave out. `drop` is the same check, which is what makes it safe
+ * to call from a finalizer after a replacement has already taken the key.
+ *
+ * Exported for its test rather than for a second caller, like {@link once}.
+ */
+export const generations = () => {
+  const live = new Map<string, symbol>();
+  return {
+    take: (key: string): symbol => {
+      const token = Symbol(key);
+      live.set(key, token);
+      return token;
+    },
+    current: (key: string, token: symbol): boolean => live.get(key) === token,
+    drop: (key: string, token: symbol): void => {
+      if (live.get(key) === token) live.delete(key);
+    },
+  };
+};
+
+/**
  * An effect that happens the first time it is asked and is nothing after.
  *
  * Exported for its test rather than for a second caller. What it guards is a
@@ -2038,6 +2095,17 @@ export const make = Effect.gen(function* () {
    */
   const forget = new Map<string, (request: string) => Effect.Effect<void>>();
 
+  /** Which adapter each key currently means. See {@link generations}. */
+  const current = generations();
+
+  /**
+   * The map, named before it exists, because a lookup has to invalidate the
+   * entry it is building. Annotated rather than inferred: a lookup that closed
+   * over `conversations` directly would give that constant a type written in
+   * terms of its own initializer, which is not a type.
+   */
+  let map: RcMap.RcMap<string, Conversation, ChatError> | undefined;
+
   const conversations = yield* RcMap.make({
     lookup: (key: string) =>
       Effect.gen(function* () {
@@ -2209,6 +2277,39 @@ export const make = Effect.gen(function* () {
           ),
         );
 
+        // ── an adapter with nothing under it must not survive ─────────────
+        //
+        // The reader ending is the only stop this side sees, and until now all
+        // it did was fail the requests already in flight. The entry stayed,
+        // so the next message went to a corpse: a fresh `session/prompt`
+        // written at a pipe nobody reads, failed by `abandonWaiting` two
+        // minutes later when the TTL finally took the row out.
+        //
+        // Registered last, so on a deliberate close it is the **first**
+        // finalizer to run — finalizers are LIFO, the reader is interrupted
+        // by one registered inside `conversation`, and by the time `gone`
+        // completes this token is no longer the key's. That is how a kill
+        // this process asked for is told from an adapter that died: one of
+        // them has already given the key up.
+        const token = current.take(key);
+        yield* Effect.addFinalizer(() => Effect.sync(() => current.drop(key, token)));
+        yield* Effect.forkIn(
+          Effect.andThen(
+            held.gone,
+            Effect.suspend(() =>
+              map === undefined || !current.current(key, token)
+                ? Effect.void
+                : Effect.andThen(
+                    Effect.sync(() => current.drop(key, token)),
+                    RcMap.invalidate(map, key),
+                  ),
+            ),
+          ),
+          // The daemon's scope and not this entry's: a fiber that lived here
+          // would be interrupted by the very close it exists to cause.
+          mine,
+        );
+
         return held;
       }),
     // A held-open adapter costs a process and a model's context, and a person
@@ -2217,6 +2318,7 @@ export const make = Effect.gen(function* () {
     // not holding an agent open.
     idleTimeToLive: "2 minutes",
   });
+  map = conversations;
 
   // `send` and `answer` acquire the conversation the same way `open` does,
   // rather than reading an index the way Sessions has to. The difference is

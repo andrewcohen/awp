@@ -592,3 +592,16 @@ POSIX would have orphaned it and the opposite is the reasonable guess:
 backgrounded command ends its turn at once, so nothing is holding it. **Anything
 meant to outlive a turn needs a session of its own** — holding the adapter open
 longer only moves the deadline.
+
+### An adapter that stopped is not a conversation
+
+The reader ending is the only stop this side sees, and knowing was all it did:
+the `RcMap` entry stayed live to the TTL, so the next message went to a corpse.
+`Conversation.gone` is that edge, and the lookup invalidates its own entry on it.
+
+**A finalizer may not reach for a key by name.** `invalidate` then `get` — `/new`,
+the fork, and this — runs the new lookup while the old scope is still closing, so
+a watcher naming the key would kill the conversation `/new` just opened.
+`generations` hands out a token and the holder speaks only while it is still the
+key's; registered **last**, so LIFO makes it the first finalizer to run and a
+kill this daemon asked for has given the key up before `gone` completes.

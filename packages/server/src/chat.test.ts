@@ -5,6 +5,7 @@ import {
   compactionOf,
   interrupts,
   hanging,
+  generations,
   migrations,
   once,
   optionsOf,
@@ -481,6 +482,42 @@ describe("letting go once", () => {
     // second one decrements a hold a *later* adapter has taken, and releases a
     // session that is being written — the one thing the claim is for.
     expect(answer).toBe(1);
+  });
+});
+
+describe("which conversation a key currently means", () => {
+  it("lets the holder speak, and the one it replaced say nothing", () => {
+    const keys = generations();
+    const key = "thicket\nlantern";
+
+    const first = keys.take(key);
+    expect(keys.current(key, first)).toBe(true);
+
+    // `/new`, the fork, and an adapter that died all do this: invalidate, then
+    // get, so the replacement is taken while the old entry's scope is still
+    // closing. The old holder's finalizer runs after, and the one thing it
+    // would do is invalidate — the conversation `/new` just opened.
+    const second = keys.take(key);
+    expect(keys.current(key, first)).toBe(false);
+    expect(keys.current(key, second)).toBe(true);
+
+    // And its `drop` is the same check, so arriving late is not a way to
+    // release a key somebody else is holding.
+    keys.drop(key, first);
+    expect(keys.current(key, second)).toBe(true);
+
+    keys.drop(key, second);
+    expect(keys.current(key, second)).toBe(false);
+  });
+
+  it("does not confuse two workspaces", () => {
+    const keys = generations();
+    const one = keys.take("thicket\nlantern");
+    const two = keys.take("thicket\norchard");
+
+    keys.drop("thicket\nlantern", one);
+
+    expect(keys.current("thicket\norchard", two)).toBe(true);
   });
 });
 

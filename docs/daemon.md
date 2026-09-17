@@ -2365,3 +2365,55 @@ minded, and the agent asking it is released two minutes later.
 and `chat.test.ts` records — as a measurement, against a real adapter — that in
 `auto` the request never arrives at all. So `working` is the only status holding
 a conversation open here, and a turn that backgrounds something is over.
+
+### An adapter with nothing under it, and the entry that outlives it
+
+The tree that was measured is the healthy shape, and it says who owns what: the
+MCP server and every tool shell are children of **claude**, not of the adapter.
+So a claude that exits leaves an adapter awp spawned, still connected, able to
+answer no prompt.
+
+awp does see the _adapter_ stop — the reader's stream ending is the edge, and
+`abandonWaiting` fails every request that was in flight with a sentence. What it
+did not do was take the row out. The entry stayed in the `RcMap` for the full
+two-minute TTL, so the next message opened a stream against a dead process and
+waited for `abandonWaiting` to fail it a second time.
+
+`Conversation.gone` is that edge made waitable, and the lookup forks a watcher on
+it that invalidates its own key. It does not notice claude stopping — whether the
+adapter exits when its child does is upstream's business. awp's part is to stop
+treating the entry as live on the edge it already has.
+
+#### The race that makes a token necessary
+
+`RcMap.invalidate` followed by `RcMap.get` is what `/new` and the fork both do,
+and `chat.ts` already records that the new lookup runs while the old entry's
+scope is still closing — the refcount under `holds` exists for exactly that
+interleaving. A watcher that reached for the key by name would therefore be
+reaching past itself:
+
+```
+  /new         invalidate      the old scope begins closing
+               get             a fresh adapter takes the key
+  the old one  gone completes  the reader was interrupted by the close
+               invalidate      ← kills the conversation /new just opened
+```
+
+So `generations` hands each holder a token and answers `current` only while it is
+still the one `take` last gave out, and `drop` is the same check — which is what
+makes it safe to call from a finalizer after a replacement has taken the key.
+
+Two orderings decide whether this works, and neither is obvious:
+
+- The watcher is forked into the **daemon's** scope, not the entry's. A fiber
+  living in the entry would be interrupted by the very close it exists to cause.
+- The token is taken **last** in the lookup. Scope finalizers are LIFO, the
+  reader is interrupted by a finalizer registered earlier inside `conversation`,
+  so on a deliberate close the token is already gone by the time `gone`
+  completes. That is how a kill this daemon asked for is told from an adapter
+  that died: one of them has given the key up first.
+
+`gone` completing on a deliberate close is deliberate rather than tolerated. A
+signal that fired only on an unexpected death would need the death detected
+somewhere else to be sure it was unexpected, and the place that knows is the
+scope.
