@@ -3800,6 +3800,29 @@ export class AwpRpcs extends RpcGroup.make(
       /** A directory in the workspace — a session's `startDir` will do. */
       from: Schema.String,
       limit: Schema.optional(Schema.Int),
+      /**
+       * Which workspace this is about, when the caller knows.
+       *
+       * ── what it buys, and why it is not derived from `from` ───────────────
+       *
+       * The base of a stack is not always `trunk()`. A pull request opened on
+       * top of another one has *its* branch as the base, and a stack measured
+       * from trunk then shows the parent's commits as though they were this
+       * change — which is the review somebody is about to do, made wrong.
+       *
+       * Only the daemon can resolve that: the link from a workspace to a pull
+       * request is on the thread record, and the base branch is in what `gh`
+       * last said. So the caller names the *workspace* — a fact it already
+       * holds — and the daemon applies the rule. Deriving the pair from the
+       * directory instead would be a path comparison against a convention,
+       * which is the sort of thing that works until somebody has a symlink.
+       *
+       * Absent is the honest answer for an agent asking about a checkout it
+       * was handed, and it means the base is worked out from the repository
+       * alone. See `stackBase` in the daemon for what that falls back to.
+       */
+      project: Schema.optional(Schema.String),
+      workspace: Schema.optional(Schema.String),
     },
     success: Schema.Array(Revision),
     error: DiffUnavailable,
@@ -3836,6 +3859,29 @@ export class AwpRpcs extends RpcGroup.make(
        * setting this.
        */
       stack: Schema.optional(Schema.Boolean),
+      /**
+       * Which workspace this is about, when the caller knows.
+       *
+       * ── what it buys, and why it is not derived from `from` ───────────────
+       *
+       * The base of a stack is not always `trunk()`. A pull request opened on
+       * top of another one has *its* branch as the base, and a stack measured
+       * from trunk then shows the parent's commits as though they were this
+       * change — which is the review somebody is about to do, made wrong.
+       *
+       * Only the daemon can resolve that: the link from a workspace to a pull
+       * request is on the thread record, and the base branch is in what `gh`
+       * last said. So the caller names the *workspace* — a fact it already
+       * holds — and the daemon applies the rule. Deriving the pair from the
+       * directory instead would be a path comparison against a convention,
+       * which is the sort of thing that works until somebody has a symlink.
+       *
+       * Absent is the honest answer for an agent asking about a checkout it
+       * was handed, and it means the base is worked out from the repository
+       * alone. See `stackBase` in the daemon for what that falls back to.
+       */
+      project: Schema.optional(Schema.String),
+      workspace: Schema.optional(Schema.String),
     },
     success: Patch,
     error: DiffUnavailable,

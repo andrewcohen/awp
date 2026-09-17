@@ -737,43 +737,59 @@ export function Diff({
     latest.current = at;
   }, [at]);
 
-  const askRevisions = useCallback((where: string) => {
-    listRevisions(where)
-      .then(setRevisions)
-      .catch(() => {
-        // Silent, deliberately. The diff below has its own failure and it is
-        // the one worth showing; two messages about the same unreachable
-        // daemon is one more than says anything.
-        setRevisions([]);
-      });
-  }, []);
+  // The pair travels with both calls, because what a stack is measured *from*
+  // depends on it: a workspace whose thread names a pull request is measured
+  // from that request's base, not from trunk. The rule is the daemon's — see
+  // `stackBase` — and this is only the fact it needs to apply it.
+  //
+  // Built inside each callback from the two strings rather than held as an
+  // object beside them. An object is a new value every render, so it would be a
+  // new callback every render — and the effects below depend on the callbacks,
+  // which makes that a patch request per render rather than per workspace.
 
-  const askPatch = useCallback((where: string, revision: string | undefined) => {
-    newest.current += 1;
-    const mine = newest.current;
+  const askRevisions = useCallback(
+    (where: string) => {
+      listRevisions(where, undefined, { project, workspace })
+        .then(setRevisions)
+        .catch(() => {
+          // Silent, deliberately. The diff below has its own failure and it is
+          // the one worth showing; two messages about the same unreachable
+          // daemon is one more than says anything.
+          setRevisions([]);
+        });
+    },
+    [project, workspace],
+  );
 
-    readDiff(where, revision)
-      .then((answer) => {
-        // The revision is checked as well as the counter. The reply carries
-        // what it was for precisely so a stale one can be told apart from a
-        // current one, and the two guards answer different questions: the
-        // counter is "is this request still wanted", the revision is "is this
-        // the row on screen".
-        if (mine === newest.current && answer.revision === (revision ?? WORKING_COPY)) {
-          setPatch(answer.patch);
-          // Cleared here rather than when the request went out, so a panel
-          // showing an error keeps showing it until there is something to put
-          // in its place.
-          setFailure(undefined);
-        }
-      })
-      .catch((error: unknown) => {
-        if (mine === newest.current) {
-          setPatch(undefined);
-          setFailure(said(error));
-        }
-      });
-  }, []);
+  const askPatch = useCallback(
+    (where: string, revision: string | undefined) => {
+      newest.current += 1;
+      const mine = newest.current;
+
+      readDiff(where, revision, { project, workspace })
+        .then((answer) => {
+          // The revision is checked as well as the counter. The reply carries
+          // what it was for precisely so a stale one can be told apart from a
+          // current one, and the two guards answer different questions: the
+          // counter is "is this request still wanted", the revision is "is this
+          // the row on screen".
+          if (mine === newest.current && answer.revision === (revision ?? WORKING_COPY)) {
+            setPatch(answer.patch);
+            // Cleared here rather than when the request went out, so a panel
+            // showing an error keeps showing it until there is something to put
+            // in its place.
+            setFailure(undefined);
+          }
+        })
+        .catch((error: unknown) => {
+          if (mine === newest.current) {
+            setPatch(undefined);
+            setFailure(said(error));
+          }
+        });
+    },
+    [project, workspace],
+  );
 
   useEffect(() => {
     if (dir !== undefined) {

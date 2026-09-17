@@ -686,8 +686,18 @@ export const watchWorkspace = (from: string, onChange: () => void): (() => void)
  * The window has a directory, never a workspace name, and `@` is resolved per
  * workspace — so a directory is the only thing that names one of these.
  */
-export const listRevisions = (from: string, limit?: number): Promise<ReadonlyArray<Revision>> =>
-  runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.Revisions({ from, limit })));
+export const listRevisions = (
+  from: string,
+  limit?: number,
+  about?: DiffAbout,
+): Promise<ReadonlyArray<Revision>> =>
+  runtime.runPromise(
+    // The same pair the patch call sends, and for the same reason: a list that
+    // starts at trunk while the patch starts at the pull request's base is two
+    // answers to one question, and the list would show commits the patch does
+    // not account for.
+    Effect.flatMap(AwpClient, (rpc) => rpc.Revisions({ from, limit, ...pair(about) })),
+  );
 
 /**
  * The patch for one revision, or for the working copy when none is named.
@@ -707,15 +717,45 @@ export const listRevisions = (from: string, limit?: number): Promise<ReadonlyArr
  */
 export const STACK = "stack";
 
-export const readDiff = (from: string, revision?: string): Promise<Patch> =>
+/**
+ * The pair a diff call names itself with.
+ *
+ * Sent so the daemon can work out what the stack is measured *from* — a pull
+ * request opened on top of another one has that one as its base, and a stack
+ * measured from trunk shows the parent's commits as though they were this
+ * change. The rule is the daemon's; the pair is a fact this window already
+ * holds. Absent for a session awp did not create, which is also the case where
+ * there is no thread and so no pull request to ask about.
+ */
+export interface DiffAbout {
+  readonly project: string | undefined;
+  readonly workspace: string | undefined;
+}
+
+export const readDiff = (from: string, revision?: string, about?: DiffAbout): Promise<Patch> =>
   runtime.runPromise(
     Effect.flatMap(AwpClient, (rpc) =>
       // Translated here rather than carried through the panel: `stack` is a
       // boolean on the wire because it is a different question, not a
       // revision the daemon could look up.
-      revision === STACK ? rpc.Diff({ from, stack: true }) : rpc.Diff({ from, revision }),
+      revision === STACK
+        ? rpc.Diff({ from, stack: true, ...pair(about) })
+        : rpc.Diff({ from, revision, ...pair(about) }),
     ),
   );
+
+/**
+ * The pair, as the payload spells it.
+ *
+ * `exactOptionalPropertyTypes` is on, so an absent field and a field set to
+ * `undefined` are different things to the compiler — and the schema's optional
+ * means absent. Spread of an empty object is how a field goes missing rather
+ * than arriving empty.
+ */
+const pair = (about: DiffAbout | undefined): { project?: string; workspace?: string } =>
+  about?.project === undefined || about.workspace === undefined
+    ? {}
+    : { project: about.project, workspace: about.workspace };
 
 // ── comments on a diff ─────────────────────────────────────────────────────
 //

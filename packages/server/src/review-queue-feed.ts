@@ -271,6 +271,23 @@ export class ReviewQueueFeed extends Context.Service<
     ) => Effect.Effect<PullRequest | undefined, GithubError>;
 
     /**
+     * One pull request, **only** if it is already here.
+     *
+     * The same question {@link find} answers, minus the half that can reach
+     * GitHub — which is the whole reason it is a second method rather than a
+     * flag. `find` exists for the moment somebody *acts* on a row and a second
+     * of waiting is the price of being right. This one is for a caller on a
+     * path that must not wait: the diff panel asks what a stack's base is every
+     * time it is opened, which for a panel in a tab strip is several times a
+     * minute, and a cold cache after a daemon restart would put `gh pr list` —
+     * measured at 4.5s — in front of a patch that jj could have drawn at once.
+     *
+     * Absent is an ordinary answer and the caller is expected to have another
+     * way of getting on with it.
+     */
+    readonly held: (repo: string, number: number) => Effect.Effect<PullRequest | undefined>;
+
+    /**
      * Who `gh` is signed in as, from the cache.
      *
      * Exposed because the repair prompt's *tone* depends on it — an owner is
@@ -727,6 +744,28 @@ const make = Effect.gen(function* () {
       }),
 
     who: () => viewer(false),
+
+    held: (repo: string, number: number) =>
+      Effect.gen(function* () {
+        const inMemory = (yield* Ref.get(cache)).get(repo);
+        if (inMemory !== undefined) {
+          return inMemory.prs.find((pr) => pr.number === number);
+        }
+        // Then the row on disk, and **with no lifetime on it**. Everywhere else
+        // here an old row is a reason to go and ask again, because what those
+        // callers want is the state of a review. This caller wants the base
+        // branch, which is set when a pull request is opened and changed by
+        // hand if ever — so a row from last week is the same answer as a row
+        // from a minute ago, and going to GitHub for it would be exactly the
+        // wait this method exists to avoid.
+        const now = yield* Clock.currentTimeMillis;
+        const kept = yield* stored<ReadonlyArray<PullRequest>>(
+          () => readList.all(repo, PROJECTION),
+          Number.POSITIVE_INFINITY,
+          now,
+        );
+        return kept?.value.find((pr) => pr.number === number);
+      }),
 
     find: (repo: string, number: number) =>
       Effect.gen(function* () {

@@ -234,6 +234,18 @@ interface Fakes {
   readonly contains?: boolean | undefined;
   /** True when the working copy has uncommitted work in it. */
   readonly dirty?: boolean | undefined;
+  /** Every revset the fake was asked to list, in order. */
+  readonly revsets?: string[] | undefined;
+  /**
+   * The commit the pull request's base branch resolves to, or absent for a
+   * base nothing here has fetched.
+   */
+  readonly prBase?: string | undefined;
+  /**
+   * The commit the nearest ancestor bookmark that is not this workspace's own
+   * sits on, or absent for a workspace with nothing above trunk.
+   */
+  readonly nearestBookmark?: string | undefined;
   /** What the listing had to give up, if a test is about that. */
   readonly degraded?: string | undefined;
   /** The pull request description the detail call answers with. */
@@ -452,58 +464,83 @@ const run = <A>(body: (rpc: Client) => Effect.Effect<A, unknown, Scope.Scope>, f
             // Answers with the revset it was handed, as the description of its
             // one row. What is under test is which revset the handler chose,
             // and a fake that returned plausible commits would hide it.
-            revisions: ({ revset, limit }: RevisionsIn) =>
-              // Four revsets this fake answers about, and each is a different
-              // test's knob. Ordered so the two specific ones are matched before
-              // the general fallback.
-              //
-              //   present(<oid>) & ::@   does this checkout contain the head —
-              //                          an empty answer is what `moved` is
-              //   @                      the working copy, whose `empty` is what
-              //                          a stale-checkout prompt reads
-              //   trunk()                the base a thread starts from
-              //   anything else          echoed back, so a test can see which
-              //                          revset the handler chose
-              // The adoption pass, whose revset is a *parenthesised* union —
-              // matched before the single `present(` case, which it would
-              // otherwise fall past into the echo and adopt nothing.
-              revset.startsWith("(present(")
-                ? Effect.succeed(
-                    [
-                      ...(fakes.owns ?? []),
-                      // Only when the revset does not cut trunk away. This is
-                      // the half that makes the clause testable rather than
-                      // merely present.
-                      ...(revset.includes("~ ::trunk()") ? [] : (fakes.merged ?? [])),
-                    ]
-                      .filter((oid) => revset.includes(oid))
-                      .map((oid) => ({ ...revision(revset), commitId: oid })),
-                  )
-                : revset.startsWith("present(")
-                  ? Effect.succeed(fakes.contains === false ? [] : [revision(revset)])
-                  : revset === "@"
-                    ? Effect.succeed([
-                        { ...revision(`${revset} limit ${limit}`), empty: fakes.dirty !== true },
-                      ])
-                    : fakes.noTrunk === true && revset.includes("trunk()")
-                      ? Effect.fail(
-                          new JjError({
-                            op: "list revisions",
-                            reason: "Revset `trunk()` is ambiguous",
-                          }),
+            revisions: ({ revset, limit }: RevisionsIn) => {
+              fakes.revsets?.push(revset);
+              return (
+                // Four revsets this fake answers about, and each is a different
+                // test's knob. Ordered so the two specific ones are matched before
+                // the general fallback.
+                //
+                //   present(<oid>) & ::@   does this checkout contain the head —
+                //                          an empty answer is what `moved` is
+                //   @                      the working copy, whose `empty` is what
+                //                          a stale-checkout prompt reads
+                //   trunk()                the base a thread starts from
+                //   anything else          echoed back, so a test can see which
+                //                          revset the handler chose
+                // The adoption pass, whose revset is a *parenthesised* union —
+                // matched before the single `present(` case, which it would
+                // otherwise fall past into the echo and adopt nothing.
+                // ── what a stack is measured from ──────────────────────────
+                //
+                // Two candidate revsets, asked in order, and each is a separate
+                // knob so a test can say which of them answered. Both empty by
+                // default, which is what leaves the base at `trunk()` — the
+                // answer every test written before this one asserts.
+                revset.startsWith("::@ & (present(")
+                  ? Effect.succeed(
+                      fakes.prBase === undefined
+                        ? []
+                        : [{ ...revision(revset), commitId: fakes.prBase }],
+                    )
+                  : revset.startsWith("::@- &")
+                    ? Effect.succeed(
+                        fakes.nearestBookmark === undefined
+                          ? []
+                          : [{ ...revision(revset), commitId: fakes.nearestBookmark }],
+                      )
+                    : revset.startsWith("(present(")
+                      ? Effect.succeed(
+                          [
+                            ...(fakes.owns ?? []),
+                            // Only when the revset does not cut trunk away. This is
+                            // the half that makes the clause testable rather than
+                            // merely present.
+                            ...(revset.includes("~ ::trunk()") ? [] : (fakes.merged ?? [])),
+                          ]
+                            .filter((oid) => revset.includes(oid))
+                            .map((oid) => ({ ...revision(revset), commitId: oid })),
                         )
-                      : Effect.succeed([
-                          {
-                            ...revision(`${revset} limit ${limit}`),
-                            // The commit `trunk()` sits on, when a test says. Every
-                            // other revset gets the placeholder, which matches no
-                            // bookmark and so leaves the label at its fallback.
-                            commitId:
-                              revset === "trunk()" && fakes.trunkCommit !== undefined
-                                ? fakes.trunkCommit
-                                : "bbb",
-                          },
-                        ]),
+                      : revset.startsWith("present(")
+                        ? Effect.succeed(fakes.contains === false ? [] : [revision(revset)])
+                        : revset === "@"
+                          ? Effect.succeed([
+                              {
+                                ...revision(`${revset} limit ${limit}`),
+                                empty: fakes.dirty !== true,
+                              },
+                            ])
+                          : fakes.noTrunk === true && revset.includes("trunk()")
+                            ? Effect.fail(
+                                new JjError({
+                                  op: "list revisions",
+                                  reason: "Revset `trunk()` is ambiguous",
+                                }),
+                              )
+                            : Effect.succeed([
+                                {
+                                  ...revision(`${revset} limit ${limit}`),
+                                  // The commit `trunk()` sits on, when a test says. Every
+                                  // other revset gets the placeholder, which matches no
+                                  // bookmark and so leaves the label at its fallback.
+                                  commitId:
+                                    revset === "trunk()" && fakes.trunkCommit !== undefined
+                                      ? fakes.trunkCommit
+                                      : "bbb",
+                                },
+                              ])
+              );
+            },
             // Likewise: the patch it hands back is the request it was given, so
             // a test can assert on the snapshot decision the handler made.
             diff: (options: DiffOf) =>
@@ -1073,6 +1110,108 @@ describe("the diff a workspace is asked for", () => {
     // A repository whose `trunk()` is ambiguous still has a working copy, and
     // an error about the revset would read as an error about the repository.
     expect(only?.description).toBe("@ limit 1");
+  });
+
+  // ── what a stack is measured from ────────────────────────────────────────
+  //
+  // `trunk()..@` is right for a change opened against the main line and wrong
+  // for one opened on top of another: the parent's commits appear inside this
+  // change, and the person reading it is reviewing somebody else's work without
+  // being told. These are about the three answers and the order they are tried
+  // in — see `stackBase`.
+  it("measures from the nearest ancestor bookmark that is not this workspace's own", async () => {
+    const [only] = await run(
+      (rpc) => rpc.Revisions({ from: "/w/rowan", project: "rowan", workspace: "discounts" }),
+      { nearestBookmark: "ccc" },
+    );
+
+    expect(only?.description).toBe("@ | ccc..@ limit 50");
+  });
+
+  it("leaves this workspace's own bookmark out of the candidates", async () => {
+    // Its own is the bookmark the work sits under, so measuring from it would
+    // be measuring from the tip of the change — an empty patch, in front of a
+    // workspace with a dozen commits in it. The exclusion is run by jj, so the
+    // revset is the only place it can be checked.
+    const revsets: string[] = [];
+    await run(
+      (rpc) => rpc.Revisions({ from: "/w/rowan", project: "rowan", workspace: "lantern" }),
+      {
+        bookmarkPrefix: "andrew",
+        nearestBookmark: "ccc",
+        revsets,
+      },
+    );
+
+    const asked = revsets.find((revset) => revset.startsWith("::@- &"));
+    expect(asked).toContain('~ present("andrew/lantern")');
+  });
+
+  it("asks for every bookmark when no prefix is configured", async () => {
+    // No prefix means no bookmark of awp's own to exclude, and `none()` is how
+    // that is said — the alternative, leaving the clause out, would be a second
+    // spelling of the revset for a second code path to get wrong.
+    const revsets: string[] = [];
+    await run(
+      (rpc) => rpc.Revisions({ from: "/w/rowan", project: "rowan", workspace: "lantern" }),
+      {
+        nearestBookmark: "ccc",
+        revsets,
+      },
+    );
+
+    expect(revsets.find((revset) => revset.startsWith("::@- &"))).toContain("~ none()");
+  });
+
+  it("measures from the pull request's base when the thread names one", async () => {
+    const [only] = await run(
+      (rpc) =>
+        Effect.gen(function* () {
+          const thread = yield* inThread(rpc, [["awp", "discounts"]]);
+          yield* rpc.ThreadLinkPr({ thread, pr: { project: "awp", number: 412 } });
+          // Read first, because that is where the base branch comes from: what
+          // `gh` last said, kept. A daemon that has never listed the queue
+          // falls through to the bookmark below, which is the honest answer
+          // rather than a second of waiting in front of a patch.
+          yield* rpc.ReviewQueueList({});
+          return yield* rpc.Revisions({
+            from: "/w/rowan",
+            project: "awp",
+            workspace: "discounts",
+          });
+        }),
+      // Both available, and the pull request's base wins: it is what GitHub
+      // will actually diff against, so it is right by construction where the
+      // nearest bookmark is a guess that is usually good.
+      {
+        prBase: "ddd",
+        nearestBookmark: "ccc",
+        prs: [pr({ number: 412, baseRef: "andrew/part-1" })],
+      },
+    );
+
+    expect(only?.description).toBe("@ | ddd..@ limit 50");
+  });
+
+  it("falls back to trunk when nothing else answers", async () => {
+    const [only] = await run((rpc) =>
+      rpc.Revisions({ from: "/w/rowan", project: "rowan", workspace: "discounts" }),
+    );
+
+    expect(only?.description).toBe("@ | trunk()..@ limit 50");
+  });
+
+  it("measures the patch from the same base as the list", async () => {
+    // The two disagreeing is the worse of the two bugs: the list would show
+    // commits the patch does not account for, and nothing on screen would say
+    // which of them was wrong.
+    const answer = await run(
+      (rpc) =>
+        rpc.Diff({ from: "/w/rowan", stack: true, project: "rowan", workspace: "discounts" }),
+      { nearestBookmark: "ccc" },
+    );
+
+    expect(answer.patch).toContain('"from":"ccc"');
   });
 
   it("snapshots the working copy when no revision was named", async () => {

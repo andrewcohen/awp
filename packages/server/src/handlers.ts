@@ -320,15 +320,28 @@ const toWire = (
 const TRUNK = "trunk()";
 
 /**
- * What a diff panel calls a stack: the working copy, and everything since the
- * main line.
+ * A name, as a revset that is empty rather than an error when nothing answers
+ * to it.
  *
- * `@` is named separately rather than left to `trunk()..@` to cover the case
- * where the working copy *is* on trunk — a fresh workspace with nothing done
+ * jj refuses a revset naming a bookmark that is not there, and every name these
+ * candidates are built from is one that may not be: a base branch nobody
+ * fetched, a bookmark prefix nobody configured. Quoted, because a bookmark name
+ * holds a slash.
+ */
+const present = (name: string): string => `present(${JSON.stringify(name)})`;
+
+/**
+ * What a diff panel calls a stack: the working copy, and everything since the
+ * base.
+ *
+ * `@` is named separately rather than left to `<base>..@` to cover the case
+ * where the working copy *is* on the base — a fresh workspace with nothing done
  * in it yet. That is a stack of one empty commit, which is the honest answer,
  * and it is not the same as an empty list.
+ *
+ * The base is `trunk()` only when nothing better is known. See `stackBase`.
  */
-const STACK = "@ | trunk()..@";
+const stackOf = (base: string): string => `@ | ${base}..@`;
 
 /**
  * The fallback when the revset above will not resolve.
@@ -787,6 +800,152 @@ export const layer = AwpRpcs.toLayer(
      * client because only the daemon holds both halves; the imported row wins,
      * being the one that survives a restart and the one `forget` applies to.
      */
+    /**
+     * What a stack is measured from.
+     *
+     * ── trunk() is the answer to a question nobody asked ──────────────────
+     *
+     * A stack used to be `trunk()..@` outright. That is right for a change
+     * opened against the main line and wrong for one opened on top of another:
+     * a pull request based on a colleague's branch, or the second of your own
+     * stacked pair, shows the parent's commits as part of itself. The person
+     * reading it is reviewing a change, and they are shown somebody else's work
+     * inside it.
+     *
+     * Three answers, nearest first, and each falls through to the next:
+     *
+     *   the pull request's base   what GitHub will actually diff against, so
+     *                             it is right by construction. Only from the
+     *                             cache — see `held`: this runs every time the
+     *                             panel is opened, and a `gh` call here would
+     *                             be seconds of nothing in front of a patch
+     *   the nearest ancestor      covers the stack that has not been pushed
+     *   bookmark that is not      yet, and the one whose base branch was never
+     *   this workspace's own      fetched. Its own bookmark has to come out or
+     *                             the base would be the tip of the work itself
+     *                             and the patch would be empty
+     *   trunk()                   what this always did
+     *
+     * Answers a **commit id** rather than a name, so what the two callers run
+     * cannot be re-resolved differently a moment apart — and because a name
+     * that is not there is an error in a revset, while `present()` around a
+     * name that is not there is merely empty.
+     */
+    const stackBase = (options: {
+      readonly dir: string;
+      readonly project: string | undefined;
+      readonly workspace: string | undefined;
+    }) =>
+      Effect.gen(function* () {
+        const { dir, project, workspace } = options;
+
+        // The nearest ancestor matching a revset, or nothing. `limit: 1` with
+        // a listing that is newest-first *is* "nearest", so no sorting here.
+        const nearest = (revset: string) =>
+          jj.revisions({ dir, revset, limit: 1 }).pipe(
+            Effect.map((found) => found[0]?.commitId),
+            // A revset that will not resolve is not a failure to report: it is
+            // this candidate not being available, which is what the next one
+            // is for. Every name in these is wrapped in `present()`, so what
+            // reaches here is a broken repository — and the caller has a
+            // fallback that says so in its own words.
+            Effect.catchTag("JjError", () => Effect.succeed(undefined)),
+          );
+
+        if (project !== undefined && workspace !== undefined) {
+          const base = yield* pullRequestBase(dir, project, workspace);
+          if (base !== undefined) {
+            // `@origin` and `@git` as well as the bare name: a base branch is
+            // often only a remote bookmark here, and jj spells one `name@remote`.
+            // Anchored to `::@` so a base that is not an ancestor — somebody
+            // retargeted the pull request — contributes nothing rather than a
+            // range that runs backwards.
+            const found = yield* nearest(
+              `::@ & (${present(base)} | ${present(`${base}@origin`)} | ${present(`${base}@git`)})`,
+            );
+            if (found !== undefined) {
+              return found;
+            }
+          }
+        }
+
+        const own = yield* ownBookmark(dir, workspace);
+        const mine = own === undefined ? "none()" : present(own);
+        const found = yield* nearest(`::@- & ((bookmarks() | remote_bookmarks()) ~ ${mine})`);
+        return found ?? TRUNK;
+      });
+
+    /**
+     * The base branch of the pull request this workspace is about, if all four
+     * links are there: a thread claiming it, a pull request on that thread, the
+     * project it lives in, and a cached row for it.
+     *
+     * Any of them missing is the ordinary case rather than a problem — most
+     * workspaces are not about a pull request at all — so every step answers
+     * `undefined` and none of them fails.
+     */
+    const pullRequestBase = (dir: string, project: string, workspace: string) =>
+      Effect.gen(function* () {
+        const held = yield* threads.list().pipe(Effect.orDie);
+        const claimed = held.find(
+          (thread) =>
+            thread.archivedAt === undefined &&
+            thread.members.some(
+              (member) => member.project === project && member.workspace === workspace,
+            ),
+        );
+        // The first, for the reason the window gives: a thread may name several
+        // and this is about the one it was started for.
+        const pr = claimed?.prs[0];
+        if (pr === undefined) {
+          return undefined;
+        }
+        const listed = yield* allProjects();
+        // The imported row first, then the checkout itself. The fallback is not
+        // a nicety: a pull request is nearly always in the project the
+        // workspace belongs to, and a project nobody has imported still has a
+        // repository — `allProjects` answers about rows, and this asks about
+        // the directory in front of it.
+        const root =
+          listed.find((one) => one.name === pr.project)?.root ??
+          (pr.project === project
+            ? yield* jj
+                .sourceRoot(dir)
+                .pipe(Effect.catchTag("JjError", () => Effect.succeed(undefined)))
+            : undefined);
+        if (root === undefined) {
+          return undefined;
+        }
+        const row = yield* reviewQueue.held(root, pr.number);
+        return row?.baseRef === undefined || row.baseRef === "" ? undefined : row.baseRef;
+      });
+
+    /**
+     * The bookmark this workspace's own work sits under, by the rule that named
+     * it — `<prefix>/<workspace>`, which is what the create job writes.
+     *
+     * Reconstructed rather than read off a revision, because what it is needed
+     * for is *excluding* it: a bookmark read back from the commits is one that
+     * is already in the candidate list, and the question is which of them is
+     * this workspace's.
+     */
+    const ownBookmark = (dir: string, workspace: string | undefined) =>
+      Effect.gen(function* () {
+        if (workspace === undefined) {
+          return undefined;
+        }
+        const root = yield* jj
+          .sourceRoot(dir)
+          .pipe(Effect.catchTag("JjError", () => Effect.succeed(undefined)));
+        if (root === undefined) {
+          return undefined;
+        }
+        const held = yield* config.read(root);
+        return held.bookmarkPrefix === undefined
+          ? undefined
+          : `${held.bookmarkPrefix}/${workspace}`;
+      });
+
     const allProjects = () =>
       Effect.gen(function* () {
         const imported = yield* projects.list().pipe(Effect.orDie);
@@ -1247,10 +1406,17 @@ export const layer = AwpRpcs.toLayer(
 
       JobClear: () => jobs.forgetFinished().pipe(Effect.orDie),
 
-      // ── the diff panel's two calls ──────────────────────────────────────
+      // ── the diff panel's two calls, and what they measure from ──────────
+      //
+      // See `stackBase`. Both of them ask it, because a revision list and a
+      // patch disagreeing about where the work starts is the worse of the two
+      // bugs: the list would show commits the patch does not account for.
 
-      Revisions: ({ from, limit }) =>
-        jj.revisions({ dir: from, revset: STACK, limit: limit ?? STACK_LIMIT }).pipe(
+      Revisions: ({ from, limit, project, workspace }) =>
+        stackBase({ dir: from, project, workspace }).pipe(
+          Effect.flatMap((base) =>
+            jj.revisions({ dir: from, revset: stackOf(base), limit: limit ?? STACK_LIMIT }),
+          ),
           // Retried with a smaller question rather than reported. See NO_TRUNK:
           // the first refusal is about the revset, not about the repository.
           Effect.catchTag("JjError", () => jj.revisions({ dir: from, revset: NO_TRUNK, limit: 1 })),
@@ -1288,9 +1454,12 @@ export const layer = AwpRpcs.toLayer(
       // reason: `trunk()` does not resolve in a repository with no main line,
       // and answering "no diff" there would be a panel that looks broken in a
       // fresh repo. See NO_TRUNK.
-      Diff: ({ from, revision, stack }) => {
+      Diff: ({ from, revision, stack, project, workspace }) => {
         if (stack === true) {
-          return jj.diff({ dir: from, revision: NO_TRUNK, from: TRUNK, snapshot: true }).pipe(
+          return stackBase({ dir: from, project, workspace }).pipe(
+            Effect.flatMap((base) =>
+              jj.diff({ dir: from, revision: NO_TRUNK, from: base, snapshot: true }),
+            ),
             Effect.catchTag("JjError", () =>
               jj.diff({ dir: from, revision: NO_TRUNK, snapshot: true }),
             ),
