@@ -6,6 +6,7 @@ import {
   interrupts,
   hanging,
   migrations,
+  once,
   optionsOf,
   permissionOf,
   settledWhen,
@@ -458,6 +459,28 @@ describe("updateOf", () => {
   it("says nothing about an update it has never seen", () => {
     expect(updateOf({ update: { sessionUpdate: "some_future_thing" } })).toBeUndefined();
     expect(updateOf({})).toBeUndefined();
+  });
+});
+
+describe("letting go once", () => {
+  it("happens the first time it is asked and is nothing after", async () => {
+    const answer = await Effect.runPromise(
+      Effect.gen(function* () {
+        const ran = yield* Ref.make(0);
+        const drop = yield* once(Ref.update(ran, (n) => n + 1));
+        yield* drop;
+        yield* drop;
+        yield* drop;
+        return yield* Ref.get(ran);
+      }),
+    );
+
+    // Both callers are real: the adapter drops the session it claimed on the
+    // way in as soon as it learns the id it actually opened, and the scope's
+    // finalizer drops it again when the conversation ends. Counted twice, the
+    // second one decrements a hold a *later* adapter has taken, and releases a
+    // session that is being written — the one thing the claim is for.
+    expect(answer).toBe(1);
   });
 });
 

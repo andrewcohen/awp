@@ -102,15 +102,37 @@ describe("the claim", () => {
   });
 
   test("a holder that has died is taken over at once, not after a minute", async () => {
-    // The two-instance workflow restarts daemons several times an hour. A
-    // guard that made every restart wait out `STALE_AFTER` would be a guard
-    // everybody learned to ignore.
+    // A daemon somebody `kill -9`ed, or a laptop closed on one: the last beat
+    // is still fresh, and only the process table can say it is gone.
+    //
+    // The two addresses are the point of the test. With one, the predecessor
+    // rule below would answer it instead, and `alive` could be deleted without
+    // anything here noticing.
+    const answer = await on(
+      async (claims) => {
+        await Effect.runPromise(claims({ owner: "port 5284", pid: 100 }).take(ONE));
+        return reasonOf(claims({ owner: "port 5274", pid: 101 }).take(ONE));
+      },
+      (pid) => pid !== 100,
+    );
+
+    expect(answer).toBe("taken");
+  });
+
+  test("a predecessor at the same address is taken over while it is still dying", async () => {
+    // The restart as it actually happens, and the case that locked the window
+    // out several times an hour: the listener finaliser has run and freed the
+    // port — which is how this process came to be asking at all — while the
+    // old one is still unwinding. Its pid is alive and its beat is seconds
+    // old, so both of the other guards hold. One port is one listener, and
+    // that is what decides it.
     const answer = await on(
       async (claims) => {
         await Effect.runPromise(claims({ owner: "port 5274", pid: 100 }).take(ONE));
         return reasonOf(claims({ owner: "port 5274", pid: 101 }).take(ONE));
       },
-      (pid) => pid !== 100,
+      // Still there. Stating it is the test.
+      () => true,
     );
 
     expect(answer).toBe("taken");

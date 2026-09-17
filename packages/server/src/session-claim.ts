@@ -200,7 +200,25 @@ export const claims = (
         // here several times an hour, and a minute of "already open" after
         // each one would teach everybody to ignore the sentence. A pid that is
         // gone is gone now.
-        if (before !== undefined && !ours && before.at > at - STALE_AFTER && alive(before.pid)) {
+        //
+        // And a pid that is *going* will be gone in a moment, which `alive`
+        // cannot say. `owner` names the port, and one port is one listener:
+        // this process could not have bound 5274 if the row's owner were still
+        // holding it. So a row at this address under another pid is a daemon
+        // on its way out — listener finaliser run, port freed, process not yet
+        // exited, last beat seconds old. Both guards below hold, and the
+        // refusal names a pid that is gone by the time anybody has read the
+        // sentence. That is the restart lockout, and the address is what sees
+        // through it.
+        const predecessor = before !== undefined && !ours && before.owner === self.owner;
+
+        if (
+          before !== undefined &&
+          !ours &&
+          !predecessor &&
+          before.at > at - STALE_AFTER &&
+          alive(before.pid)
+        ) {
           return yield* Effect.fail(heldBy(sessionId, before, at));
         }
 

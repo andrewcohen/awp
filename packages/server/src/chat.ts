@@ -58,6 +58,7 @@ import {
   Duration,
   Effect,
   Exit,
+  Fiber,
   Layer,
   Option,
   Queue,
@@ -1802,6 +1803,21 @@ export const oneAtATime = (where: Scope.Scope) => {
     });
 };
 
+/**
+ * An effect that happens the first time it is asked and is nothing after.
+ *
+ * Exported for its test rather than for a second caller. What it guards is a
+ * double release: a claim is let go either by the scope that took it or early
+ * by the caller that learned it had claimed the wrong session, and if both ran
+ * they would decrement a count that a *later* hold may have raised — releasing
+ * a session an adapter is sitting in, which is the one thing the claim exists
+ * to prevent.
+ */
+export const once = <A>(effect: Effect.Effect<A>): Effect.Effect<Effect.Effect<void>> =>
+  Effect.map(Ref.make(false), (done) =>
+    Effect.flatMap(Ref.getAndSet(done, true), (was) => (was ? Effect.void : Effect.asVoid(effect))),
+  );
+
 export const make = Effect.gen(function* () {
   // The daemon's own scope, captured here because a fiber that has to outlive
   // the request that started it needs somewhere to live. See
@@ -1884,14 +1900,23 @@ export const make = Effect.gen(function* () {
         }
       }
       yield* hold(sessionId);
-      yield* Effect.addFinalizer(() => letGo(sessionId));
       // The beat, for as long as the conversation is held. It is what turns
       // the row from a lock into an assertion about now: stop beating — crash,
       // kill -9, a laptop closed — and the claim decays instead of locking the
       // conversation out of every future daemon.
-      yield* Effect.forkScoped(
+      const beating = yield* Effect.forkScoped(
         Effect.forever(Effect.andThen(Effect.sleep(BEAT_EVERY), claims.beat(sessionId))),
       );
+      // Let go once, whichever way out comes first: the scope's finalizer is
+      // the ordinary one, and the answer here is the early one — for a caller
+      // that learns the session it claimed is not the session that exists.
+      //
+      // The beat is interrupted *before* the row goes, or a fiber nobody can
+      // see writes the claim back a moment after it was released, and the
+      // session is locked out until this daemon dies.
+      const drop = yield* once(Effect.andThen(Fiber.interrupt(beating), letGo(sessionId)));
+      yield* Effect.addFinalizer(() => drop);
+      return drop;
     }).pipe(
       Effect.mapError((cause) =>
         cause instanceof ChatError
@@ -2024,9 +2049,7 @@ export const make = Effect.gen(function* () {
         // Before the adapter is spawned, not after: a refusal that arrives
         // once `claude --resume` is already running has already done the
         // thing it was meant to prevent.
-        if (typeof known === "string") {
-          yield* claimed(known);
-        }
+        const entered = typeof known === "string" ? yield* claimed(known) : undefined;
 
         const held = yield* conversation(spawner, {
           cwd: workspacePath(project, workspace),
@@ -2047,6 +2070,14 @@ export const make = Effect.gen(function* () {
         // been given, so this refuses only if the store is wrong about us.
         if (held.sessionId !== known) {
           yield* claimed(held.sessionId);
+          // And let go of the one claimed on the way in. It is not the session
+          // that exists, the row below is about to stop pointing at it, and a
+          // claim nothing points at is a transcript nobody can open again:
+          // held for the life of this adapter and beaten the whole time, so it
+          // never decays either. Two of them were sitting in the store.
+          if (entered !== undefined) {
+            yield* entered;
+          }
         }
 
         // Written after the session exists rather than before, and every time
