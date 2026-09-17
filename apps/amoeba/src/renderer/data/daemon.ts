@@ -16,6 +16,7 @@ import type {
   Effort,
   Face,
   Gadget,
+  GadgetHead,
   ReviewQueue,
   McpStatus,
   Message,
@@ -897,14 +898,25 @@ export const openPage = (from: string, url: string): Promise<Page> =>
   runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.PageOpen({ from, url })));
 
 /**
+ * A thread's gadgets, newest first, without their documents.
+ *
+ * What the strip is drawn from. Read on mount rather than pushed, because the
+ * feed below says only that one more exists — a panel that has just opened has
+ * missed every event before it.
+ */
+export const listGadgets = (thread: string | undefined): Promise<ReadonlyArray<GadgetHead>> =>
+  runtime.runPromise(
+    Effect.flatMap(AwpClient, (rpc) => rpc.GadgetList(thread === undefined ? {} : { thread })),
+  );
+
+/**
  * The document at a gadget address.
  *
- * Asked for, and only when there is somewhere to draw it: the page feed says
- * *where* the column is pointing, which is a string, and the document behind
- * it can be a great deal larger than the address. A gadget the daemon no
- * longer has — it holds them in memory, so its own restart is that case —
- * comes back as a refusal with a sentence in it, and the panel prints the
- * sentence rather than drawing an empty column.
+ * Asked for, and only for the one being looked at: a strip lists heads, and a
+ * document is a great deal larger than the head it hangs off. A gadget the
+ * daemon no longer has — it holds them in memory, so its own restart is that
+ * case — comes back as a refusal with a sentence in it, and the panel prints
+ * the sentence rather than drawing an empty column.
  */
 export const readGadget = (address: string): Promise<Gadget> =>
   runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.GadgetRead({ address })));
@@ -947,6 +959,18 @@ export const watchThreads = (onThreads: (threads: ReadonlyArray<Thread>) => void
 export const watchPages = (onPage: (page: Page) => void): (() => void) =>
   subscribe((rpc) =>
     Stream.runForEach(rpc.PageChanges(), (page) => Effect.sync(() => onPage(page))),
+  );
+
+/**
+ * Every gadget anybody writes, for as long as the subscription is held.
+ *
+ * Carries every thread's, and the caller keeps the ones that are its own —
+ * the same shape as {@link watchPages}, so that switching between threads is
+ * not a subscription being torn down and rebuilt.
+ */
+export const watchGadgets = (onGadget: (gadget: GadgetHead) => void): (() => void) =>
+  subscribe((rpc) =>
+    Stream.runForEach(rpc.GadgetChanges(), (gadget) => Effect.sync(() => onGadget(gadget))),
   );
 
 export const watchChat = (

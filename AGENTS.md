@@ -296,7 +296,9 @@ Three things before clicking anything:
 - **The database is shared.** Check `select count(*) from jobs where status in
 ('queued','running')` is zero first — two runners over one store both resume
   non-terminal jobs, and a job resumed by a daemon of a different build runs a
-  different step list against the same `done`.
+  different step list against the same `done`. **A chat opened in both is
+  refused in the second**, by the claim in `chat_claims`: two daemons on one
+  session id is two agents on one transcript, which has happened.
 - **Anything you do there is real** — real workspaces, bookmarks, sessions.
 - **Opening a workspace route attaches to that session and resizes it.** `#/`
   attaches to nothing and answers every question about layout or the daemon.

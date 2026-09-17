@@ -45,6 +45,14 @@
 
 import { Db, type Migration, attempt } from "@awp-kit/store";
 import {
+  BEAT_EVERY,
+  type Claims,
+  claimMigration,
+  claims as claimsOn,
+  heldOutside,
+  outsideHolders,
+} from "./session-claim";
+import {
   Context,
   Data,
   Duration,
@@ -1605,6 +1613,11 @@ export const migrations: ReadonlyArray<Migration> = [
        ) strict`,
     ],
   },
+  // Who is writing which session, across every process on this machine. The
+  // table above says which conversation belongs to a workspace; this one says
+  // whether anybody is in it. See `session-claim.ts` for why one is not the
+  // other — the short of it is that `RcMap` is memory and a session id is not.
+  claimMigration,
 ];
 
 /**
@@ -1805,6 +1818,91 @@ export const make = Effect.gen(function* () {
   // agent's own command line follows.
   const config = yield* Settings;
 
+  // ── who this daemon is, in a sentence somebody can act on ──────────────
+  //
+  // The port and not the pid alone, because the two-instance workflow in
+  // AGENTS.md is exactly when this refusal fires: a person reading "already
+  // open in the awp daemon on port 5274" knows which window to go to, where a
+  // bare pid tells them to go hunting. The default matches `daemonUrl` in
+  // `mcp.ts` — stated rather than imported, which would be a cycle for one
+  // string.
+  const port = process.env["AWP_DAEMON_PORT"];
+  const claims: Claims = claimsOn(db, {
+    owner: `the awp daemon on port ${port === undefined || port === "" ? "5274" : port}`,
+    pid: process.pid,
+  });
+
+  /**
+   * How many conversations in *this* process hold each session.
+   *
+   * `RcMap.invalidate` followed by `RcMap.get` — which is what `/new` and the
+   * terminal fork both do — runs the new lookup while the old entry's scope is
+   * still closing. Both are this pid, so both take and release the same claim,
+   * and the release is the one that happens second: without this the fresh
+   * conversation ends up holding nothing, and the next process to ask finds
+   * the session free while an adapter is sitting in it.
+   *
+   * So the row is dropped when the last holder here lets go, not when the
+   * first one does. The same shape as the `RcMap` above, one level down.
+   */
+  const holds = yield* Ref.make(new Map<string, number>());
+
+  const hold = (sessionId: string) =>
+    Ref.update(holds, (all) => new Map(all).set(sessionId, (all.get(sessionId) ?? 0) + 1));
+
+  const letGo = (sessionId: string) =>
+    Effect.flatMap(
+      Ref.modify(holds, (all) => {
+        const left = (all.get(sessionId) ?? 1) - 1;
+        const rest = new Map(all);
+        if (left > 0) {
+          rest.set(sessionId, left);
+        } else {
+          rest.delete(sessionId);
+        }
+        return [left <= 0, rest];
+      }),
+      (last) => (last ? claims.release(sessionId) : Effect.void),
+    );
+
+  /**
+   * Take a session, and hold it for as long as the caller's scope is open.
+   *
+   * Two guards, cheapest first — see `session-claim.ts`. The process table is
+   * only asked when no conversation of ours already had the claim: if one did,
+   * the adapter under it is this daemon's own, and a `ps` would find our own
+   * grandchild and refuse to open a conversation we are already holding.
+   */
+  const claimed = (sessionId: string) =>
+    Effect.gen(function* () {
+      const ours = yield* claims.take(sessionId);
+      if (!ours) {
+        const outside = yield* outsideHolders(spawner, sessionId, new Set([process.pid]));
+        if (outside.length > 0) {
+          yield* claims.release(sessionId);
+          return yield* Effect.fail(heldOutside(sessionId, outside));
+        }
+      }
+      yield* hold(sessionId);
+      yield* Effect.addFinalizer(() => letGo(sessionId));
+      // The beat, for as long as the conversation is held. It is what turns
+      // the row from a lock into an assertion about now: stop beating — crash,
+      // kill -9, a laptop closed — and the claim decays instead of locking the
+      // conversation out of every future daemon.
+      yield* Effect.forkScoped(
+        Effect.forever(Effect.andThen(Effect.sleep(BEAT_EVERY), claims.beat(sessionId))),
+      );
+    }).pipe(
+      Effect.mapError((cause) =>
+        cause instanceof ChatError
+          ? cause
+          : new ChatError({
+              reason: (cause as { readonly reason?: string }).reason ?? String(cause),
+              cause,
+            }),
+      ),
+    );
+
   const readSession = db.prepare(
     "select session_id from chat_sessions where project = ? and workspace = ?",
   );
@@ -1921,6 +2019,15 @@ export const make = Effect.gen(function* () {
             : [];
         const used = before[0]?.["used"];
         const size = before[0]?.["size"];
+        // ── nobody else may be writing this transcript ────────────────────
+        //
+        // Before the adapter is spawned, not after: a refusal that arrives
+        // once `claude --resume` is already running has already done the
+        // thing it was meant to prevent.
+        if (typeof known === "string") {
+          yield* claimed(known);
+        }
+
         const held = yield* conversation(spawner, {
           cwd: workspacePath(project, workspace),
           ...(defaults.model === undefined ? {} : { model: defaults.model }),
@@ -1932,6 +2039,15 @@ export const make = Effect.gen(function* () {
             ? { usage: { used, size } }
             : {}),
         });
+
+        // What was actually opened may not be what was asked for — a new
+        // conversation, a fork, or an id the adapter chose — and the claim has
+        // to follow the session that exists rather than the one that was
+        // remembered. Nothing can be holding a session this process has just
+        // been given, so this refuses only if the store is wrong about us.
+        if (held.sessionId !== known) {
+          yield* claimed(held.sessionId);
+        }
 
         // Written after the session exists rather than before, and every time
         // rather than only when it is new: a record that named a session the

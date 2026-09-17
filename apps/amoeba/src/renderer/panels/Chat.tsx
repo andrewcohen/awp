@@ -174,6 +174,15 @@ const Panel = ({
   readonly focus?: string | undefined;
 }) => {
   const [held, setHeld] = useState<Conversation>(nothing);
+  /**
+   * Why the daemon would not open this conversation, when it would not.
+   *
+   * On screen rather than in a log, because the case it exists for is a chat
+   * that cannot open at all: a session another process is already writing (see
+   * `session-claim.ts`). Without the sentence that is a panel which spins, and
+   * the one fact that explains it is in a daemon nobody is reading.
+   */
+  const [refused, setRefused] = useState<string | undefined>(undefined);
   const items = held.items;
   /**
    * What is in the box, restored for this checkout.
@@ -354,11 +363,16 @@ const Panel = ({
         workspace,
         (update) => {
           setHeld((current) => fold(current, update));
+          // An update is proof the conversation opened. Clearing here rather
+          // than on subscribe keeps the sentence on screen for as long as it
+          // is true, including across the retries underneath.
+          setRefused(undefined);
         },
         // A resubscription replays the conversation from the start — see
         // `watchChat`. Emptied first, so what arrives rebuilds the panel
         // rather than doubling it.
         () => setHeld(nothing),
+        setRefused,
       ),
     [project, workspace],
   );
@@ -745,6 +759,16 @@ const Panel = ({
 
           {held.stopped !== undefined && (
             <p {...stylex.props(typeset.label, styles.stopped)}>the turn ended: {held.stopped}</p>
+          )}
+
+          {/* The daemon's own sentence, unedited. It names the holder and the
+              session id, which is what makes a lock-out diagnosable rather
+              than mysterious — and `role="alert"` because it arrives while
+              somebody is looking at something else. */}
+          {refused !== undefined && (
+            <p {...stylex.props(typeset.label, styles.refused)} role="alert">
+              {refused}
+            </p>
           )}
         </div>
 
@@ -2509,6 +2533,9 @@ const styles = stylex.create({
   // than none. The activity is what gives — see `rolling`.
   since: { flexShrink: 0, fontVariantNumeric: "tabular-nums", opacity: 0.75 },
   stopped: { color: colors.muted },
+  // Not muted, unlike `stopped`: a turn that ended is information, and a
+  // conversation that would not open is something to act on.
+  refused: { color: colors.warn, whiteSpace: "pre-wrap", overflowWrap: "anywhere" },
   /** The command in full, when the row showed one line of it. */
   whole: {
     color: colors.text,

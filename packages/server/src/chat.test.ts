@@ -532,6 +532,7 @@ describe("the record of which session is ours", () => {
     expect(migrations.map((migration) => migration.name)).toEqual([
       "chat.001-sessions",
       "chat.002-usage",
+      "chat.003-claims",
     ]);
   });
 
