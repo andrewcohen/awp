@@ -1154,3 +1154,51 @@ Fifteen callers compose that path, and they do not all want the same answer, whi
 So it is a reserved workspace name that resolves through the project record — the root is on it already — rather than a pure function gaining a branch. The refusals are the feature, not the resolution.
 
 Then a thread claiming that pair gives the wiki a sidebar row, a chat, a diff and a tasks panel with nothing else built: `ThreadAttach` takes a member that already exists, and the default checkout always does.
+
+## 135. Gadgets: a page the agent writes and a person reads
+
+A **gadget** is a small self-contained thing an agent authors and a person looks at, in the accessory column beside the diff. The agent writes MDX; the daemon serves it; the existing page feed points the panel at it.
+
+The word is chosen against the two it would otherwise collide with:
+
+- `Pages` (`packages/server/src/pages.ts`) is where a thread's web panel is _pointed_.
+- the canvas (#47) is the tldraw snapshot, which the agent _reads_. Same column, same thread scoping — but there a person and the agent both read and write, and here the agent writes and a person reads.
+
+### Most of the mechanism exists, and the gap is an origin
+
+The agent presenting a panel is not the new part. `Pages` holds a thread's page as a claim and publishes a feed of them, `awp_browse` is the agent's tool for making one, and `Web.tsx` is the panel that receives it. None of that chain has to change.
+
+What blocks it is deliberate and recorded in two places, which is why the answer is a served origin rather than a relaxed guard:
+
+- `pageAddress` refuses `file://` — "a larger decision than a navigation call should be able to make", the panel being a real browser view with a preload in it.
+- `protocol.ts` chose `app://` over `file://` because a module worker refuses a `file://` origin, and a registered standard scheme has a real origin.
+
+So `app://` is the seam that already exists for this problem. The first thing to settle is whether a gadget is reachable at an `app://` path `pageAddress` already accepts, or whether it needs a third scheme beside http and https — that guard is two schemes and no others on purpose.
+
+### Why MDX, and not HTML
+
+HTML was the first answer and it loses on tokens. A gadget is mostly prose, and prose in HTML spends a tag on every paragraph, heading and list item. Markdown is what a model writes most cheaply and most fluently, and MDX is markdown that can reach for a component in the places — a minority of them — where something has to be interactive.
+
+Markdown alone is not enough, and the reason is that it is already here: `Markdown.tsx` renders react-markdown with remark-gfm for chat messages and task bodies. A gadget that is only prose is that component and a source, and it is a thing to be replaced the first time an agent wants to show a value that changes.
+
+### There is no registry to design
+
+**The agent inlines its own components.** MDX lets a document define a component and use it, so anything self-contained — a table with a toggle, a chart drawn in SVG, a calculator — ships with the gadget rather than being chosen from a set awp published. That removes the API-the-agent-writes-against from the first cut, which was the whole of why this looked expensive.
+
+What is left is the much smaller question of what the document is _handed_, since an inline component can only use what is in scope. Two kinds, and only the second is hard:
+
+- the colours and type, so a gadget does not look foreign in the column.
+- the app-native things an agent cannot write for itself: open this diff, this thread's status, a live value from the daemon.
+
+**Nothing in the second kind is known yet, and guessing is how a registry gets designed for gadgets nobody wrote.** So the first cut hands over the tokens and nothing else, and the list grows out of what the first real gadgets reach for and cannot have.
+
+### What it has to refuse, and out loud
+
+An inline component is arbitrary JS, evaluated in the renderer — not an escalation, since the agent already has a shell, but it means a gadget can throw, and a thrown gadget is a blank panel with no sentence in it.
+
+- an error boundary prints what broke and which gadget it was, for the reason the MCP refusals are sentences: what reads it is a model, and it can fix its own output.
+- `import` in the document has no module graph to resolve against, so it is refused rather than half-supported.
+
+Open, and cheaper to answer now than later: where MDX compiles — in the renderer it is a compile step in the browser, in the daemon it is a build the agent waits on; how live a gadget may be, given the accessory column unmounts a hidden tab deliberately; and whether a thread has one gadget or many named ones, which is the difference between #47's single snapshot and a list with a route.
+
+**Done** means an agent can hand the daemon a gadget and a person's accessory column shows it, with one inline interactive component proving the scope is real, and a component that throws naming itself instead of vanishing.
