@@ -36,6 +36,7 @@ import * as handlers from "./handlers";
 import * as ptyBun from "./pty-bun";
 import * as sessions from "./sessions";
 import * as settings from "./settings";
+import { layer as gadgetsLayer } from "./gadgets";
 import { layer as pagesLayer } from "./pages";
 import { Projects, layer as projectsLayer, migrations as projectMigrations } from "./projects";
 import * as workspaceState from "./workspace-state";
@@ -281,7 +282,11 @@ export const layer = RpcServer.layer(AwpRpcs).pipe(
   Layer.provide(reviews),
   Layer.provide(projects),
   Layer.provide(reviewQueueLayer),
-  Layer.provide(pagesLayer),
+  // Merged rather than given a line of its own: the pipe above is at its
+  // twenty-argument limit, and these two are the pair that belongs together —
+  // one claim about what the column is showing, and the documents it can point
+  // at.
+  Layer.provide(Layer.merge(pagesLayer, gadgetsLayer)),
   Layer.provide(workspaceState.layer()),
   Layer.provide(db),
   Layer.provide(intent.layer),

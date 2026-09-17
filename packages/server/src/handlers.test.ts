@@ -38,6 +38,7 @@ import { sessionName } from "./naming";
 import { makeFake } from "./pty-fake";
 import * as sessions from "./sessions";
 import { migrations as reviewMigrations, layer as reviewsLayer } from "./reviews";
+import { layer as gadgetsLayer } from "./gadgets";
 import { layer as pagesLayer } from "./pages";
 import { layer as projectsLayer, migrations as projectMigrations } from "./projects";
 import * as workspaceState from "./workspace-state";
@@ -571,6 +572,7 @@ const run = <A>(body: (rpc: Client) => Effect.Effect<A, unknown, Scope.Scope>, f
         // The real one: it holds a PubSub and a rule about urls, has no
         // dependencies, and a fake would only restate the rule.
         Layer.provide(pagesLayer),
+        Layer.provide(gadgetsLayer),
         // Pointed at a file that is not there, which answers with an empty
         // table — the honest state for a machine that has only ever run
         // amoeba, and the one this suite is about. `workspace-state.test.ts`
@@ -711,6 +713,51 @@ describe("the thread a checkout belongs to", () => {
 
     expect(got.page.thread).toBe(got.made);
     expect(got.page.url).toBe("https://example.invalid/build/412");
+  });
+
+  it("showing a gadget files it under the thread and points the panel at it", async () => {
+    // Two acts, one thread resolution. A gadget filed under one thread and
+    // shown to another is a document nobody can find, and two resolutions of
+    // one directory is how that happens — so the handler resolves once and
+    // hands the same answer to both halves.
+    const got = await run((rpc) =>
+      Effect.gen(function* () {
+        const made = yield* rpc.ThreadCreate({ title: "tabular exports" });
+        yield* rpc.ThreadAttach({
+          thread: made.id,
+          member: { project: "rowan", workspace: "tabular-exports" },
+        });
+        const page = yield* rpc.GadgetShow({
+          from: dirOf("rowan", "tabular-exports"),
+          name: "cost-table",
+          source: "# Costs\n\nOne line.\n",
+        });
+        const found = yield* rpc.GadgetRead({ address: page.url });
+        return { made: made.id, page, found };
+      }),
+    );
+
+    expect(got.page.thread).toBe(got.made);
+    expect(got.page.url).toBe(`gadget://${got.made}/cost-table`);
+    // What the window is handed is JavaScript, not the MDX that was written.
+    expect(got.found.code).toContain("function MDXContent");
+  });
+
+  it("a gadget that does not compile leaves the panel where it was", async () => {
+    // The order the handler does these in: compile, then publish. A refusal
+    // that had already moved the column would have taken somebody's page away
+    // to show them nothing.
+    const failed = await run((rpc) =>
+      rpc
+        .GadgetShow({
+          from: dirOf("rowan", "unclaimed"),
+          name: "broken",
+          source: "# Hi\n\n<Unclosed\n",
+        })
+        .pipe(Effect.flip),
+    );
+
+    expect(failed).toMatchObject({ reason: expect.stringContaining("line") });
   });
 
   it("pointing it from a workspace no thread claims carries no thread", async () => {

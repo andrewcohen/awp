@@ -495,3 +495,71 @@ panel is a real browser view with a preload in it.
 
 `probe:mcp` drives the **refusal** rather than a navigation: the success path
 moves the panel of the thread this repository is in.
+
+### Gadgets
+
+A gadget is the other thing that column can hold: MDX the agent writes, compiled
+here, pointed at by the same page feed. `gadget://<thread>/<name>` — the address
+is on `Pages` and `pageAddress` accepts it as a **third scheme that is not a
+third way to browse**, because nothing ever hands it to a webview. `app://` was
+the other candidate and is refused for the reason the guard exists: it is this
+application's own origin.
+
+**The compile is at the moment of writing, and that is the whole reason it is
+here** — a document that does not compile is a refusal returned to the agent
+still holding the source, in the compiler's own words. Compiled in the window it
+would be a blank panel an hour later, in front of the one party that cannot fix
+it.
+
+**MDX does not refuse `import`, it defers it.** With `outputFormat:
+"function-body"` an import becomes `await import(_resolveDynamicMdxSpecifier(…))`
+guarded by a check for `options.baseUrl` that throws _in the renderer_, about an
+option the author has never heard of. `noImports` refuses it at the top, reading
+the **estree** and not the source text — `import` also begins `important`, and a
+fenced block full of imports is prose about imports.
+
+**Nothing is written to disk.** A daemon restart forgets every gadget, and
+`GadgetRead` says so in a sentence the panel prints rather than answering with
+nothing. The window remembers the address across launches, so that sentence is
+the common case and not the rare one.
+
+`probe:gadget` writes one to a daemon the way an agent does, and defaults to
+**5284** rather than the instance in use: unlike `probe:ask` it moves a panel.
+
+### One writer per conversation, and the guarantee is not in memory
+
+`Chat`'s `RcMap` gives one adapter per workspace **inside one process**. What it
+guards is a session id in a store every daemon on the machine shares, opened by
+`claude --resume=<id>`, which nothing stops two processes running at once. That
+is not a hazard in the abstract: two agents ran on one session for two and a
+half minutes and wrote two implementations of one task into one working copy.
+
+So the claim is on the **session id**, in `chat_claims`, taken before the
+adapter is spawned — `session-claim.ts`. Two guards, in this order:
+
+```
+  the table    every awp daemon, exactly      one row, one writer
+  the process  everything else, approximately  a `--resume` nobody told the
+                                               store about — a background
+                                               agent, a hand-typed resume
+```
+
+- **The process check runs only when no conversation of ours held the claim.**
+  Ours means this pid's own adapter, and a `ps` would find our own grandchild
+  and refuse to open what we are already holding.
+- **A dead holder is taken over at once** — `process.kill(pid, 0)`, not the
+  heartbeat. Waiting out `STALE_AFTER` after every `dev restart daemon` is how
+  a refusal becomes a sentence everybody learns to ignore.
+- **The heartbeat is what makes the row an assertion rather than a lock.** Stop
+  beating and it decays; without it one `kill -9` makes a conversation
+  unopenable forever. It has nothing to do with sockets.
+- **Release is refcounted in-process.** `RcMap.invalidate` then `RcMap.get` —
+  what `/new` and the terminal fork both do — runs the new lookup while the old
+  scope is still closing, and both are this pid.
+- **The refusal must reach the window.** `subscribe` retries a feed forever and
+  then swallows the cause, so a refusal caught there is a chat that spins with
+  nothing on screen. `watchChat` catches `ChatUnavailable` _inside_ the retry,
+  the way `Attach` handles `AttachRefused`.
+
+`bun run probe:claim` spawns a second process against one store and prints what
+it was told. It runs no agent and writes nothing that outlives it.

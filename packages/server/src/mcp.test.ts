@@ -1,5 +1,6 @@
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
+import { gadgetScope } from "@awp-kit/protocol";
 import type { ReviewComment, Task, ThreadHere } from "@awp-kit/protocol";
 import {
   type Daemon,
@@ -88,6 +89,10 @@ const daemonOf = (
       browse: (from, url) => {
         asked.push({ browse: from, url });
         return Effect.succeed({ thread: "th-1", url });
+      },
+      gadget: (from, name, source) => {
+        asked.push({ gadget: from, name, source });
+        return Effect.succeed({ thread: "th-1", url: `gadget://th-1/${name}` });
       },
       addTask: (task) => {
         asked.push({ addTask: task });
@@ -351,6 +356,54 @@ describe("awp_browse", () => {
     const tool = TOOLS.find((one) => one.name === "awp_browse");
     expect(tool).toBeDefined();
     expect(Object.keys(tool?.inputSchema.properties ?? {})).toEqual(["url"]);
+  });
+});
+
+describe("awp_gadget", () => {
+  it("the sentence is the address, so it can be opened again later", () => {
+    const { text, failed, asked } = call("awp_gadget", {
+      name: "cost-table",
+      source: "# Costs\n",
+    });
+    expect(failed).toBe(false);
+    expect(text).toContain("web panel for this thread");
+    // The address and not just the name: `awp_browse` takes it, which is how
+    // anybody gets back to a gadget after the column has moved on.
+    expect(text).toContain("gadget://th-1/cost-table");
+    expect(asked).toEqual([{ gadget: HERE, name: "cost-table", source: "# Costs\n" }]);
+  });
+
+  it("half a call is refused here rather than forwarded", () => {
+    const { text, failed, asked } = call("awp_gadget", { name: "cost-table" });
+    expect(failed).toBe(true);
+    expect(text).toContain("needs a name and a source");
+    expect(asked).toEqual([]);
+  });
+
+  it("a document that does not compile comes back as the compiler's sentence", () => {
+    // The reason the compile is in the daemon at all: what reads this is the
+    // model that wrote the document, and it is still holding the source.
+    const { text, failed } = call(
+      "awp_gadget",
+      { name: "broken", source: "# Hi\n\n<Unclosed\n" },
+      { gadget: () => Effect.fail({ reason: "Unexpected end of file (line 3)" }) },
+    );
+    expect(failed).toBe(true);
+    expect(text).toContain("line 3");
+  });
+
+  it("the description names what a document is in scope of", () => {
+    // A gadget defines its own components, so the only thing awp publishes is
+    // this list — and an agent that is not told about it writes a document
+    // that cannot move. The contract owns the names; this is where they are
+    // said out loud.
+    const tool = TOOLS.find((one) => one.name === "awp_gadget");
+    expect(tool).toBeDefined();
+    expect(Object.keys(tool?.inputSchema.properties ?? {})).toEqual(["name", "source"]);
+    for (const name of gadgetScope) {
+      expect(tool?.description).toContain(name);
+    }
+    expect(tool?.description).toContain("import");
   });
 });
 

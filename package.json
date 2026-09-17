@@ -46,6 +46,8 @@
     "probe:thread-parent": "bun packages/server/src/probe/thread-parent.ts",
     "probe:review-queue": "bun packages/server/src/probe/review-queue.ts",
     "probe:ask": "bun packages/server/src/probe/daemon-ask.ts",
+    "probe:gadget": "bun packages/server/src/probe/gadget.ts",
+    "probe:claim": "bun packages/server/src/probe/session-claim.ts",
     "probe:session-start": "bun packages/server/src/probe/session-start.ts",
     "probe:acp": "bun packages/server/src/probe/acp.ts",
     "probe:chat": "bun packages/server/src/probe/chat.ts",

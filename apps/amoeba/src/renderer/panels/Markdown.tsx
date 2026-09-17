@@ -119,7 +119,15 @@ const styles = stylex.create({
  * It closes over nothing but the styles above, which are module scope too, so
  * there is nothing to capture and no reason it was ever inside.
  */
-const components: Components = {
+/**
+ * Exported, because a gadget's document is markdown too.
+ *
+ * MDX resolves `p`, `h1`, `table` and the rest through a components map, which
+ * is the same map react-markdown takes — so handing this to a gadget is what
+ * makes an agent's document read as part of this window rather than as a page
+ * pasted into it. See `Gadget.tsx`.
+ */
+export const components: Components = {
   p: (props) => <p {...stylex.props(styles.p)}>{props.children}</p>,
   h1: (props) => <div {...stylex.props(styles.h1)}>{props.children}</div>,
   h2: (props) => <div {...stylex.props(styles.h2)}>{props.children}</div>,

@@ -15,6 +15,7 @@ import type {
   CommentSide,
   Effort,
   Face,
+  Gadget,
   ReviewQueue,
   McpStatus,
   Message,
@@ -896,6 +897,19 @@ export const openPage = (from: string, url: string): Promise<Page> =>
   runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.PageOpen({ from, url })));
 
 /**
+ * The document at a gadget address.
+ *
+ * Asked for, and only when there is somewhere to draw it: the page feed says
+ * *where* the column is pointing, which is a string, and the document behind
+ * it can be a great deal larger than the address. A gadget the daemon no
+ * longer has — it holds them in memory, so its own restart is that case —
+ * comes back as a refusal with a sentence in it, and the panel prints the
+ * sentence rather than drawing an empty column.
+ */
+export const readGadget = (address: string): Promise<Gadget> =>
+  runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.GadgetRead({ address })));
+
+/**
  * Watch for pages anybody sets, until the returned function is called.
  *
  * Subscribed for the window's life rather than by the panel, and that is the
@@ -955,6 +969,25 @@ export const watchChat = (
    * it. So the caller empties what it holds and lets the replay rebuild it.
    */
   onRestart?: () => void,
+  /**
+   * The daemon refused to open the conversation, and said why.
+   *
+   * ── a refusal must not be retried, and must not be swallowed ───────────
+   *
+   * `subscribe` retries a dropped feed forever and then catches the cause, and
+   * both halves are right for an outage. A refusal is not an outage: asking
+   * again every half second replaces a sentence somebody can read with a
+   * loop, and the final catch then throws the sentence away — which leaves a
+   * chat that spins with nothing on screen saying why.
+   *
+   * That is the shape of failure this was written for. `Chat` refuses to open
+   * a session another process is already writing — see `session-claim.ts` —
+   * and a person who cannot see that sentence has a window that simply does
+   * not work, with the one fact that would explain it sitting in the daemon.
+   *
+   * Caught *inside* the retry, the same way `Attach` handles `AttachRefused`.
+   */
+  onRefused?: (reason: string) => void,
 ): (() => void) => {
   let first = true;
   return subscribe((rpc) =>
@@ -968,6 +1001,8 @@ export const watchChat = (
       }
       return Stream.runForEach(rpc.ChatOpen({ project, workspace }), (update) =>
         Effect.sync(() => onUpdate(update)),
+      ).pipe(
+        Effect.catchTag("ChatUnavailable", (error) => Effect.sync(() => onRefused?.(error.reason))),
       );
     }),
   );

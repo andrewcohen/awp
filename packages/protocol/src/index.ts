@@ -1160,6 +1160,150 @@ export class PageRefused extends Schema.TaggedError<PageRefused>()("PageRefused"
   reason: Schema.String,
 }) {}
 
+// ── a gadget: a page the agent writes and a person reads ───────────────────
+//
+// The web panel points at somebody else's page. A gadget is the other kind of
+// thing to put in that column: a small document an agent authors — a table
+// with a toggle in it, a chart, a comparison it wants looked at — served from
+// the daemon and drawn by this window.
+//
+// It is MDX and not HTML because a gadget is mostly prose, and prose in HTML
+// spends a tag on every paragraph. Markdown is what a model writes most
+// cheaply; MDX is markdown that can define a component in the minority of
+// places where something has to move.
+//
+// ── the address is a third scheme, and it is not navigable ────────────────
+//
+// `gadget://<thread>/<name>`. It rides the page feed — one claim per thread
+// about what the column is showing — so the panel that receives an agent's
+// navigation is the panel that receives its gadget, and none of that chain
+// changed.
+//
+// What it is not is a url the webview is sent to. `app://` was the other
+// candidate, since it is already a registered standard scheme with a real
+// origin; the reason against it is that `app://renderer/index.html` is this
+// application, and a navigation call able to name it points a browser view
+// with a preload in it at the window's own origin. A `gadget:` address names
+// a document *this renderer* draws and hands to no webview at all, so the
+// guard `pageAddress` keeps is unchanged in what it permits a navigation to
+// reach: two schemes to browse, and a third that is not browsing.
+
+/** The scheme, as `URL.protocol` spells it. */
+export const gadgetScheme = "gadget:";
+
+/**
+ * A name a person could say out loud, because it is in the address bar.
+ *
+ * Narrow on purpose: it is a url segment and a map key, and the agent chooses
+ * it, so every character that would need escaping somewhere is refused where
+ * the mistake is rather than encoded and handed back looking different.
+ */
+export const gadgetName = /^[a-z0-9][a-z0-9-]{0,47}$/u;
+
+/**
+ * The bucket for a workspace no thread claims.
+ *
+ * The same answer the page feed gives — see {@link Page} — and it cannot be
+ * mistaken for a thread, whose id is always a date and four characters.
+ * Two unclaimed workspaces share it, which is honest: there is nothing to tell
+ * them apart by.
+ */
+const loose = "loose";
+
+/** Where a gadget is, given whose it is. */
+export const gadgetAddress = (thread: string | undefined, name: string): string =>
+  `${gadgetScheme}//${thread ?? loose}/${name}`;
+
+/**
+ * Read one back, or nothing when the url is not a gadget address.
+ *
+ * In the contract rather than in either process, because both ends ask the
+ * same question of the same string — the daemon to find the document, the
+ * window to know it must draw one rather than navigate — and a second parser
+ * is the copy that drifts.
+ */
+export const readGadgetAddress = (
+  url: string,
+): { readonly thread?: string | undefined; readonly name: string } | undefined => {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return undefined;
+  }
+  if (parsed.protocol !== gadgetScheme) {
+    return undefined;
+  }
+  const name = parsed.pathname.replace(/^\//u, "");
+  const host = parsed.hostname;
+  if (!gadgetName.test(name) || host === "") {
+    return undefined;
+  }
+  return { ...(host === loose ? {} : { thread: host }), name };
+};
+
+/**
+ * What a gadget's document has in scope, by name.
+ *
+ * ── there is no registry, and this is the whole of what there is instead ──
+ *
+ * A gadget defines its own components inline — MDX lets a document declare one
+ * and use it — so what awp publishes is not a set of components to choose
+ * from. It is this: the handful of names an inline component can reach for,
+ * and it is deliberately the smallest list that can work.
+ *
+ *   React                   hooks, or nothing can move
+ *   colors · text · space   the window's tokens, so a gadget does not look
+ *                           foreign in the column it is drawn in
+ *
+ * What is missing is the app-native half — open this diff, this thread's
+ * status, a live value from the daemon — and it is missing on purpose. Nothing
+ * in it is known yet, and a list guessed at now is a registry designed for
+ * gadgets nobody has written. It grows out of what the first real ones reach
+ * for and cannot have.
+ *
+ * In the contract because two places must agree on it and neither can import
+ * the other: the renderer binds these names when it runs a document, and the
+ * MCP tool's description tells the agent what it may use. A name in one and
+ * not the other is either a document that throws or a capability nobody knows
+ * about.
+ */
+export const gadgetScope: ReadonlyArray<string> = ["React", "colors", "text", "space"];
+
+/** A gadget, compiled and ready to run. */
+export const Gadget = Schema.Struct({
+  /** {@link gadgetAddress} — what the page feed carries and the window asks by. */
+  address: Schema.String,
+  thread: Schema.optional(Schema.String),
+  name: Schema.String,
+  /**
+   * The document as JavaScript: MDX compiled to a function body.
+   *
+   * Compiled by the daemon and not by the window, and that is the one decision
+   * in here worth arguing. A compile in the renderer is a compiler in the
+   * bundle and a syntax error nobody can act on — it appears as a blank panel,
+   * minutes after the agent that wrote it has moved on. Compiled at the moment
+   * it is written, a broken document is a refusal returned to the agent's own
+   * tool call, in the compiler's own words, while it still has the source in
+   * hand. That is the same argument every refusal sentence in `mcp.ts` makes:
+   * what reads it is a model, and it can fix its own output.
+   */
+  code: Schema.String,
+  at: Schema.Number,
+});
+
+export type Gadget = (typeof Gadget)["Type"];
+
+/**
+ * The document was not one that can be drawn.
+ *
+ * Carries the compiler's sentence, or the rule that was broken. A refusal and
+ * not a gadget that renders an error, because the caller is the author.
+ */
+export class GadgetRefused extends Schema.TaggedError<GadgetRefused>()("GadgetRefused", {
+  reason: Schema.String,
+}) {}
+
 // ── what a conversation was handed ─────────────────────────────────────────
 //
 // `/mcp` in the chat asks what tools the agent on the other end has, and the
@@ -3209,6 +3353,46 @@ export class AwpRpcs extends RpcGroup.make(
   Rpc.make("PageChanges", {
     success: Page,
     stream: true,
+  }),
+
+  /**
+   * Write a gadget and point this thread's column at it.
+   *
+   * One call and not two, because a gadget nobody is shown is a document in a
+   * drawer: the agent's reason for writing one is that somebody should look
+   * at it now. The reply is the {@link Page}, so the caller is told which
+   * thread's column moved — the same answer `PageOpen` gives, for the same
+   * reason: the panel belongs to the piece of work and not to this checkout.
+   *
+   * `source` is MDX. It is compiled here, and a document that does not compile
+   * comes back as {@link GadgetRefused} carrying the compiler's own sentence.
+   */
+  Rpc.make("GadgetShow", {
+    payload: {
+      /** A directory inside the workspace asking. A session's `startDir` will do. */
+      from: Schema.String,
+      /** {@link gadgetName}. Writing a name twice replaces what was there. */
+      name: Schema.String,
+      source: Schema.String,
+    },
+    success: Page,
+    error: Schema.Union([NotAWorkspace, GadgetRefused, PageRefused]),
+  }),
+
+  /**
+   * The document at an address, for whoever has to draw it.
+   *
+   * Asked rather than pushed: the window is told *where* the column is
+   * pointing by the page feed, and fetches the document when it has somewhere
+   * to put it. A gadget the daemon has forgotten — it holds them in memory, so
+   * a restart is exactly that — is a refusal with a sentence in it, which the
+   * panel prints. The alternative is an empty column that reads as a gadget
+   * that drew nothing.
+   */
+  Rpc.make("GadgetRead", {
+    payload: { address: Schema.String },
+    success: Gadget,
+    error: GadgetRefused,
   }),
 
   Rpc.make("ThreadBases", {

@@ -17,6 +17,7 @@
     "@mdx-js/mdx": "3.1.1",
     "bun-pty": "0.4.10",
     "diff": "catalog:",
-    "effect": "catalog:"
+    "effect": "catalog:",
+    "remark-gfm": "4.0.1"
   }
 }

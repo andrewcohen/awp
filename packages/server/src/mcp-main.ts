@@ -75,6 +75,13 @@ const over = (rpc: client.AwpClientShape): Daemon => ({
       Effect.map((opened) => ({ thread: opened.thread, url: opened.url })),
       Effect.mapError(refusal),
     ),
+  gadget: (from, name, source) =>
+    rpc.GadgetShow({ from, name, source }).pipe(
+      // The page and not the gadget, for the same reason `browse` maps to one:
+      // what the tool has to say is which column moved, and that is a thread.
+      Effect.map((opened) => ({ thread: opened.thread, url: opened.url })),
+      Effect.mapError(refusal),
+    ),
   board: (filter) => rpc.TaskBoard(filter).pipe(Effect.mapError(refusal)),
   addTask: (task) => rpc.TaskAdd(task).pipe(Effect.mapError(refusal)),
   setTaskStatus: (id, status) => rpc.TaskStatus({ id, status }).pipe(Effect.mapError(refusal)),

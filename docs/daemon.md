@@ -2128,3 +2128,133 @@ at all. The one global failure is the login, and it is not fatal either: what it
 costs is every viewer-relative bucket, which is why `ReviewQueue.viewer` is on the
 answer. A review queue that is empty because nobody is signed in looks exactly like an
 review queue with nothing in it.
+
+## Gadgets: what was measured before any of it was written
+
+The rules are in `packages/server/AGENTS.md`. This is what they cost.
+
+### MDX, and what its compiler actually emits
+
+Compiled with `outputFormat: "function-body"`, a document comes back as a
+fragment that begins:
+
+```
+"use strict";
+const {Fragment: _Fragment, jsx: _jsx, jsxs: _jsxs} = arguments[0];
+…
+return { Counter, default: MDXContent };
+```
+
+Three facts fell out of reading that rather than the README:
+
+- **`arguments[0]` is the runtime**, which is what makes the window's parameter
+  list the scope and fixes the runtime as its first parameter. Named parameters
+  and `arguments[0]` coexist — the first parameter _is_ `arguments[0]` — so a
+  document can be handed `React` and the tokens by name without the compiler
+  knowing anything about them.
+- **`export function` at the top level of the document becomes a local
+  declaration** and a key in the returned object. That is the whole of "the
+  agent inlines its own components": a gadget defines what it uses, and awp
+  publishes no registry.
+- **`import` is not refused, it is deferred.** It compiles to
+  `await import(_resolveDynamicMdxSpecifier('y'))` preceded by
+  `if (!_importMetaUrl) throw new Error("Unexpected missing \`options.baseUrl\`…")`— a throw in the *renderer*, naming an option the document's author never
+chose. Hence`noImports`, which reads the estree of each `mdxjsEsm` node and
+  refuses at the top, where the agent is still listening.
+
+### Why the address is a third scheme rather than `app://`
+
+`pageAddress` admits two schemes because the panel is a real `WebContentsView`
+with a preload in it. `app://` is a registered standard scheme with a real
+origin — which is exactly the problem: `app://renderer/index.html` is this
+application, so admitting the scheme admits a navigation call that points that
+view at the window's own origin. A `gadget:` address cannot be that, because no
+code path hands it to a webview at all; `Web.tsx` branches before the navigation
+and draws it instead. The guard's meaning is unchanged: two schemes to browse,
+and one that is not browsing.
+
+### What was deliberately not built
+
+- **No durability.** Gadgets are a `Ref<Map>`; a restart forgets them. The cost
+  is a sentence in the panel rather than an empty column, and a table can follow
+  the first gadget somebody misses.
+- **No list, no strip, no titles.** A thread may hold many named gadgets and the
+  column shows the one its page names. A strip of chips to switch between them
+  is the obvious next thing and is the reason `GadgetHead` was considered and
+  dropped: a title field nothing renders is a field that goes stale.
+- **No app-native scope.** `gadgetScope` is `React` and the three token groups.
+  Open this diff, this thread's status, a live value from the daemon — all of it
+  is guesswork until a gadget reaches for something and cannot have it.
+
+## Two agents on one conversation: what happened, and what now refuses it
+
+The rule is in `packages/server/AGENTS.md`. This is the incident and the
+measurements behind it.
+
+### What was observed
+
+On 2026-09-17, between 09:53:05 and 09:55:30, two `claude` processes wrote into
+one session's transcript and one working copy. Both were implementing the same
+task; they produced two contracts for it, in the same file, minutes apart. The
+evidence was three-way and worth recording because none of it is obvious:
+
+- **The transcript interleaves.** `tool_use` entries a second apart, in one
+  `.jsonl`, doing different halves of one job. A transcript carries no process
+  id, so the split between the two streams is by content — that is the limit of
+  what can be reconstructed afterwards.
+- **A jj snapshot bounds it.** At the `jj new` operation the contested file was
+  3585 lines with none of the second stream's symbols in it; 97 seconds later
+  it was 3918 lines and held both designs. `jj op log` plus
+  `jj --at-op=<id> file show` dates a working-copy change to the second without
+  anybody having committed anything.
+- **No second session exists.** Grepping every transcript under
+  `~/.claude/projects` for the second stream's symbols finds them in exactly
+  one file — the same session — and as _tool calls_, not tool results.
+
+### Why it was possible
+
+```
+  chat_sessions(project, workspace) → session_id     shared sqlite, every daemon
+  RcMap key      project\nworkspace                  one process's memory
+  claude --resume=<session_id>                       nothing claimed it
+```
+
+`chat.ts` already refuses to _adopt_ a session from `session/list`, with a
+comment naming this exact failure — "a second writer on a transcript an
+interactive agent is still appending to, and neither process knows about the
+other". The door it left open is the stored pointer: when the remembered
+session is one something else currently holds, `session/load` proceeded.
+
+Three ways in, all ordinary here: the two-instance dev workflow (5274 and 5284
+share the store), a session running as a harness background agent, and
+`claude --resume` typed by hand.
+
+### What the guard costs, and what it deliberately does not do
+
+- **A `ps` scan, fail-open.** `ps -Ao pid=,command=` is parsed by a pure
+  function, and every non-answer is an empty list: the table is the guard that
+  has to be right, and a `ps` that is missing or shaped differently must not be
+  able to stop a conversation opening. `--resume=<id>` and not the bare id,
+  because the id appears in transcript paths and in the argv of anything
+  grepping for it — including the diagnosis.
+- **Liveness before staleness.** `process.kill(pid, 0)` answers immediately for
+  a daemon that was killed, so a restart never waits out `STALE_AFTER`. The
+  heartbeat covers only what liveness cannot: a pid that exists but is not that
+  conversation any more.
+- **Nothing here touches sockets.** The word heartbeat is doing different work
+  in this file than in a feed that drops. A claim beat says "this process still
+  holds this conversation"; it does not keep a connection alive, notice a
+  client leaving, or bear on the window's feeds reconnecting.
+
+### The refusal has to be on screen
+
+Found while wiring it: `subscribe` in the renderer retries a feed forever and
+then catches the cause, which is right for an outage and wrong for a refusal —
+the sentence would have been retried every half second and then thrown away,
+leaving a chat that spins with nothing saying why. `watchChat` now catches
+`ChatUnavailable` inside the retry, as `Attach` already did for `AttachRefused`,
+and `Chat.tsx` prints it in `colors.warn` beside the turn-ended line.
+
+`bun run probe:claim` is the cross-process check: a second process against one
+store, printing what it was told. Unit tests drive one connection, which proves
+the logic and not the property.

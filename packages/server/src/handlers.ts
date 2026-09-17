@@ -55,6 +55,7 @@ import { Settings, agentWith } from "./settings";
 import { localBookmarks } from "./jj-parse";
 import { identityLabels, sessionName } from "./naming";
 import { TOOLS, daemonUrl, mcpEntry, serverSpec } from "./mcp";
+import { Gadgets } from "./gadgets";
 import { Pages } from "./pages";
 import { Projects, discover, expand, nearestRepo } from "./projects";
 import { Reviews, commentId } from "./reviews";
@@ -467,6 +468,7 @@ export const layer = AwpRpcs.toLayer(
     const faces = yield* Faces;
     const tasks = yield* Tasks;
     const pages = yield* Pages;
+    const gadgets = yield* Gadgets;
     const messages = yield* Messages;
     // Taken once, here, rather than per request. A handler's return value has
     // to name no requirements — the rpc layer is what settles them — so the
@@ -2376,6 +2378,36 @@ export const layer = AwpRpcs.toLayer(
         }),
 
       PageChanges: () => pages.changes(),
+
+      /**
+       * Write a gadget and point this thread's column at it.
+       *
+       * The thread is resolved exactly as `PageOpen` resolves it, and then
+       * used twice: it is what the gadget is filed under and what the page is
+       * published for. Two resolutions of one directory could disagree — a
+       * gadget filed under a thread and shown to nobody is the failure — so
+       * there is one, here, and `Gadgets` never sees a directory.
+       *
+       * The page is opened last. A document that does not compile refuses
+       * before anything has moved, which is the order that leaves the column
+       * showing whatever it was showing.
+       */
+      GadgetShow: ({ from, name, source }) =>
+        Effect.gen(function* () {
+          const at = yield* workspaceAt(from);
+          const all = yield* threads.list().pipe(Effect.orDie);
+          const holding = all.find(
+            (thread) =>
+              thread.archivedAt === undefined &&
+              thread.members.some(
+                (member) => member.project === at.project && member.workspace === at.workspace,
+              ),
+          );
+          const gadget = yield* gadgets.show(holding?.id, name, source);
+          return yield* pages.open(holding?.id, gadget.address);
+        }),
+
+      GadgetRead: ({ address }) => gadgets.read(address),
 
       ThreadAt: ({ from }) =>
         Effect.gen(function* () {

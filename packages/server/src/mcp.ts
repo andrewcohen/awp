@@ -50,6 +50,7 @@
 
 import { join } from "node:path";
 import { Effect, Result } from "effect";
+import { gadgetScope } from "@awp-kit/protocol";
 import type { CommentKind, Message, ReviewComment, Task, ThreadHere } from "@awp-kit/protocol";
 
 /**
@@ -194,6 +195,11 @@ export interface Daemon {
     from: string,
     url: string,
   ) => Effect.Effect<{ readonly thread: string | undefined; readonly url: string }, Refusal>;
+  readonly gadget: (
+    from: string,
+    name: string,
+    source: string,
+  ) => Effect.Effect<{ readonly thread: string | undefined; readonly url: string }, Refusal>;
   readonly board: (filter: {
     readonly tags?: ReadonlyArray<string>;
     readonly statuses?: ReadonlyArray<string>;
@@ -311,6 +317,44 @@ export const TOOLS = [
         },
       },
       required: ["url"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "awp_gadget",
+    description:
+      "Write a small page and put it in the panel beside the diff, for a person to read. " +
+      "Use it when the answer is a table, a chart, a comparison or a short report — " +
+      "something worth looking at rather than scrolling back through a conversation for. " +
+      "The document is MDX: markdown, plus JSX where something has to move. " +
+      "Define any component you want inside the document itself and use it — there is no " +
+      "component library to pick from, and `import` is refused because there is nothing " +
+      "for it to resolve against. What is in scope is " +
+      gadgetScope.join(", ") +
+      ", where the last three are the window's own design tokens, as CSS variables: " +
+      "style={{ color: colors.accent, fontSize: text.small }} looks native, a hard-coded " +
+      "colour does not. " +
+      "Writing a name twice replaces what it held and shows it again. The panel belongs to " +
+      "this piece of work, so it is shared by every checkout of it — and a document that " +
+      "does not compile is refused here, with the compiler's own sentence, rather than " +
+      "drawing nothing.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: {
+          type: "string",
+          description:
+            "Lower case letters, digits and dashes, and it is in the address bar a person " +
+            "reads: cost-table, latency-by-run.",
+        },
+        source: {
+          type: "string",
+          description:
+            "The MDX. Prose is markdown; a component is `export function Thing() { … }` " +
+            "using React.useState for anything with state, and `<Thing />` where it goes.",
+        },
+      },
+      required: ["name", "source"],
       additionalProperties: false,
     },
   },
@@ -881,6 +925,26 @@ export const answer = (
                   )
                 : said(held.failure.reason, true),
             );
+          }
+
+          case "awp_gadget": {
+            const called = text(args, "name");
+            const source = text(args, "source");
+            if (called === undefined || source === undefined) {
+              return reply(said("awp_gadget needs a name and a source", true));
+            }
+            const shown = yield* Effect.result(daemon.gadget(cwd, called, source));
+            if (!Result.isSuccess(shown)) {
+              return reply(said(shown.failure.reason, true));
+            }
+            // The address is in the sentence and is not decoration: it is what
+            // `awp_browse` takes to put this gadget back in front of somebody
+            // later, after the column has moved on to something else.
+            const where =
+              shown.success.thread === undefined
+                ? "this workspace's web panel"
+                : "the web panel for this thread";
+            return reply(said(`${where} is now showing ${shown.success.url}`));
           }
 
           case "awp_browse": {

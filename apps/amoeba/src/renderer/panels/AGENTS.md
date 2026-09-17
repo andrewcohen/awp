@@ -187,3 +187,28 @@ written by hooks and frozen the same way. The thread title is the live one.
 
 **Nothing is re-read after a write**: every thread write announces itself on the
 store's feed. "The reply is the update" is the rule for calls with **no** feed.
+
+### Gadgets
+
+An agent's document, drawn in this process — `gadget://` arrives on the page feed
+like any address and is the one the web panel must **not** navigate to. The
+webview is hidden and kept (`tucked`, and its zero rectangle takes the same path
+a folded column takes), so the page behind a gadget keeps its history and scroll.
+
+**The scope is the parameter list of the function the window builds, and the
+runtime has to go first.** MDX's compiled body reads its jsx runtime out of
+`arguments[0]`, so `_runtime` is the first parameter and `gadgetScope` follows in
+the contract's order; a scope name placed first is a document whose every element
+fails to build with no sentence naming the cause. A name the contract lists and
+the window does not hand over is refused rather than bound to `undefined` —
+otherwise the document dies on `colors.accent` and the boundary blames the gadget
+for the window's omission.
+
+**Mounted under `address#at`, not under the address.** A revision keeps the name,
+so the address is the same string: without the stamp the document is never
+re-read and an error boundary that has caught stays caught, which means the
+_fixed_ gadget never renders.
+
+**A gadget needs no app window.** It is React rather than a `WebContentsView`, so
+it draws in a browser tab and under a probe — check it there, and check the
+throwing one too: `bun run probe:gadget` writes both.

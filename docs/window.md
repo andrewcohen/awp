@@ -2779,3 +2779,50 @@ padding is inline-only for the same reason: vertical padding on a box
 animating to `height: 0` leaves a gap that never closes. `Working` lost its
 own entrance with the move, because two animations on one thing is the fight
 `springs.ts` exists to stop.
+
+## Gadgets, from the window's side
+
+Rules in `src/renderer/panels/AGENTS.md`; the daemon's half of the evidence,
+including what MDX's compiler emits, is in `docs/daemon.md`.
+
+### It renders in the renderer, and that is the feature
+
+The obvious shape — serve the document over `app://` and let the native webview
+load it — loses the only thing worth having. A gadget's inline component has to
+be _called by this React tree_ to hold state, to be handed tokens, and one day
+to be handed something app-native. So `Gadget.tsx` fetches the compiled body
+over the existing RPC and builds it with `new Function`.
+
+That it is `new Function` deserves saying out loud rather than hiding: a gadget
+is arbitrary JavaScript written by an agent that already has a shell in the
+workspace this window is looking at. The escalation is not in the evaluation;
+it is that a document can throw where nobody is catching, which is what the
+boundary is for.
+
+### What was checked, and how
+
+`bun run probe:gadget` writes two documents to a daemon exactly as `awp_gadget`
+does, then the dev server is driven with Playwright against 5283/5284:
+
+```
+  probe-latency   prose · a GFM table · a button with React.useState in it
+                  → "pressed 0 times" → click ×2 → "pressed 2 times", no errors
+  probe-broken    throws on first render
+                  → "the gadget probe-broken stopped working", the error, the
+                    component stack and a copy button — the column intact
+```
+
+The second is the check that matters, and it is why `Boundary` was reused rather
+than a smaller fallback: what fixes a broken gadget is the agent, and the way it
+hears about the failure is a person copying the report back to it.
+
+### Two traps found while building it
+
+- **The document is mounted under `address#at`.** A revision keeps the gadget's
+  name, so the address is the same string — an effect keyed on the address alone
+  never re-reads, and an error boundary that has caught stays caught, so the
+  _fixed_ document would never be rendered.
+- **The webview is hidden, not unmounted, while a gadget is showing.** Taking it
+  down loses the page's history, scroll and any login behind it. The stage's
+  `display: none` sends its rectangle to zero, which is the same path a folded
+  column already takes to hide the view.

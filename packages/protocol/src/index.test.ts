@@ -422,6 +422,20 @@ const handlers = AwpRpcs.toLayer({
     Stream.fromArray([
       { thread: "th-1", url: "https://example.invalid/build/412", at: 1_787_000_000_000 },
     ]),
+  GadgetShow: ({ name }) =>
+    Effect.succeed({
+      thread: "th-1",
+      url: `gadget://th-1/${name}`,
+      at: 1_787_000_000_000,
+    }),
+  GadgetRead: ({ address }) =>
+    Effect.succeed({
+      address,
+      thread: "th-1",
+      name: "cost-table",
+      code: "return {default: () => null}",
+      at: 1_787_000_000_000,
+    }),
   ReviewFile: () =>
     Effect.succeed({
       comment,

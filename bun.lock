@@ -100,6 +100,7 @@
         "bun-pty": "0.4.10",
         "diff": "catalog:",
         "effect": "catalog:",
+        "remark-gfm": "4.0.1",
       },
     },
     "packages/store": {
