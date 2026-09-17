@@ -1,5 +1,7 @@
 import type { Gadget, GadgetHead } from "@awp-kit/protocol";
 import { GadgetRefused, gadgetAddress, gadgetName, gadgetScope } from "@awp-kit/protocol";
+import type { Migration } from "@awp-kit/store";
+import { Db, attempt } from "@awp-kit/store";
 import { compile } from "@mdx-js/mdx";
 import { Clock, Context, Effect, Layer, PubSub, Ref, Stream } from "effect";
 import remarkGfm from "remark-gfm";
@@ -21,15 +23,25 @@ import remarkGfm from "remark-gfm";
 // usually the one being asked about. So the panel keeps a strip and this keeps
 // a map, and the feed says *one more exists* rather than *look here now*.
 //
-// ── nothing is written to disk, and the cost is stated ────────────────────
+// ── the source is written down, the compile is not ───────────────────────
 //
 // `Pages` keeps no table because replaying a navigation would move somebody's
-// page on launch. The argument here is weaker and the conclusion is the same
-// for now: a gadget is content rather than an event, so forgetting one loses
-// something — but what it loses is a document its author can write again in a
-// second, and the window is honest about a gadget that is gone (see
-// `GadgetRead`, which refuses in a sentence the panel prints). A table and a
-// migration can follow the first gadget somebody misses.
+// page on launch. A gadget is content rather than an event, so that argument
+// does not carry: forgetting one loses a document somebody was told to look
+// at, and it was lost on every restart — which in this repo is several times
+// an hour.
+//
+// What the table holds is the **source**. The compile stays in memory:
+//
+//   list   answers from the table and compiles nothing — the strip opens
+//          without reading a single document
+//   read   compiles on a miss and keeps it, so the one tab somebody clicks
+//          is the only one that pays
+//
+// Storing the output instead would put a compiler's artifact in a table that
+// outlives the compiler: the day `@mdx-js` changes what it expects in
+// `arguments[0]`, every stored gadget is a document running against a shape
+// nothing hands it any more. A source cannot go stale that way.
 //
 // ── the compile is here, at the moment of writing ─────────────────────────
 //
@@ -37,6 +49,35 @@ import remarkGfm from "remark-gfm";
 // a document that does not compile is a refusal handed back to the agent
 // holding the source, in the compiler's own words — not a blank column an
 // hour later.
+
+/**
+ * The gadgets table.
+ *
+ * `thread` is nullable, because a gadget written outside a thread is addressed
+ * without one. `list` therefore asks with `is ?` rather than `= ?` — a null
+ * compared with `=` matches nothing, including other nulls, so those rows
+ * would be written and then never found.
+ *
+ * A rewrite deletes before it inserts, which is the move the map makes and for
+ * the same reason: `rowid` is what breaks the tie between two gadgets written
+ * inside one millisecond, and the one written second has to sort first.
+ */
+export const migrations: ReadonlyArray<Migration> = [
+  {
+    name: "gadgets.001-initial",
+    up: [
+      `create table gadgets (
+         address text primary key,
+         thread  text,
+         name    text not null,
+         title   text not null,
+         source  text not null,
+         at      integer not null
+       ) strict`,
+      `create index gadgets_thread on gadgets (thread)`,
+    ],
+  },
+];
 
 export class Gadgets extends Context.Service<
   Gadgets,
@@ -207,13 +248,54 @@ export const compileGadget = (
 /** A gadget without its document, which is what a strip is drawn from. */
 const headOf = ({ code: _code, ...head }: Gadget): GadgetHead => head;
 
+/** The same, out of a row: `thread` is absent rather than null. */
+const headFrom = (row: Record<string, unknown>): GadgetHead => ({
+  address: String(row["address"]),
+  ...(typeof row["thread"] === "string" ? { thread: row["thread"] } : {}),
+  name: String(row["name"]),
+  title: String(row["title"]),
+  at: Number(row["at"]),
+});
+
 export const make = Effect.gen(function* () {
+  const db = yield* Db;
+  // The compiled documents, which the table deliberately does not hold. A
+  // cache and not the truth: every entry can be rebuilt from its row.
   const held = yield* Ref.make(new Map<string, Gadget>());
   // Dropping, and small, for the reason `Pages` gives: a subscriber is a
   // socket, and one that has stopped reading is a window that has gone away.
   // A dropped event costs less here than it does there — the panel opens from
   // `list`, so a window that missed one is a window one click from seeing it.
   const hub = yield* PubSub.dropping<GadgetHead>(16);
+
+  const forget = db.prepare("delete from gadgets where address = ?");
+  const remember = db.prepare(
+    "insert into gadgets (address, thread, name, title, source, at) values (?, ?, ?, ?, ?, ?)",
+  );
+  const readOne = db.prepare("select * from gadgets where address = ?");
+  const readHeads = db.prepare(
+    "select address, thread, name, title, at from gadgets where thread is ? order by at desc, rowid desc",
+  );
+
+  const keep = (gadget: Gadget) =>
+    Ref.update(held, (all) => {
+      // Removed before it is set, so a rewrite takes the newest position in
+      // the map rather than keeping the one its first writing had. Insertion
+      // order is the tie-break when the table cannot be read.
+      const next = new Map(all);
+      next.delete(gadget.address);
+      return next.set(gadget.address, gadget);
+    });
+
+  /** What memory alone can answer, which is what is left when a read fails. */
+  const listHeld = (thread: string | undefined) =>
+    Effect.map(Ref.get(held), (all) =>
+      [...all.values()]
+        .toReversed()
+        .filter((gadget) => gadget.thread === thread)
+        .toSorted((a, b) => b.at - a.at)
+        .map(headOf),
+    );
 
   return {
     show: (thread: string | undefined, name: string, source: string) =>
@@ -250,14 +332,18 @@ export const make = Effect.gen(function* () {
           at,
           code,
         };
-        yield* Ref.update(held, (all) => {
-          // Removed before it is set, so a rewrite takes the newest position
-          // in the map rather than keeping the one its first writing had.
-          // Insertion order is what `list` breaks a tie on — see there.
-          const next = new Map(all);
-          next.delete(gadget.address);
-          return next.set(gadget.address, gadget);
-        });
+        // Written down, and ignored if it could not be. A gadget that
+        // compiled is one this daemon can serve, and refusing it because a row
+        // would not write would throw away the half that worked — what is lost
+        // is the next restart, which is exactly where this stood before the
+        // table existed.
+        yield* Effect.ignore(
+          attempt("remember the gadget", () => {
+            forget.run(gadget.address);
+            remember.run(gadget.address, thread ?? null, name, gadget.title, source, at);
+          }),
+        );
+        yield* keep(gadget);
         yield* PubSub.publish(hub, headOf(gadget));
         return gadget;
       }),
@@ -266,38 +352,54 @@ export const make = Effect.gen(function* () {
       Effect.gen(function* () {
         const all = yield* Ref.get(held);
         const found = all.get(address);
-        if (found === undefined) {
-          // Two causes and one sentence, because the window cannot tell them
-          // apart either: a name nobody wrote, and a daemon that has been
-          // restarted since it was written. The second is the common one —
-          // the window remembers the address across launches and the daemon
-          // remembers nothing — so the sentence says what to do about it.
+        if (found !== undefined) {
+          return found;
+        }
+        const rows = yield* Effect.orElseSucceed(
+          attempt("read the gadget", () => readOne.all(address)),
+          (): ReadonlyArray<Record<string, unknown>> => [],
+        );
+        const row = rows[0];
+        if (row === undefined) {
+          // One cause now, where there were two: a restart used to lose every
+          // gadget, and the sentence had to cover it. What is left is a name
+          // nobody wrote — a window holding an address from a thread whose
+          // gadget was replaced under a different name, most often.
           return yield* Effect.fail(
             new GadgetRefused({
-              reason: `no gadget at ${address} — it was never written, or the daemon has restarted since it was. Ask the agent for it again.`,
+              reason: `no gadget at ${address} — nothing has been written under that name. Ask the agent for it.`,
             }),
           );
         }
-        return found;
+        // Compiled here and not on the way up: a daemon that rebuilt every
+        // stored gadget at startup would pay for the documents nobody opens,
+        // and this is the call that has somebody waiting on it.
+        //
+        // The title is the stored one rather than the one this compile found.
+        // They are the same walk over the same source — but the strip is
+        // already drawn from the row, and a tab that disagreed with itself
+        // would be a bug nobody could see the cause of.
+        const { code } = yield* compileGadget(String(row["source"]));
+        const gadget: Gadget = { ...headFrom(row), code };
+        yield* keep(gadget);
+        return gadget;
       }),
 
     list: (thread: string | undefined) =>
-      Effect.map(Ref.get(held), (all) =>
-        // Reversed before the sort, and `toSorted` is stable: two gadgets
-        // written inside one millisecond are ordered by which was written
-        // second. `at` has millisecond resolution and an agent writing a pair
-        // of them does so in a loop, so the tie is the ordinary case rather
-        // than the exotic one — and without this the strip would put them in
-        // the order a Map happened to hold.
-        [...all.values()]
-          .toReversed()
-          .filter((gadget) => gadget.thread === thread)
-          .toSorted((a, b) => b.at - a.at)
-          .map(headOf),
+      // `rowid desc` after `at desc` is the tie-break: two gadgets written
+      // inside one millisecond are ordered by which was written second. `at`
+      // has millisecond resolution and an agent writing a pair of them does so
+      // in a loop, so the tie is the ordinary case rather than the exotic one.
+      attempt("list the gadgets", () => readHeads.all(thread ?? null)).pipe(
+        Effect.map((rows) => rows.map(headFrom)),
+        // Memory is what is left when the table cannot be read — not an empty
+        // list, which would say "this thread has none" about a thread that
+        // has some.
+        Effect.catch(() => listHeld(thread)),
       ),
 
     changes: () => Stream.fromPubSub(hub),
   };
 });
 
-export const layer: Layer.Layer<Gadgets> = Layer.effect(Gadgets)(make);
+export const layer: Layer.Layer<Gadgets, never, Db> = Layer.effect(Gadgets)(make);

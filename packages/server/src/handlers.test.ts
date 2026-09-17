@@ -38,7 +38,7 @@ import { sessionName } from "./naming";
 import { makeFake } from "./pty-fake";
 import * as sessions from "./sessions";
 import { migrations as reviewMigrations, layer as reviewsLayer } from "./reviews";
-import { layer as gadgetsLayer } from "./gadgets";
+import { layer as gadgetsLayer, migrations as gadgetMigrations } from "./gadgets";
 import { layer as pagesLayer } from "./pages";
 import { layer as projectsLayer, migrations as projectMigrations } from "./projects";
 import * as workspaceState from "./workspace-state";
@@ -512,7 +512,16 @@ const run = <A>(body: (rpc: Client) => Effect.Effect<A, unknown, Scope.Scope>, f
           // and it goes on the same connection for the reason the daemon uses
           // one file: a listing read from disk and a thread that claims the
           // workspace it names are two halves of one answer.
-          Layer.mergeAll(threadsLayer, reviewsLayer, projectsLayer, reviewQueueLayer).pipe(
+          Layer.mergeAll(
+            threadsLayer,
+            reviewsLayer,
+            projectsLayer,
+            reviewQueueLayer,
+            // Gadgets are rows now too, and they go on this connection for the
+            // reason the daemon uses one file: a gadget is filed under the
+            // thread that claimed the workspace it was written in.
+            gadgetsLayer,
+          ).pipe(
             Layer.provide(
               Layer.orDie(
                 dbLayer(join(scratch, `stores-${(files += 1)}.sqlite`), [
@@ -520,6 +529,7 @@ const run = <A>(body: (rpc: Client) => Effect.Effect<A, unknown, Scope.Scope>, f
                   ...reviewMigrations,
                   ...projectMigrations,
                   ...reviewQueueMigrations,
+                  ...gadgetMigrations,
                 ]),
               ),
             ),
@@ -572,7 +582,6 @@ const run = <A>(body: (rpc: Client) => Effect.Effect<A, unknown, Scope.Scope>, f
         // The real one: it holds a PubSub and a rule about urls, has no
         // dependencies, and a fake would only restate the rule.
         Layer.provide(pagesLayer),
-        Layer.provide(gadgetsLayer),
         // Pointed at a file that is not there, which answers with an empty
         // table — the honest state for a machine that has only ever run
         // amoeba, and the one this suite is about. `workspace-state.test.ts`

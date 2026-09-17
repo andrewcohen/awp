@@ -1,6 +1,10 @@
-import { Effect, Result } from "effect";
-import { describe, expect, test } from "vitest";
-import { Gadgets, layer } from "./gadgets";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { layer as dbLayer } from "@awp-kit/store";
+import { Clock, Effect, Layer, Result } from "effect";
+import { afterAll, describe, expect, test } from "vitest";
+import { Gadgets, layer, migrations } from "./gadgets";
 
 // What a gadget service owes its two callers, and they want opposite things:
 // the agent wants to be told exactly what is wrong with the document it just
@@ -8,11 +12,52 @@ import { Gadgets, layer } from "./gadgets";
 // print. So every test here is about a refusal or about what survives a round
 // trip — there is nothing in between.
 
-const on = <A>(program: (gadgets: Gadgets["Service"]) => Effect.Effect<A, unknown>): Promise<A> =>
+const scratch = mkdtempSync(join(tmpdir(), "awp-gadget-"));
+afterAll(() => rmSync(scratch, { recursive: true, force: true }));
+
+let files = 0;
+
+/**
+ * The service, over a store of its own.
+ *
+ * `file` is taken rather than always generated because of the one property
+ * that cannot be written down inside a single instance: what survives a
+ * restart. Two services over one file is the only honest way to say it — the
+ * map of compiled documents goes with the process, and the row does not.
+ */
+const on = <A>(
+  program: (gadgets: Gadgets["Service"]) => Effect.Effect<A, unknown>,
+  file = `gadgets-${(files += 1)}.sqlite`,
+): Promise<A> =>
   Effect.gen(function* () {
     const gadgets = yield* Gadgets;
     return yield* program(gadgets);
-  }).pipe(Effect.provide(layer), Effect.scoped, Effect.orDie, Effect.runPromise);
+  }).pipe(
+    Effect.provide(
+      layer.pipe(Layer.provide(Layer.orDie(dbLayer(join(scratch, file), migrations)))),
+    ),
+    Effect.scoped,
+    Effect.orDie,
+    Effect.runPromise,
+  );
+
+/**
+ * Every clock read inside this answers with the same millisecond.
+ *
+ * The tie is the point of the test below, and a real clock only produces one
+ * by luck — less of it the more work sits between the two writes, and writing
+ * a row is more work than it used to be. A test whose premise is an accident
+ * is a test that fails on a slow machine and teaches everybody to re-run it.
+ */
+const atOneInstant = <A, E, R>(program: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
+  Clock.clockWith((real) => {
+    const at = real.currentTimeMillisUnsafe();
+    return Effect.provideService(program, Clock.Clock, {
+      ...real,
+      currentTimeMillisUnsafe: () => at,
+      currentTimeMillis: Effect.succeed(at),
+    });
+  });
 
 /** What a call refused with, or the word `accepted` when it did not refuse. */
 const refusalIn = <A>(effect: Effect.Effect<A, { readonly reason: string }>) =>
@@ -131,12 +176,15 @@ describe("reading one back", () => {
     ));
 
   test("a gadget nobody wrote refuses with what to do about it", async () => {
-    // Nothing is on disk, so the daemon's own restart is this case — and the
-    // window remembers the address across launches. The sentence is what the
-    // panel prints, so it has to name the repair.
+    // The sentence used to carry a restart, because a restart was the common
+    // way to reach it: the window remembers an address across launches and the
+    // daemon remembered nothing. The table is what took that cause away, and
+    // the sentence stopped naming it in the same change — a refusal that
+    // blames something that can no longer happen sends its reader to look in
+    // the wrong place.
     const reason = await on((gadgets) => refusalIn(gadgets.read("gadget://loose/nothing")));
     expect(reason).toContain("no gadget at");
-    expect(reason).toContain("restart");
+    expect(reason).toContain("nothing has been written under that name");
   });
 });
 
@@ -234,23 +282,85 @@ describe("a thread's strip", () => {
 describe("two in the same millisecond", () => {
   test("the second written is the first listed", () =>
     on((gadgets) =>
-      Effect.gen(function* () {
-        const first = yield* gadgets.show("20260917-ab3d", "first", "# First\n");
-        const second = yield* gadgets.show("20260917-ab3d", "second", "# Second\n");
-        const mine = yield* gadgets.list("20260917-ab3d");
-        expect(second.at).toBe(first.at);
-        expect(mine.map((one) => one.title)).toEqual(["Second", "First"]);
-      }),
+      atOneInstant(
+        Effect.gen(function* () {
+          const first = yield* gadgets.show("20260917-ab3d", "first", "# First\n");
+          const second = yield* gadgets.show("20260917-ab3d", "second", "# Second\n");
+          const mine = yield* gadgets.list("20260917-ab3d");
+          expect(second.at).toBe(first.at);
+          expect(mine.map((one) => one.title)).toEqual(["Second", "First"]);
+        }),
+      ),
     ));
 
   test("a rewrite moves to the front of its own tie", () =>
     on((gadgets) =>
-      Effect.gen(function* () {
-        yield* gadgets.show("20260917-ab3d", "first", "# First\n");
-        yield* gadgets.show("20260917-ab3d", "second", "# Second\n");
-        yield* gadgets.show("20260917-ab3d", "first", "# First, revised\n");
-        const mine = yield* gadgets.list("20260917-ab3d");
-        expect(mine.map((one) => one.title)).toEqual(["First, revised", "Second"]);
-      }),
+      atOneInstant(
+        Effect.gen(function* () {
+          yield* gadgets.show("20260917-ab3d", "first", "# First\n");
+          yield* gadgets.show("20260917-ab3d", "second", "# Second\n");
+          yield* gadgets.show("20260917-ab3d", "first", "# First, revised\n");
+          const mine = yield* gadgets.list("20260917-ab3d");
+          expect(mine.map((one) => one.title)).toEqual(["First, revised", "Second"]);
+        }),
+      ),
     ));
+});
+
+describe("across a restart", () => {
+  test("a gadget written by one daemon is read by the next", async () => {
+    const file = `restart-${(files += 1)}.sqlite`;
+    const made = await on(
+      (gadgets) => gadgets.show("20260917-ab3d", "cost-table", "# Costs\n\nOne line.\n"),
+      file,
+    );
+
+    // A second service over the same file and nothing else: the map that held
+    // the compiled document went with the process that made it. What is left
+    // is a row, and the row is enough.
+    const again = await on((gadgets) => gadgets.read(made.address), file);
+
+    expect(again.title).toBe("Costs");
+    expect(again.address).toBe(made.address);
+    expect(again.thread).toBe("20260917-ab3d");
+    // Its own writing, not the first one's: `at` is what tells one showing of
+    // a gadget from the next, and a restart is not a new showing.
+    expect(again.at).toBe(made.at);
+    // Compiled a second time out of the source, rather than restored from a
+    // stored artifact. The contract with `gadget-run.ts` is therefore the one
+    // this build holds, not the one the build that wrote it held.
+    expect(again.code).toContain("arguments[0]");
+  });
+
+  test("the strip is there before any document is read", async () => {
+    const file = `restart-${(files += 1)}.sqlite`;
+    await on((gadgets) => gadgets.show("20260917-ab3d", "first", "# First\n"), file);
+    await on((gadgets) => gadgets.show("20260917-ab3d", "second", "# Second\n"), file);
+
+    // `list` compiles nothing, which is the whole reason the table holds
+    // source and not output: a thread with forty gadgets opens its strip
+    // without building any of them.
+    const heads = await on((gadgets) => gadgets.list("20260917-ab3d"), file);
+
+    expect(heads.map((one) => one.title)).toEqual(["Second", "First"]);
+  });
+
+  test("a gadget with no thread is found again, where `= null` would lose it", async () => {
+    const file = `restart-${(files += 1)}.sqlite`;
+    await on((gadgets) => gadgets.show(undefined, "loose", "# Loose\n"), file);
+
+    const heads = await on((gadgets) => gadgets.list(undefined), file);
+
+    expect(heads.map((one) => one.title)).toEqual(["Loose"]);
+    expect(heads[0]?.thread).toBeUndefined();
+  });
+
+  test("an address nobody wrote is still refused, and the sentence no longer blames a restart", async () => {
+    const said = await on((gadgets) =>
+      refusalIn(gadgets.read("gadget://20260917-ab3d/never-written")),
+    );
+
+    expect(said).toContain("nothing has been written under that name");
+    expect(said).not.toContain("restart");
+  });
 });

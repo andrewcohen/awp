@@ -523,15 +523,16 @@ option the author has never heard of. `noImports` refuses it at the top, reading
 the **estree** and not the source text — `import` also begins `important`, and a
 fenced block full of imports is prose about imports.
 
-**Nothing is written to disk.** A daemon restart forgets every gadget, and
-`GadgetRead` says so in a sentence the panel prints rather than answering with
-nothing — reachable because a strip is drawn from `GadgetList`, which a restarted
-daemon answers empty.
+**The source is stored and the compile is not.** A restart used to lose every
+gadget, which here is several times an hour. `list` answers from the table and
+compiles nothing, so a thread with forty opens its strip without building one;
+`read` compiles on a miss. Storing the output instead puts a compiler's artifact
+in a table outliving the compiler — a source cannot go stale that way.
 
-**`at` has millisecond resolution and an agent writes gadgets in a loop**, so two
-sharing one is the ordinary case. `list` reverses before a stable sort, and a
-rewrite is deleted from the map before it is set, so "newest first" is insertion
-order where the clock cannot separate them.
+**`at` has millisecond resolution and an agent writes gadgets in a loop**, so a
+tie is the ordinary case rather than the exotic one. `rowid desc` behind
+`at desc` settles it, and a rewrite deletes before it inserts, so the one written
+second sorts first.
 
 `probe:gadget` writes two the way an agent does — one that draws and one that
 throws — and defaults to **5284** rather than the instance in use: unlike

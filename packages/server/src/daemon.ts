@@ -36,7 +36,7 @@ import * as handlers from "./handlers";
 import * as ptyBun from "./pty-bun";
 import * as sessions from "./sessions";
 import * as settings from "./settings";
-import { layer as gadgetsLayer } from "./gadgets";
+import { layer as gadgetsLayer, migrations as gadgetMigrations } from "./gadgets";
 import { layer as pagesLayer } from "./pages";
 import { Projects, layer as projectsLayer, migrations as projectMigrations } from "./projects";
 import * as workspaceState from "./workspace-state";
@@ -141,6 +141,7 @@ export const db = Layer.orDie(
     ...taskMigrations,
     ...faceMigrations,
     ...messageMigrations,
+    ...gadgetMigrations,
   ]),
 );
 
