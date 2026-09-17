@@ -11,14 +11,13 @@ import { colors, space, text } from "../design/tokens.stylex";
 
 // A document an agent wrote, in the column a person reads.
 //
-// ── it is in the web panel, and it is not a web page ──────────────────────
+// One of these at a time, under the strip in `Gadgets.tsx`. This half is only
+// the document: read it at an address, build it, draw it.
 //
-// The panel beside the diff holds one address per thread, and a gadget has an
-// address like anything else there — so an agent showing one arrives by the
-// same feed as an agent opening a build log, and the panel is already
-// subscribed to it. What differs is everything after: a `gadget://` address is
-// never handed to the native webview. It names a document the daemon compiled,
-// which this renders in this process, in this React tree.
+// ── it has an address and it is not a web page ────────────────────────────
+//
+// A `gadget://` address is never handed to a webview. It names a document the
+// daemon compiled, which this renders in this process, in this React tree.
 //
 // That is what makes the scope real. An inline component in the document is
 // called by React here, so it can hold state, and it can be handed the
@@ -71,10 +70,10 @@ const handed: Readonly<Record<string, unknown>> = { React, colors, text, space }
  *
  * An agent revising a gadget keeps the name, so the address does not change —
  * and nothing keyed on the address would re-read the document, or clear an
- * error boundary that has already caught. `Web.tsx` keys this component on the
- * address *and* the showing's `at`, which exists for exactly that: two
- * value-equal requests are two requests. So a revision is a remount, and
- * everything here starts from the beginning without a line of code to reset.
+ * error boundary that has already caught. `Gadgets.tsx` keys this component on
+ * the address *and* the head's `at`, which moves on every writing. So a
+ * revision is a remount, and everything here starts from the beginning without
+ * a line of code to reset.
  */
 export function Gadget({ address }: { readonly address: string }) {
   const [state, setState] = useState<

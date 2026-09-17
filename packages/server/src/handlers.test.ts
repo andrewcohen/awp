@@ -727,18 +727,23 @@ describe("the thread a checkout belongs to", () => {
           thread: made.id,
           member: { project: "rowan", workspace: "tabular-exports" },
         });
-        const page = yield* rpc.GadgetShow({
+        const head = yield* rpc.GadgetShow({
           from: dirOf("rowan", "tabular-exports"),
           name: "cost-table",
           source: "# Costs\n\nOne line.\n",
         });
-        const found = yield* rpc.GadgetRead({ address: page.url });
-        return { made: made.id, page, found };
+        const found = yield* rpc.GadgetRead({ address: head.address });
+        const listed = yield* rpc.GadgetList({ thread: made.id });
+        return { made: made.id, page: head, found, listed };
       }),
     );
 
     expect(got.page.thread).toBe(got.made);
-    expect(got.page.url).toBe(`gadget://${got.made}/cost-table`);
+    expect(got.page.address).toBe(`gadget://${got.made}/cost-table`);
+    // The title is the document's first heading, and nobody passed it.
+    expect(got.page.title).toBe("Costs");
+    // And it is in the thread's strip, which is what the panel draws from.
+    expect(got.listed.map((one) => one.address)).toEqual([got.page.address]);
     // What the window is handed is JavaScript, not the MDX that was written.
     expect(got.found.code).toContain("function MDXContent");
   });

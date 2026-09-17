@@ -2258,3 +2258,57 @@ and `Chat.tsx` prints it in `colors.warn` beside the turn-ended line.
 `bun run probe:claim` is the cross-process check: a second process against one
 store, printing what it was told. Unit tests drive one connection, which proves
 the logic and not the property.
+
+### The page feed was the wrong home, and the arithmetic says so
+
+Gadgets shipped on the page feed: `pageAddress` took a third scheme, `GadgetShow`
+answered with a `Page`, and the web panel drew the document over its stage rather
+than navigating to it. Every part of that worked. It was still wrong, and the
+argument is one line of arithmetic rather than a failure: **a page feed holds one
+address per thread, and a thread accumulates gadgets.**
+
+```
+  a navigation   replaces what was there    nothing is lost — the url is
+                                            still true tomorrow
+  a gadget       replaces what was there    the earlier document is GONE, and
+                                            it was the daemon's only copy
+```
+
+The first afternoon of real use is a latency table, then a comparison, then a
+thing that explains the first two — and the question a person asks is usually
+about the first. So the feed became `GadgetChanges`, which says _one more
+exists_, the panel keeps a strip of `GadgetHead`s, and `pageAddress` went back to
+two schemes. The guard is the part worth being glad about: the third scheme was
+sound and the reason it was accepted is now gone, so it is refused again.
+
+### The title, and why it is not an argument
+
+The strip needs a word per tab. Three candidates:
+
+```
+  the name          `run-3-latency`   already in the address, always present,
+                                      and written for a url rather than for a
+                                      person to read
+  a third argument  title: "…"        the agent can make it say anything,
+                                      including something the document does
+                                      not say
+  the first heading `# What a run     the author already wrote it, and it
+                    costs`            cannot disagree with the document
+```
+
+The second is the one that fails silently: a tab reading one thing over a
+document reading another is wrong in a way nothing can detect and nobody reports,
+because each half looks fine alone. The heading is taken from the mdast in the
+walk that is already happening — a second parse would be a second idea of what a
+heading is, and the two would agree until a document put one inside a fence.
+Falls back to the name, which is never empty, so `GadgetHead.title` is not
+optional and no reader carries a fallback.
+
+### Two gadgets in one millisecond is the ordinary case
+
+`at` is `Clock.currentTimeMillis`. An agent writing a set of gadgets writes them
+in a loop, and under Effect's test clock they all share one reading — so the tie
+is not exotic, it is what the tests do by default. `list` reverses before a
+stable sort, so insertion order breaks it, and `show` deletes an address from the
+map before setting it, so a rewrite takes the newest position rather than keeping
+the one its first writing had.

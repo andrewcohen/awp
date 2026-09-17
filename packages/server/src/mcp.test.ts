@@ -92,7 +92,7 @@ const daemonOf = (
       },
       gadget: (from, name, source) => {
         asked.push({ gadget: from, name, source });
-        return Effect.succeed({ thread: "th-1", url: `gadget://th-1/${name}` });
+        return Effect.succeed({ thread: "th-1", title: "Costs", url: `gadget://th-1/${name}` });
       },
       addTask: (task) => {
         asked.push({ addTask: task });
@@ -366,9 +366,10 @@ describe("awp_gadget", () => {
       source: "# Costs\n",
     });
     expect(failed).toBe(false);
-    expect(text).toContain("web panel for this thread");
-    // The address and not just the name: `awp_browse` takes it, which is how
-    // anybody gets back to a gadget after the column has moved on.
+    expect(text).toContain("gadgets panel for this thread");
+    // The title, because it is the one part of a gadget the author did not
+    // choose on purpose — it is read out of the document's first heading.
+    expect(text).toContain('"Costs"');
     expect(text).toContain("gadget://th-1/cost-table");
     expect(asked).toEqual([{ gadget: HERE, name: "cost-table", source: "# Costs\n" }]);
   });

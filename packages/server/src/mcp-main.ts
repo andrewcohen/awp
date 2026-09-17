@@ -77,9 +77,10 @@ const over = (rpc: client.AwpClientShape): Daemon => ({
     ),
   gadget: (from, name, source) =>
     rpc.GadgetShow({ from, name, source }).pipe(
-      // The page and not the gadget, for the same reason `browse` maps to one:
-      // what the tool has to say is which column moved, and that is a thread.
-      Effect.map((opened) => ({ thread: opened.thread, url: opened.url })),
+      // Three fields of the head and not the head, for the reason `browse` is
+      // narrowed the same way: what the tool has to say is whose panel gained
+      // a tab, what the tab says, and how to name this gadget again later.
+      Effect.map((head) => ({ thread: head.thread, title: head.title, url: head.address })),
       Effect.mapError(refusal),
     ),
   board: (filter) => rpc.TaskBoard(filter).pipe(Effect.mapError(refusal)),

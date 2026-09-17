@@ -2826,3 +2826,35 @@ hears about the failure is a person copying the report back to it.
   down loses the page's history, scroll and any login behind it. The stage's
   `display: none` sends its rectangle to zero, which is the same path a folded
   column already takes to hide the view.
+
+### A panel, after the web one
+
+The gadget lived inside the web panel while it was one address per thread — the
+stage hidden with `display: none` rather than unmounted, so the page behind it
+kept its history and scroll. That whole mechanism is gone with the design it
+served: gadgets are a panel of their own, between `web` and `jobs`, and the web
+panel is a browser again.
+
+Three things fell out of the move, each a rule somewhere:
+
+- **The subscription belongs to `Accessory`, not to the panel.** Base UI unmounts
+  a hidden tab, and the moment an agent has something to show is the moment
+  somebody is reading the diff. It is also what lets the tab exist only when the
+  thread has a gadget — the `pr` tab's argument, which applies here twice over,
+  since a thread with no gadgets is the ordinary case.
+- **Which tab is open is derived.** The rule wanted is "the newest, unless you
+  picked another since the newest arrived", and the obvious implementation is a
+  stored selection plus an effect that corrects it — which renders the wrong
+  document for a frame every time a sidebar row is clicked. Recording the newest
+  `at` at the moment of the pick makes it a derivation: a gadget written after
+  moves that number, the pick stops matching, and the strip is on the new one.
+- **The thread is inside the state, not cleared by an effect.** `setHeads([])` in
+  an effect body is a second render, and between the two the previous thread's
+  gadgets are drawn under the new thread's name. Held as one value, they cannot
+  disagree.
+
+**Writing a gadget does not switch the column to it.** The page feed did, and
+that was right for a navigation: it replaces what was there, so moving to it
+costs nothing. A gadget is added beside its predecessors and will still be there
+in an hour; taking the column from somebody mid-diff is the worse trade. What is
+visible is the tab appearing, and the agent's own reply says what it says.

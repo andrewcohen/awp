@@ -139,3 +139,118 @@ describe("reading one back", () => {
     expect(reason).toContain("restart");
   });
 });
+
+// ── the title, and the strip it is drawn in ────────────────────────────────
+//
+// Both exist because a thread accumulates gadgets. The first version pointed
+// the web panel at one address per thread, so the second gadget an agent wrote
+// took the first one's place — and the one somebody asks about is rarely the
+// most recent. So: a list, ordered, and a name for each tab that the author
+// did not have to be asked for.
+
+describe("what the tab says", () => {
+  test("the title is the document's first heading", () =>
+    on((gadgets) =>
+      Effect.gen(function* () {
+        const made = yield* gadgets.show("20260917-ab3d", "costs", "# What a run costs\n\nHi.\n");
+        expect(made.title).toBe("What a run costs");
+      }),
+    ));
+
+  test("a heading further down is still the first one", () =>
+    on((gadgets) =>
+      Effect.gen(function* () {
+        // A document that opens with a sentence and gets to its heading after.
+        // Taking `children[0]` rather than the first heading would leave this
+        // titled after the file.
+        const made = yield* gadgets.show("20260917-ab3d", "costs", "Before.\n\n## Latency\n");
+        expect(made.title).toBe("Latency");
+      }),
+    ));
+
+  test("the words in a heading, not its markup", () =>
+    on((gadgets) =>
+      Effect.gen(function* () {
+        const made = yield* gadgets.show("20260917-ab3d", "costs", "# `zmx` and **the pty**\n");
+        expect(made.title).toBe("zmx and the pty");
+      }),
+    ));
+
+  test("a document with no heading is titled after itself", () =>
+    on((gadgets) =>
+      Effect.gen(function* () {
+        // The name is never empty and is already a phrase. A tab reading
+        // "untitled" is a word nobody wrote about a document somebody did.
+        const made = yield* gadgets.show("20260917-ab3d", "run-3-latency", "Just a line.\n");
+        expect(made.title).toBe("run-3-latency");
+      }),
+    ));
+
+  test("a heading inside a fence is prose about a heading", () =>
+    on((gadgets) =>
+      Effect.gen(function* () {
+        const made = yield* gadgets.show("20260917-ab3d", "costs", "```\n# not a heading\n```\n");
+        expect(made.title).toBe("costs");
+      }),
+    ));
+});
+
+describe("a thread's strip", () => {
+  test("newest first, and each thread sees only its own", () =>
+    on((gadgets) =>
+      Effect.gen(function* () {
+        yield* gadgets.show("20260917-ab3d", "first", "# First\n");
+        yield* gadgets.show("20260917-ab3d", "second", "# Second\n");
+        yield* gadgets.show("20260917-cc11", "elsewhere", "# Elsewhere\n");
+        yield* gadgets.show(undefined, "loose", "# Loose\n");
+
+        const mine = yield* gadgets.list("20260917-ab3d");
+        // Written second, listed first: the strip is read left to right and
+        // the newest is the one somebody was just told about.
+        expect(mine.map((one) => one.title)).toEqual(["Second", "First"]);
+        // The head and not the gadget — a strip of documents is the panel
+        // fetching every one of them to draw a row of tabs.
+        expect(mine.every((one) => !("code" in one))).toBe(true);
+
+        const nobodys = yield* gadgets.list(undefined);
+        expect(nobodys.map((one) => one.name)).toEqual(["loose"]);
+      }),
+    ));
+
+  test("a name written twice is one tab, not two", () =>
+    on((gadgets) =>
+      Effect.gen(function* () {
+        yield* gadgets.show("20260917-ab3d", "costs", "# Costs\n");
+        yield* gadgets.show("20260917-ab3d", "costs", "# Costs, again\n");
+        const mine = yield* gadgets.list("20260917-ab3d");
+        expect(mine.map((one) => one.title)).toEqual(["Costs, again"]);
+      }),
+    ));
+});
+
+// Effect's test clock does not advance on its own, so every gadget written by
+// the block above shares one `at` — which makes this the ordinary case here
+// and, for an agent writing a pair of them in a loop, out there too.
+describe("two in the same millisecond", () => {
+  test("the second written is the first listed", () =>
+    on((gadgets) =>
+      Effect.gen(function* () {
+        const first = yield* gadgets.show("20260917-ab3d", "first", "# First\n");
+        const second = yield* gadgets.show("20260917-ab3d", "second", "# Second\n");
+        const mine = yield* gadgets.list("20260917-ab3d");
+        expect(second.at).toBe(first.at);
+        expect(mine.map((one) => one.title)).toEqual(["Second", "First"]);
+      }),
+    ));
+
+  test("a rewrite moves to the front of its own tie", () =>
+    on((gadgets) =>
+      Effect.gen(function* () {
+        yield* gadgets.show("20260917-ab3d", "first", "# First\n");
+        yield* gadgets.show("20260917-ab3d", "second", "# Second\n");
+        yield* gadgets.show("20260917-ab3d", "first", "# First, revised\n");
+        const mine = yield* gadgets.list("20260917-ab3d");
+        expect(mine.map((one) => one.title)).toEqual(["First, revised", "Second"]);
+      }),
+    ));
+});

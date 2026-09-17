@@ -199,7 +199,10 @@ export interface Daemon {
     from: string,
     name: string,
     source: string,
-  ) => Effect.Effect<{ readonly thread: string | undefined; readonly url: string }, Refusal>;
+  ) => Effect.Effect<
+    { readonly thread: string | undefined; readonly title: string; readonly url: string },
+    Refusal
+  >;
   readonly board: (filter: {
     readonly tags?: ReadonlyArray<string>;
     readonly statuses?: ReadonlyArray<string>;
@@ -323,7 +326,7 @@ export const TOOLS = [
   {
     name: "awp_gadget",
     description:
-      "Write a small page and put it in the panel beside the diff, for a person to read. " +
+      "Write a small page into the gadgets panel beside the diff, for a person to read. " +
       "Use it when the answer is a table, a chart, a comparison or a short report — " +
       "something worth looking at rather than scrolling back through a conversation for. " +
       "The document is MDX: markdown, plus JSX where something has to move. " +
@@ -334,10 +337,12 @@ export const TOOLS = [
       ", where the last three are the window's own design tokens, as CSS variables: " +
       "style={{ color: colors.accent, fontSize: text.small }} looks native, a hard-coded " +
       "colour does not. " +
-      "Writing a name twice replaces what it held and shows it again. The panel belongs to " +
-      "this piece of work, so it is shared by every checkout of it — and a document that " +
-      "does not compile is refused here, with the compiler's own sentence, rather than " +
-      "drawing nothing.",
+      "Open the document with a heading: it is what the gadget's tab says, so a document " +
+      "without one is a tab named after the file. Writing a name twice replaces what it " +
+      "held; a new name is one more tab, and earlier gadgets stay where they are. The " +
+      "panel belongs to this piece of work, so it is shared by every checkout of it — and " +
+      "a document that does not compile is refused here, with the compiler's own sentence, " +
+      "rather than drawing nothing.",
     inputSchema: {
       type: "object",
       properties: {
@@ -937,14 +942,19 @@ export const answer = (
             if (!Result.isSuccess(shown)) {
               return reply(said(shown.failure.reason, true));
             }
-            // The address is in the sentence and is not decoration: it is what
-            // `awp_browse` takes to put this gadget back in front of somebody
-            // later, after the column has moved on to something else.
+            // The title is echoed because it is the one part of a gadget the
+            // author did not choose on purpose — it is read out of the first
+            // heading, and a tab saying something unintended is otherwise only
+            // discoverable by a person mentioning it.
             const where =
               shown.success.thread === undefined
-                ? "this workspace's web panel"
-                : "the web panel for this thread";
-            return reply(said(`${where} is now showing ${shown.success.url}`));
+                ? "this workspace's gadgets panel"
+                : "the gadgets panel for this thread";
+            return reply(
+              said(
+                `${where} now has a tab reading "${shown.success.title}" — ${shown.success.url}`,
+              ),
+            );
           }
 
           case "awp_browse": {

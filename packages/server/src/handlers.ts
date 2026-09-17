@@ -2380,17 +2380,14 @@ export const layer = AwpRpcs.toLayer(
       PageChanges: () => pages.changes(),
 
       /**
-       * Write a gadget and point this thread's column at it.
+       * Write a gadget into a thread's strip.
        *
-       * The thread is resolved exactly as `PageOpen` resolves it, and then
-       * used twice: it is what the gadget is filed under and what the page is
-       * published for. Two resolutions of one directory could disagree — a
-       * gadget filed under a thread and shown to nobody is the failure — so
-       * there is one, here, and `Gadgets` never sees a directory.
+       * The thread is resolved exactly as `PageOpen` resolves it — the caller
+       * has a directory and only this layer holds the tables that turn one
+       * into a thread, which is why `Gadgets` never sees a directory.
        *
-       * The page is opened last. A document that does not compile refuses
-       * before anything has moved, which is the order that leaves the column
-       * showing whatever it was showing.
+       * The head and not the gadget: `code` is the large half and the caller
+       * is the process that wrote the source it was compiled from.
        */
       GadgetShow: ({ from, name, source }) =>
         Effect.gen(function* () {
@@ -2403,9 +2400,13 @@ export const layer = AwpRpcs.toLayer(
                 (member) => member.project === at.project && member.workspace === at.workspace,
               ),
           );
-          const gadget = yield* gadgets.show(holding?.id, name, source);
-          return yield* pages.open(holding?.id, gadget.address);
+          const { code: _code, ...head } = yield* gadgets.show(holding?.id, name, source);
+          return head;
         }),
+
+      GadgetList: ({ thread }) => gadgets.list(thread),
+
+      GadgetChanges: () => gadgets.changes(),
 
       GadgetRead: ({ address }) => gadgets.read(address),
 

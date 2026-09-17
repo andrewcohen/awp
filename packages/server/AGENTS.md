@@ -499,11 +499,16 @@ moves the panel of the thread this repository is in.
 ### Gadgets
 
 A gadget is the other thing that column can hold: MDX the agent writes, compiled
-here, pointed at by the same page feed. `gadget://<thread>/<name>` — the address
-is on `Pages` and `pageAddress` accepts it as a **third scheme that is not a
-third way to browse**, because nothing ever hands it to a webview. `app://` was
-the other candidate and is refused for the reason the guard exists: it is this
-application's own origin.
+here, listed per thread at `gadget://<thread>/<name>`. It rode the page feed
+first and that was the design error — **one address per thread against a set
+that grows**, so the second gadget written erased the first. `GadgetChanges`
+therefore says _one more exists_, and `pageAddress` is back to two schemes.
+
+**The title is read out of the document's first heading**, in the walk that is
+already happening, and is never asked for. A title passed as an argument is one
+that can disagree with the document under it with nothing able to notice; this
+one cannot, because it is the heading. No heading falls back to the name, which
+is never empty.
 
 **The compile is at the moment of writing, and that is the whole reason it is
 here** — a document that does not compile is a refusal returned to the agent
@@ -520,11 +525,17 @@ fenced block full of imports is prose about imports.
 
 **Nothing is written to disk.** A daemon restart forgets every gadget, and
 `GadgetRead` says so in a sentence the panel prints rather than answering with
-nothing. The window remembers the address across launches, so that sentence is
-the common case and not the rare one.
+nothing — reachable because a strip is drawn from `GadgetList`, which a restarted
+daemon answers empty.
 
-`probe:gadget` writes one to a daemon the way an agent does, and defaults to
-**5284** rather than the instance in use: unlike `probe:ask` it moves a panel.
+**`at` has millisecond resolution and an agent writes gadgets in a loop**, so two
+sharing one is the ordinary case. `list` reverses before a stable sort, and a
+rewrite is deleted from the map before it is set, so "newest first" is insertion
+order where the clock cannot separate them.
+
+`probe:gadget` writes two the way an agent does — one that draws and one that
+throws — and defaults to **5284** rather than the instance in use: unlike
+`probe:ask` it writes.
 
 ### One writer per conversation, and the guarantee is not in memory
 

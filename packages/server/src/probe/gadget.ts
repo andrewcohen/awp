@@ -14,10 +14,13 @@
 // rendered by React into a column — three processes and a string of
 // JavaScript between them.
 //
-// Two documents, and the second is the point of the first:
+// Three documents, which is also the point: they arrive as three tabs in one
+// thread's strip, so writing the second no longer erases the first.
 //
 //   probe-latency   prose, a table, and a component with state in it. If the
 //                   button counts, the scope is real.
+//   probe-gates     two controls over one set of rows, and bars drawn from
+//                   the data. What a gadget is actually for.
 //   probe-broken    throws on render. The column must name it and stay a
 //                   column — an empty panel is the failure this catches.
 
@@ -66,6 +69,102 @@ export function Counter() {
 }
 `;
 
+// A document with something to say, rather than a document proving a mechanism
+// works. The numbers are real: one run of each gate on this machine on
+// 2026-09-17, warm, in milliseconds of wall clock. Two controls over one set of
+// rows is the shape most gadgets will have — a table a person can interrogate
+// beats a table they have to read in the order it was written.
+const gates = `# What each gate costs
+
+One run of each, warm, in milliseconds of wall clock. The last column is what
+that gate catches that no other one does — which is the column that decides
+whether a slow gate is worth its time.
+
+<Gates />
+
+The order above is not the order to run them in. Cheap gates first is a rule
+about the *first* failure a person sees, not about the total.
+
+export function Gates() {
+  const rows = [
+    { gate: "fmt", ms: 857, only: "nothing — it rewrites rather than reports" },
+    { gate: "lint", ms: 366, only: "a cycle, a node builtin in the renderer" },
+    { gate: "typecheck", ms: 2564, only: "every contract between the packages" },
+    { gate: "test", ms: 5608, only: "behaviour, and the rules-file budget" },
+    { gate: "doctor", ms: 5775, only: "accessibility, keys, placeholder labels" },
+  ]
+  const [by, setBy] = React.useState("cost")
+  const [share, setShare] = React.useState(false)
+
+  const total = rows.reduce((sum, row) => sum + row.ms, 0)
+  const most = Math.max(...rows.map((row) => row.ms))
+  const sorted = [...rows].sort((a, b) =>
+    by === "cost" ? b.ms - a.ms : a.gate.localeCompare(b.gate),
+  )
+
+  const control = (on) => ({
+    color: on ? colors.accent : colors.muted,
+    backgroundColor: on ? colors.raised : "transparent",
+    fontSize: text.small,
+    border: "none",
+    borderRadius: "0.25rem",
+    padding: "0.15rem 0.5rem",
+    cursor: "pointer",
+  })
+
+  return (
+    <div style={{ fontSize: text.small }}>
+      <div style={{ display: "flex", gap: "0.25rem", marginBottom: "0.6rem" }}>
+        <button type="button" style={control(by === "cost")} onClick={() => setBy("cost")}>
+          by cost
+        </button>
+        <button type="button" style={control(by === "name")} onClick={() => setBy("name")}>
+          by name
+        </button>
+        <span style={{ flex: 1 }} />
+        <button type="button" style={control(share)} onClick={() => setShare(!share)}>
+          {share ? "share of the run" : "milliseconds"}
+        </button>
+      </div>
+
+      {sorted.map((row) => (
+        <div key={row.gate} style={{ marginBottom: "0.5rem" }}>
+          <div style={{ display: "flex", justifyContent: "space-between" }}>
+            <span style={{ color: colors.text }}>{row.gate}</span>
+            <span style={{ color: colors.muted }}>
+              {share ? Math.round((row.ms / total) * 100) + "%" : row.ms + "ms"}
+            </span>
+          </div>
+          <div
+            style={{
+              height: "0.3rem",
+              marginTop: "0.2rem",
+              borderRadius: "0.15rem",
+              backgroundColor: colors.raised,
+            }}
+          >
+            <div
+              style={{
+                width: Math.round((row.ms / most) * 100) + "%",
+                height: "100%",
+                borderRadius: "0.15rem",
+                backgroundColor: colors.accent,
+              }}
+            />
+          </div>
+          <div style={{ color: colors.muted, marginTop: "0.15rem" }}>{row.only}</div>
+        </div>
+      ))}
+
+      <div style={{ color: colors.muted, marginTop: "0.6rem" }}>
+        {total}ms in total, and {Math.round(((total - most) / total) * 100)}% of it before the
+        slowest one has finished.
+      </div>
+    </div>
+  )
+}
+`;
+
 const broken = `# This one throws
 
 The component below fails on its first render. What should be on screen is the
@@ -83,18 +182,22 @@ const program = Effect.gen(function* () {
   console.log(`${url}  from ${from}`);
   for (const [name, source] of [
     ["probe-latency", latency],
+    ["probe-gates", gates],
     ["probe-broken", broken],
   ] as const) {
-    const page = yield* rpc.GadgetShow({ from, name, source });
+    const head = yield* rpc.GadgetShow({ from, name, source });
     console.log(
-      `  ${name.padEnd(14)}${page.url}  thread ${page.thread ?? "(none — the loose bucket)"}`,
+      `  ${name.padEnd(14)}${head.address}  thread ${head.thread ?? "(none — the loose bucket)"}`,
     );
-    const found = yield* rpc.GadgetRead({ address: page.url });
+    // The title nobody passed. Printed because it is what the tab will say,
+    // and the only way to be wrong about it is to not look.
+    console.log(`  ${"".padEnd(14)}tab reads "${head.title}"`);
+    const found = yield* rpc.GadgetRead({ address: head.address });
     // The size, because it is the one number that says a compile happened: the
     // MDX above is prose and what came back is a function body.
     console.log(`  ${"".padEnd(14)}${found.code.length} bytes of javascript`);
   }
-  console.log("\n  open the web panel of that thread, or paste the address into its bar");
+  console.log("\n  open the gadgets panel of that thread — all three are tabs in it");
 });
 
 await Effect.runPromise(Effect.scoped(program).pipe(Effect.provide(client.layerClient(url))));

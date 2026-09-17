@@ -1,5 +1,5 @@
 import type { Page } from "@awp-kit/protocol";
-import { PageRefused, gadgetScheme, readGadgetAddress } from "@awp-kit/protocol";
+import { PageRefused } from "@awp-kit/protocol";
 import { Clock, Context, Effect, Layer, PubSub, Stream } from "effect";
 
 // Where the web panel is pointed, as something more than one thing can move.
@@ -68,12 +68,12 @@ export class Pages extends Context.Service<
  * the local disk is a larger decision than a navigation call should be able to
  * make.
  *
- * A third scheme is accepted and is not a third way to browse. A `gadget://`
- * address names a document the *renderer* draws — see `gadgets.ts` — and is
- * handed to no webview at all, so what a navigation can point a browser view
- * with a preload in it at is unchanged. It is here rather than in a call of
- * its own because the column has one claim about what it is showing, and a
- * gadget and a page compete for it: two feeds would be two panels arguing.
+ * Two, and no more. `gadget://` was briefly a third — accepted here and drawn
+ * by the renderer rather than navigated to — and it is now a panel of its own
+ * with a list behind it, because a thread accumulates gadgets and this feed
+ * holds one address: every gadget written destroyed the one before it. The
+ * guard is back to the shape it can be argued about in, which is the reason to
+ * mention a scheme it no longer takes.
  */
 export const pageAddress = (typed: string): Effect.Effect<string, PageRefused> => {
   const said = typed.trim();
@@ -89,19 +89,6 @@ export const pageAddress = (typed: string): Effect.Effect<string, PageRefused> =
         reason: `${said} is not a url — pass an absolute one, http:// or https://`,
       }),
     );
-  }
-  // Checked by its whole shape and not by its scheme. `gadget://` with a name
-  // nothing can be filed under is a typo, and a typo that reached the panel
-  // would be a column drawing a refusal rather than a call refusing.
-  if (parsed.protocol === gadgetScheme) {
-    if (readGadgetAddress(said) === undefined) {
-      return Effect.fail(
-        new PageRefused({
-          reason: `${said} is not a gadget address — they are gadget://<thread>/<name>, and awp_gadget answers with one`,
-        }),
-      );
-    }
-    return Effect.succeed(parsed.href);
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     return Effect.fail(

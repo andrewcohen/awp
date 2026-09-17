@@ -5,12 +5,14 @@ import { motion } from "motion/react";
 import { pill } from "../design/springs";
 import { type ReactNode, useState } from "react";
 import { Diff } from "./Diff";
+import { Gadgets, useGadgets } from "./Gadgets";
 import { Jobs } from "./Jobs";
 import { Pr } from "./Pr";
 import { Tasks } from "./Tasks";
 import { Web } from "./Web";
 import { debugTools } from "../debug";
 import type { ColorScheme } from "@awp-kit/pane";
+import type { GadgetHead } from "@awp-kit/protocol";
 import { rememberPanel, rememberedPanels } from "../routing/remembered";
 import { typeset } from "../design/typeset";
 import { colors, space } from "../design/tokens.stylex";
@@ -36,6 +38,9 @@ import { colors, space } from "../design/tokens.stylex";
 //   tasks  what the agent is about to do, and the one control that changes
 //          what happens next — reached for between pieces of work
 //   web    reached for while reading a diff — docs, an issue, a dashboard
+//   gadgets  what the agent wrote for a person to look at, beside the web
+//          panel because it is the same reach for the same reason: something
+//          to read that is not the code. Absent until the thread has one
 //   jobs   read when a job is running, which is a few seconds a day, and
 //          always with the count in the status bar already saying so
 //   debug  opened when something feels wrong, never on purpose
@@ -106,7 +111,17 @@ export interface PanelContext {
  * Only a `keepMounted` panel ever sees `false`; every other panel is unmounted
  * when it is not selected, which is the point of that default.
  */
-export type PanelView = PanelContext & { readonly shown: boolean };
+export type PanelView = PanelContext & {
+  readonly shown: boolean;
+  /**
+   * The open thread's gadgets, newest first.
+   *
+   * Subscribed for by this column rather than by the panel that draws them,
+   * because a hidden panel is unmounted and an agent writing a gadget while
+   * somebody reads a diff must still produce a tab. See `useGadgets`.
+   */
+  readonly gadgets: ReadonlyArray<GadgetHead>;
+};
 
 interface Panel {
   readonly id: string;
@@ -181,17 +196,41 @@ const panels: ReadonlyArray<Panel> = [
  * not already know, and `PR #2418` is the one thing on the strip pointing outside
  * the window.
  */
-const panelsFor = (context: PanelContext): ReadonlyArray<Panel> =>
-  context.pr === undefined
-    ? panels
+const panelsFor = (
+  context: PanelContext,
+  gadgets: ReadonlyArray<GadgetHead>,
+): ReadonlyArray<Panel> => {
+  // Between the web panel and the jobs list, and only while the thread has
+  // one — the `pr` argument, applied to the panel it applies to twice over.
+  // This is the column somebody switches most, and an empty room in it costs a
+  // keystroke every time; a thread with no gadgets is also the ordinary case,
+  // which a permanent tab would make the ordinary *disappointment*.
+  const withGadgets =
+    gadgets.length === 0
+      ? panels
+      : panels.flatMap((panel) =>
+          panel.id === "web"
+            ? [
+                panel,
+                {
+                  id: "gadgets",
+                  label: "gadgets",
+                  render: ({ gadgets: theirs }: PanelView) => <Gadgets gadgets={theirs} />,
+                },
+              ]
+            : [panel],
+        );
+  return context.pr === undefined
+    ? withGadgets
     : [
         {
           id: "pr",
           label: `PR #${String(context.pr.number)}`,
           render: ({ pr }) => <Pr project={pr?.project} number={pr?.number} />,
         },
-        ...panels,
+        ...withGadgets,
       ];
+};
 
 const styles = stylex.create({
   column: { display: "flex", flexDirection: "column", height: "100%", minHeight: 0 },
@@ -319,9 +358,14 @@ export function Accessory({ onFold, ...context }: PanelContext & { readonly onFo
   // thread's panel for a frame first, which is the panel flickering as a row
   // is clicked.
   const [byThread, setByThread] = useState<Record<string, string>>(rememberedPanels);
+  // Held here and not in the panel that draws them, because a hidden panel is
+  // unmounted: the strip has to know whether there is a gadgets tab to draw
+  // while somebody is looking at the diff.
+  const gadgets = useGadgets(thread);
   // The strip is no longer a constant: a workspace whose thread names a pull
-  // request has one more tab, and it is the first. See `panelsFor`.
-  const shown = panelsFor(context);
+  // request has one more tab and it is the first, and a thread that has been
+  // handed a gadget has one after the web panel. See `panelsFor`.
+  const shown = panelsFor(context, gadgets);
   const first = shown[0]?.id ?? "";
   // The empty string for a session no thread claims — one bucket they share,
   // which is the honest answer: there is no thread to tell them apart by.
@@ -418,7 +462,7 @@ export function Accessory({ onFold, ...context }: PanelContext & { readonly onFo
           keepMounted={panel.keepMounted ?? false}
           {...stylex.props(styles.panel, panel.id !== open && styles.tucked)}
         >
-          {panel.render({ ...context, shown: panel.id === open })}
+          {panel.render({ ...context, gadgets, shown: panel.id === open })}
         </Tabs.Panel>
       ))}
     </Tabs.Root>

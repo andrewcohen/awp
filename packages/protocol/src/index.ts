@@ -1172,21 +1172,27 @@ export class PageRefused extends Schema.TaggedError<PageRefused>()("PageRefused"
 // cheaply; MDX is markdown that can define a component in the minority of
 // places where something has to move.
 //
-// ── the address is a third scheme, and it is not navigable ────────────────
+// ── a panel of its own, and an address that is not navigable ──────────────
 //
-// `gadget://<thread>/<name>`. It rides the page feed — one claim per thread
-// about what the column is showing — so the panel that receives an agent's
-// navigation is the panel that receives its gadget, and none of that chain
-// changed.
+// Gadgets briefly rode the page feed, one claim per thread about what the
+// column was showing, and the flaw was in the arithmetic rather than in the
+// plumbing: a thread accumulates gadgets and a page feed holds one address, so
+// every gadget an agent wrote destroyed the last one. A person's reason for
+// looking at the third is usually the first.
 //
-// What it is not is a url the webview is sent to. `app://` was the other
-// candidate, since it is already a registered standard scheme with a real
-// origin; the reason against it is that `app://renderer/index.html` is this
-// application, and a navigation call able to name it points a browser view
-// with a preload in it at the window's own origin. A `gadget:` address names
-// a document *this renderer* draws and hands to no webview at all, so the
-// guard `pageAddress` keeps is unchanged in what it permits a navigation to
-// reach: two schemes to browse, and a third that is not browsing.
+// So they are a panel beside the web one, with a strip of their own — the
+// thread's gadgets by {@link GadgetHead.title}, newest first. Which makes the
+// feed a different shape too: {@link GadgetChanges} says *one more exists*,
+// where a page feed says *look here now*.
+//
+// `gadget://<thread>/<name>` is still the address, and is still never handed
+// to a webview. `app://` was the other candidate, since it is already a
+// registered standard scheme with a real origin; the reason against it is that
+// `app://renderer/index.html` is this application, and a call able to name it
+// points a browser view with a preload in it at the window's own origin. A
+// `gadget:` address names a document *this renderer* draws, and the navigation
+// guard in `pages.ts` never hears of it: two schemes to browse, and gadgets
+// are not browsing.
 
 /** The scheme, as `URL.protocol` spells it. */
 export const gadgetScheme = "gadget:";
@@ -1270,12 +1276,41 @@ export const readGadgetAddress = (
  */
 export const gadgetScope: ReadonlyArray<string> = ["React", "colors", "text", "space"];
 
-/** A gadget, compiled and ready to run. */
-export const Gadget = Schema.Struct({
-  /** {@link gadgetAddress} — what the page feed carries and the window asks by. */
+/**
+ * A gadget without its document: what a strip of them is drawn from.
+ *
+ * Separate from {@link Gadget} because a thread's gadgets are listed every
+ * time the panel opens and the document is the large half — the first real one
+ * compiled to 4.7KB, against a head of about a hundred bytes. Listing heads and
+ * reading the one being looked at is the same shape the review queue uses for
+ * the same reason.
+ */
+export const GadgetHead = Schema.Struct({
+  /** {@link gadgetAddress} — what the list carries and the window reads by. */
   address: Schema.String,
   thread: Schema.optional(Schema.String),
   name: Schema.String,
+  /**
+   * What the tab says, taken from the document's first heading.
+   *
+   * Derived and not asked for. A third argument to `awp_gadget` is a third
+   * thing to get wrong, and the failure is silent in the worst way: a tab
+   * saying one thing above a document saying another. The heading is what the
+   * author already wrote, in the author's own words, and it cannot disagree
+   * with the document because it *is* the document.
+   *
+   * A document with no heading falls back to {@link GadgetHead.name}, which is
+   * never empty — so nothing here is optional and no reader needs a fallback.
+   */
+  title: Schema.String,
+  at: Schema.Number,
+});
+
+export type GadgetHead = (typeof GadgetHead)["Type"];
+
+/** A gadget, compiled and ready to run. */
+export const Gadget = Schema.Struct({
+  ...GadgetHead.fields,
   /**
    * The document as JavaScript: MDX compiled to a function body.
    *
@@ -1289,7 +1324,6 @@ export const Gadget = Schema.Struct({
    * what reads it is a model, and it can fix its own output.
    */
   code: Schema.String,
-  at: Schema.Number,
 });
 
 export type Gadget = (typeof Gadget)["Type"];
@@ -3356,16 +3390,16 @@ export class AwpRpcs extends RpcGroup.make(
   }),
 
   /**
-   * Write a gadget and point this thread's column at it.
-   *
-   * One call and not two, because a gadget nobody is shown is a document in a
-   * drawer: the agent's reason for writing one is that somebody should look
-   * at it now. The reply is the {@link Page}, so the caller is told which
-   * thread's column moved — the same answer `PageOpen` gives, for the same
-   * reason: the panel belongs to the piece of work and not to this checkout.
+   * Write a gadget into this thread's strip.
    *
    * `source` is MDX. It is compiled here, and a document that does not compile
    * comes back as {@link GadgetRefused} carrying the compiler's own sentence.
+   *
+   * The reply is the {@link GadgetHead}, which tells the caller two things it
+   * cannot work out for itself: which thread the gadget was filed under — the
+   * panel belongs to the piece of work and not to this checkout — and what
+   * title was read out of the document, which is the one part of a gadget the
+   * author wrote without meaning to.
    */
   Rpc.make("GadgetShow", {
     payload: {
@@ -3375,19 +3409,51 @@ export class AwpRpcs extends RpcGroup.make(
       name: Schema.String,
       source: Schema.String,
     },
-    success: Page,
-    error: Schema.Union([NotAWorkspace, GadgetRefused, PageRefused]),
+    success: GadgetHead,
+    error: Schema.Union([NotAWorkspace, GadgetRefused]),
+  }),
+
+  /**
+   * A thread's gadgets, newest first, without their documents.
+   *
+   * By thread and not by directory, because the caller is the window and the
+   * window already knows which thread it is showing — the resolution from a
+   * directory exists for agents, which have nothing else to name work by.
+   * A thread nothing claims passes `undefined` and gets the loose bucket, the
+   * same answer `gadgetAddress` gives it.
+   */
+  Rpc.make("GadgetList", {
+    payload: { thread: Schema.optional(Schema.String) },
+    success: Schema.Array(GadgetHead),
+  }),
+
+  /**
+   * Every gadget written, as it is written.
+   *
+   * Not replayed, and it does not need to be: unlike a navigation this feed
+   * says only *one more exists*, and the list a panel opens with is
+   * {@link GadgetList}. A window that reconnects has missed nothing it cannot
+   * ask for.
+   *
+   * Carries every thread's, and the window keeps the ones that are its own —
+   * the same shape as {@link PageChanges}, for the same reason: a per-thread
+   * subscription is a subscription that has to be torn down and rebuilt every
+   * time somebody clicks a different row.
+   */
+  Rpc.make("GadgetChanges", {
+    success: GadgetHead,
+    stream: true,
   }),
 
   /**
    * The document at an address, for whoever has to draw it.
    *
-   * Asked rather than pushed: the window is told *where* the column is
-   * pointing by the page feed, and fetches the document when it has somewhere
-   * to put it. A gadget the daemon has forgotten — it holds them in memory, so
-   * a restart is exactly that — is a refusal with a sentence in it, which the
-   * panel prints. The alternative is an empty column that reads as a gadget
-   * that drew nothing.
+   * Asked rather than pushed, because {@link GadgetList} is what a strip is
+   * drawn from and only one of those documents is being looked at. A gadget
+   * the daemon has forgotten — it holds them in memory, so a restart is
+   * exactly that — is a refusal with a sentence in it, which the panel prints.
+   * The alternative is an empty column that reads as a gadget that drew
+   * nothing.
    */
   Rpc.make("GadgetRead", {
     payload: { address: Schema.String },

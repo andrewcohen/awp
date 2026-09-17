@@ -4,10 +4,8 @@ import { CaretRightIcon } from "@phosphor-icons/react/CaretRight";
 import { CrosshairSimpleIcon } from "@phosphor-icons/react/CrosshairSimple";
 import { WarningCircleIcon } from "@phosphor-icons/react/WarningCircle";
 import { XIcon } from "@phosphor-icons/react/X";
-import { readGadgetAddress } from "@awp-kit/protocol";
 import * as stylex from "@stylexjs/stylex";
 import { useEffect, useRef, useState } from "react";
-import { Gadget } from "./Gadget";
 import { type Picked, messageFrom, pickerSource, stopSource } from "./annotate";
 import { addressFor } from "../routing/browse";
 import { sendNote } from "../data/daemon";
@@ -197,13 +195,6 @@ const styles = stylex.create({
   // The rectangle the native webview is told to occupy. It has no children of
   // its own — what fills it is drawn by another process, over the top.
   stage: { flex: 1, minHeight: 0 },
-  // The stage while a gadget has the column. `display: none` rather than an
-  // unmount, because unmounting takes the native view down with it and the
-  // page behind it — its history, its scroll, a login — would have to be
-  // loaded again the moment the gadget is dismissed. Its own rectangle goes
-  // to nothing, which `flat` notices, which hides the view: the same path a
-  // folded column takes.
-  tucked: { display: "none" },
   said: {
     display: "flex",
     alignItems: "center",
@@ -295,29 +286,6 @@ export function Web({
   };
   const [can] = useState(available);
 
-  // ── the address may not be a page at all ─────────────────────────────────
-  //
-  // A `gadget://` address is a document an agent wrote, which this window
-  // renders itself — see `Gadget.tsx`. It arrives by the same feed and is
-  // remembered in the same place, because it is the same claim: one thing per
-  // thread that the column is showing. What it must never reach is the native
-  // webview, so this is read from `here` — what is *loaded* — and every path
-  // that would navigate is guarded by it.
-  //
-  // Read through the contract's parser rather than by testing the prefix, for
-  // the reason the daemon does: two implementations of one spelling is the one
-  // that drifts.
-  const gadget = here === undefined ? undefined : readGadgetAddress(here);
-
-  /**
-   * Which showing of the gadget is on screen.
-   *
-   * An agent revising a gadget keeps the name, so the address does not change
-   * and nothing keyed on it would re-read the document. `Page.at` is what
-   * tells two identical requests apart, and this is it, carried down.
-   */
-  const [stamp, setStamp] = useState(0);
-
   // Something modal is open, and this panel is drawn over the top of it.
   const covered = useOverlaysOpen();
 
@@ -357,10 +325,7 @@ export function Web({
   //   covered     a modal is open, and a native view is in front of every one
   //   flat        the box has no size — a folded column, which nothing else
   //               announces
-  //
-  //   gadget      the column is showing a document this window draws, and the
-  //               webview would be a page over the top of it
-  const away = !shown || covered || flat || gadget !== undefined;
+  const away = !shown || covered || flat;
 
   // ── the annotator ────────────────────────────────────────────────────────
   //
@@ -436,13 +401,6 @@ export function Web({
     acted = asked.at;
     setTyped(asked.url);
     setTrouble(undefined);
-    // A gadget is not navigated to. The address is recorded like any other —
-    // the watcher has already done that — and what moves is `stamp`, which is
-    // how a gadget rewritten under the name it already had reaches the screen.
-    if (readGadgetAddress(asked.url) !== undefined) {
-      setStamp(asked.at);
-      return;
-    }
     view.current?.loadURL(asked.url);
     // `setTyped` and `setTrouble` are this component's setters and are stable
     // in the ways that matter; keying on them would run this on every render.
@@ -613,13 +571,6 @@ export function Web({
     // Cleared on the way out rather than on the way in: a stale complaint
     // sitting over a page that is loading reads as the new address failing too.
     setTrouble(undefined);
-    if (readGadgetAddress(url) !== undefined) {
-      // A gadget address typed or pasted back into the bar, which is what the
-      // address in `awp_gadget`'s reply is for: the column moved on, and this
-      // is how somebody gets back to what the agent showed them.
-      setStamp(Date.now());
-      return;
-    }
     view.current?.loadURL(url);
   };
 
@@ -688,12 +639,8 @@ export function Web({
                 : "point at an element and tell the agent about it"
               : "this needs the app window"
           }
-          disabled={!can || gadget !== undefined}
-          {...stylex.props(
-            styles.button,
-            armed && styles.buttonOn,
-            (!can || gadget !== undefined) && styles.off,
-          )}
+          disabled={!can}
+          {...stylex.props(styles.button, armed && styles.buttonOn, !can && styles.off)}
           onClick={() => (armed ? disarm() : arm())}
         >
           <CrosshairSimpleIcon size={13} weight="bold" aria-hidden />
@@ -784,28 +731,13 @@ export function Web({
         </div>
       )}
 
-      {/* ── three things can be in the stage, and only one is a webview ───
-      
-          A gadget is checked first and is not gated on `can`: it is React in
-          this process, so it draws in a browser tab and under a probe, where
-          a native view cannot exist at all. The box below it stays mounted
-          either way — the webview is hidden rather than destroyed, so that
-          the page, its history and its scroll survive a gadget being shown
-          and taken away again. */}
-      {gadget !== undefined && here !== undefined ? (
-        // Keyed by the showing and not only by the address: an agent revising
-        // a gadget keeps its name, so the address is the same string and a
-        // component mounted under it alone would keep the document it already
-        // has — and keep an error boundary that has already caught.
-        <Gadget key={`${here}#${String(stamp)}`} address={here} />
-      ) : undefined}
       {can ? (
-        <div ref={stage} {...stylex.props(styles.stage, gadget !== undefined && styles.tucked)} />
-      ) : gadget === undefined ? (
+        <div ref={stage} {...stylex.props(styles.stage)} />
+      ) : (
         <div {...stylex.props(styles.said)}>
           this panel needs the app window — a native webview is not something a browser tab can make
         </div>
-      ) : undefined}
+      )}
     </div>
   );
 }

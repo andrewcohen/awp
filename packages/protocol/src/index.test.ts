@@ -424,15 +424,38 @@ const handlers = AwpRpcs.toLayer({
     ]),
   GadgetShow: ({ name }) =>
     Effect.succeed({
+      address: `gadget://th-1/${name}`,
       thread: "th-1",
-      url: `gadget://th-1/${name}`,
+      name,
+      title: "Costs",
       at: 1_787_000_000_000,
     }),
+  GadgetList: () =>
+    Effect.succeed([
+      {
+        address: "gadget://th-1/cost-table",
+        thread: "th-1",
+        name: "cost-table",
+        title: "Costs",
+        at: 1_787_000_000_000,
+      },
+    ]),
+  GadgetChanges: () =>
+    Stream.fromArray([
+      {
+        address: "gadget://th-1/cost-table",
+        thread: "th-1",
+        name: "cost-table",
+        title: "Costs",
+        at: 1_787_000_000_000,
+      },
+    ]),
   GadgetRead: ({ address }) =>
     Effect.succeed({
       address,
       thread: "th-1",
       name: "cost-table",
+      title: "Costs",
       code: "return {default: () => null}",
       at: 1_787_000_000_000,
     }),

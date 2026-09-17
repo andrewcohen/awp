@@ -1,7 +1,7 @@
-import type { Gadget } from "@awp-kit/protocol";
+import type { Gadget, GadgetHead } from "@awp-kit/protocol";
 import { GadgetRefused, gadgetAddress, gadgetName, gadgetScope } from "@awp-kit/protocol";
 import { compile } from "@mdx-js/mdx";
-import { Clock, Context, Effect, Layer, Ref } from "effect";
+import { Clock, Context, Effect, Layer, PubSub, Ref, Stream } from "effect";
 import remarkGfm from "remark-gfm";
 
 // The documents an agent wrote, compiled.
@@ -11,9 +11,15 @@ import remarkGfm from "remark-gfm";
 // `Pages` points the accessory column at somebody else's page. This is the
 // other half of the same column: a small self-contained thing an agent writes
 // and a person reads — a table it wants looked at, a chart of what it
-// measured, a comparison with a toggle on it. The agent writes MDX, this
-// compiles it, and the page feed points the panel at the result. Nothing in
-// that chain is new except the document.
+// measured, a comparison with a toggle on it. The agent writes MDX and this
+// compiles it; the window draws it in a panel of its own.
+//
+// ── a thread's gadgets are a set, which is why they are not a page ────────
+//
+// They rode the page feed first, and that was one address per thread: the
+// second gadget an agent wrote took the first one's place, and the first is
+// usually the one being asked about. So the panel keeps a strip and this keeps
+// a map, and the feed says *one more exists* rather than *look here now*.
 //
 // ── nothing is written to disk, and the cost is stated ────────────────────
 //
@@ -50,6 +56,17 @@ export class Gadgets extends Context.Service<
     ) => Effect.Effect<Gadget, GadgetRefused>;
     /** The document at an address, or a refusal naming what is missing. */
     readonly read: (address: string) => Effect.Effect<Gadget, GadgetRefused>;
+    /**
+     * A thread's gadgets, newest first, without their documents.
+     *
+     * Newest first because the strip is read left to right and the one just
+     * written is the one somebody was told to look at. A thread is never
+     * handed another's: the address carries it, so the filter is on a field
+     * and not on a convention.
+     */
+    readonly list: (thread: string | undefined) => Effect.Effect<ReadonlyArray<GadgetHead>>;
+    /** Every gadget written from now on. Nothing is replayed — see the note above. */
+    readonly changes: () => Stream.Stream<GadgetHead>;
   }
 >()("awp/Gadgets") {}
 
@@ -90,6 +107,42 @@ const noImports = () => (tree: unknown) => {
   }
 };
 
+/**
+ * The document's first heading, for the tab to say.
+ *
+ * Read from the mdast while it is already being walked, rather than asked for
+ * as an argument: a title the agent passes separately is a title that can
+ * disagree with the document under it, and there is no way to notice. This one
+ * cannot — it *is* the heading, in the author's own words.
+ *
+ * The first heading at any depth and not specifically an `#`: a document that
+ * opens at `##` is unusual and not wrong, and nothing here should force a
+ * level on prose. Text nodes only, so a heading with an inline component in it
+ * contributes the words around it and none of the component.
+ */
+const firstHeading = (into: { title: string | undefined }) => () => (tree: unknown) => {
+  const root = tree as { readonly children?: ReadonlyArray<Prose> };
+  for (const node of root.children ?? []) {
+    if (node.type === "heading") {
+      const said = words(node).trim().replace(/\s+/gu, " ");
+      if (said !== "") {
+        into.title = said;
+      }
+      return;
+    }
+  }
+};
+
+/** Every text node under one, joined. */
+const words = (node: Prose): string =>
+  typeof node.value === "string" ? node.value : (node.children ?? []).map(words).join("");
+
+interface Prose {
+  readonly type: string;
+  readonly value?: unknown;
+  readonly children?: ReadonlyArray<Prose>;
+}
+
 interface Esm {
   readonly type: string;
   readonly position?: { readonly start?: { readonly line?: number } };
@@ -125,21 +178,42 @@ const why = (error: unknown): string => {
  * `remark-gfm` for the reason `Markdown.tsx` has it: tables, task lists and
  * strikethrough are what the dialect a model writes actually contains, and a
  * gadget is very often a table.
+ *
+ * The title comes back with the code because the walk that finds it is this
+ * one. Parsing the source a second time to read a heading would be a second
+ * parser, with its own idea of what a heading is — and the two would agree
+ * until the day a document put one inside a fence.
  */
-export const compileGadget = (source: string): Effect.Effect<string, GadgetRefused> =>
+export const compileGadget = (
+  source: string,
+): Effect.Effect<{ readonly code: string; readonly title: string | undefined }, GadgetRefused> =>
   Effect.tryPromise({
-    try: async () =>
-      String(
+    try: async () => {
+      // Written into by the plugin during the compile, read after it. A remark
+      // plugin's only channel is the tree it is handed and the file it is run
+      // against; a holder is the smaller of the two.
+      const found: { title: string | undefined } = { title: undefined };
+      const code = String(
         await compile(source, {
           outputFormat: "function-body",
-          remarkPlugins: [remarkGfm, noImports],
+          remarkPlugins: [remarkGfm, noImports, firstHeading(found)],
         }),
-      ),
+      );
+      return { code, title: found.title };
+    },
     catch: (error) => new GadgetRefused({ reason: why(error) }),
   });
 
+/** A gadget without its document, which is what a strip is drawn from. */
+const headOf = ({ code: _code, ...head }: Gadget): GadgetHead => head;
+
 export const make = Effect.gen(function* () {
   const held = yield* Ref.make(new Map<string, Gadget>());
+  // Dropping, and small, for the reason `Pages` gives: a subscriber is a
+  // socket, and one that has stopped reading is a window that has gone away.
+  // A dropped event costs less here than it does there — the panel opens from
+  // `list`, so a window that missed one is a window one click from seeing it.
+  const hub = yield* PubSub.dropping<GadgetHead>(16);
 
   return {
     show: (thread: string | undefined, name: string, source: string) =>
@@ -159,7 +233,7 @@ export const make = Effect.gen(function* () {
             new GadgetRefused({ reason: "a gadget needs a document — pass the MDX source" }),
           );
         }
-        const code = yield* compileGadget(source);
+        const { code, title } = yield* compileGadget(source);
         // The clock and not `Date.now()`, for the reason `Pages` gives: `at`
         // is what tells one showing of a gadget from the next, and a test that
         // could not control it would assert on a real timestamp.
@@ -168,10 +242,23 @@ export const make = Effect.gen(function* () {
           address: gadgetAddress(thread, name),
           ...(thread === undefined ? {} : { thread }),
           name,
-          code,
+          // A document with no heading falls back to the name the agent chose,
+          // which is never empty and is already a phrase — `run-3-latency`
+          // reads as a tab. The alternative is a tab saying "untitled", which
+          // is a word nobody wrote about a document somebody did.
+          title: title ?? name,
           at,
+          code,
         };
-        yield* Ref.update(held, (all) => new Map(all).set(gadget.address, gadget));
+        yield* Ref.update(held, (all) => {
+          // Removed before it is set, so a rewrite takes the newest position
+          // in the map rather than keeping the one its first writing had.
+          // Insertion order is what `list` breaks a tie on — see there.
+          const next = new Map(all);
+          next.delete(gadget.address);
+          return next.set(gadget.address, gadget);
+        });
+        yield* PubSub.publish(hub, headOf(gadget));
         return gadget;
       }),
 
@@ -193,6 +280,23 @@ export const make = Effect.gen(function* () {
         }
         return found;
       }),
+
+    list: (thread: string | undefined) =>
+      Effect.map(Ref.get(held), (all) =>
+        // Reversed before the sort, and `toSorted` is stable: two gadgets
+        // written inside one millisecond are ordered by which was written
+        // second. `at` has millisecond resolution and an agent writing a pair
+        // of them does so in a loop, so the tie is the ordinary case rather
+        // than the exotic one — and without this the strip would put them in
+        // the order a Map happened to hold.
+        [...all.values()]
+          .toReversed()
+          .filter((gadget) => gadget.thread === thread)
+          .toSorted((a, b) => b.at - a.at)
+          .map(headOf),
+      ),
+
+    changes: () => Stream.fromPubSub(hub),
   };
 });
 

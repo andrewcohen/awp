@@ -190,10 +190,19 @@ store's feed. "The reply is the update" is the rule for calls with **no** feed.
 
 ### Gadgets
 
-An agent's document, drawn in this process — `gadget://` arrives on the page feed
-like any address and is the one the web panel must **not** navigate to. The
-webview is hidden and kept (`tucked`, and its zero rectangle takes the same path
-a folded column takes), so the page behind a gadget keeps its history and scroll.
+An agent's documents, drawn in this process, in a panel of their own after the
+web one. **A thread accumulates them**, which is why they are not the web
+panel's business: that feed holds one address per thread, so every gadget
+written destroyed the last, and the one somebody asks about is rarely the newest.
+
+**The subscription is `Accessory`'s, not the panel's** — a hidden panel is
+unmounted, and a gadget written while somebody reads a diff must still produce a
+tab. It is also what makes the tab exist only when the thread has one.
+
+**Which tab is open is derived, and the pick records the newest `at` it was made
+against.** A gadget written since moves that number, the pick stops matching, and
+the strip is on the new one — the rule "newest unless you chose otherwise since",
+with no effect correcting a stored value and no frame showing the old thread's.
 
 **The scope is the parameter list of the function the window builds, and the
 runtime has to go first.** MDX's compiled body reads its jsx runtime out of

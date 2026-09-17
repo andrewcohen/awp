@@ -52,26 +52,11 @@ describe("the url", () => {
     expect(refusalOf("   ")).toContain("no url");
   });
 
-  // A gadget is the third scheme, and the reason it is here rather than in a
-  // call of its own is that the column holds one claim about what it shows.
-  // What must stay true is that admitting it admits nothing else: `app://` is
-  // this application's own origin, and a navigation able to name it would put
-  // a browser view with a preload in it on the window itself.
-  test("a gadget address is accepted, and is not a navigation", () => {
-    expect(Effect.runSync(pageAddress("gadget://20260917-ab3d/cost-table"))).toBe(
-      "gadget://20260917-ab3d/cost-table",
-    );
-    // A workspace no thread claims — the same bucket the page feed keeps.
-    expect(Effect.runSync(pageAddress("gadget://loose/cost-table"))).toBe(
-      "gadget://loose/cost-table",
-    );
-  });
-
-  test("a gadget address with no name is a typo, and is refused as one", () => {
-    // Refused where it was typed rather than at the panel: a bad address that
-    // reached the column would draw a refusal instead of returning one.
-    expect(refusalOf("gadget://20260917-ab3d")).toContain("not a gadget address");
-    expect(refusalOf("gadget://20260917-ab3d/Cost_Table")).toContain("not a gadget address");
+  // A gadget was briefly the third scheme here, and is now a panel of its own
+  // with a list behind it. Pinned because the guard is the thing that has to
+  // stay narrow: two schemes, and the reason is `app://` below.
+  test("a gadget address is no longer one of the two", () => {
+    expect(refusalOf("gadget://20260917-ab3d/cost-table")).toContain("http:// and https:// only");
   });
 
   test("the app's own origin is still refused", () => {
