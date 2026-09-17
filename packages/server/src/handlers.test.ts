@@ -2451,12 +2451,13 @@ describe("opening a shell", () => {
       cwd: workspacePath("rowan", "discounts"),
     });
     // Whatever SHELL says on the machine running the suite — asserting a
-    // spelling here would be asserting the tester's dotfiles. What is being
-    // checked is that it is one command and not an empty one, which is the
-    // failure an absent SHELL would produce.
+    // spelling here would be asserting the tester's dotfiles. Two properties
+    // instead: the binary is not empty, which is the failure an absent SHELL
+    // would produce, and it is a **login** shell, which is what makes it the
+    // shell somebody has rather than the one the daemon was started under.
     const started = seen.start[0] as { readonly command: ReadonlyArray<string> };
-    expect(started.command).toHaveLength(1);
     expect(started.command[0]).not.toBe("");
+    expect(started.command).toContain("-l");
   });
 
   it("fills the lowest gap, because a number is an address and not a position", async () => {

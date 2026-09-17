@@ -312,6 +312,20 @@ export const attach = (
   handlers: {
     readonly onChunk: (chunk: string) => void;
     readonly onRefused: (reason: string) => void;
+    /**
+     * The session's process exited — not a failure, and the only notice of it.
+     *
+     * A pty that ends ends its output stream, so `runForEach` *succeeds* here.
+     * That means the retry below never sees it and nothing else does either:
+     * pressing ctrl-D in a shell left the tab on the strip and the pane showing
+     * the dead session's last frame, because the only thing that ever re-asks
+     * what exists is a mount or a reconnect.
+     *
+     * Fired for any normal end, including one this window did not cause, and
+     * the caller's response is a *question* — re-list — so it is safe whatever
+     * the cause turns out to be.
+     */
+    readonly onEnded?: () => void;
   },
 ): Attachment => {
   // Reattaches when the daemon comes back, and what arrives then is a redraw
@@ -332,6 +346,10 @@ export const attach = (
       Effect.catchTag("AttachRefused", (error) =>
         Effect.sync(() => handlers.onRefused(error.reason)),
       ),
+      // After the catch, so a refusal is an end too: "the session ended" and
+      // the session ending are the same news arriving by two routes, and a
+      // caller that re-lists wants both.
+      Effect.tap(() => Effect.sync(() => handlers.onEnded?.())),
     ),
   );
 

@@ -212,6 +212,13 @@ an existing name exactly as it was, and both halves of that fail silently — a
 tab that draws a dead screen and takes no keys, and a `+` that reports success
 and produces nothing.
 
+**Not drawn is a rule about a listing, and nothing re-lists on its own.** There
+is no session feed, so ctrl-D left the tab on the strip over a frozen pane: the
+session was `ended` and the filter would have dropped it, at the next ask. The
+ask is the **Attach stream ending** — a pty that exits ends its output, so that
+arrives as a _success_ and both `Effect.retry` and every catch step over it.
+Any panel drawing a session it does not own the lifetime of wants `onEnded`.
+
 **The close is one control on the strip, not a cross per tab.** A Base UI tab
 _is_ a `<button>`, so a cross inside one is invalid markup with two owners for
 every click.

@@ -13,7 +13,7 @@ import {
   writePane,
 } from "@awp-kit/pane";
 import * as stylex from "@stylexjs/stylex";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { type Attachment, attach, resize, write } from "../data/daemon";
 import { droppedPaths } from "./dropped";
 import { currentColorScheme } from "../design/theme";
@@ -52,6 +52,7 @@ export function Pane({
   fixture,
   scheme,
   focus,
+  onEnded,
 }: {
   /**
    * Which of the window's terminals to draw in.
@@ -75,9 +76,21 @@ export function Pane({
    * leave a person typing at a window that is not listening.
    */
   readonly focus?: string | undefined;
+  /**
+   * The session this pane is attached to has stopped.
+   *
+   * Through `useEffectEvent`, because the attach effect must not re-run when a
+   * caller passes a fresh closure — re-running it detaches and reattaches, and
+   * a reattach is a resize of the real session. So the callback is read at the
+   * moment it fires and is deliberately not a dependency.
+   */
+  readonly onEnded?: () => void;
 }) {
   const container = useRef<HTMLDivElement | null>(null);
   const [failure, setFailure] = useState<string>("");
+  const ended = useEffectEvent(() => {
+    onEnded?.();
+  });
 
   useEffect(() => {
     const parent = container.current;
@@ -129,6 +142,7 @@ export function Pane({
           // a wheel, and this is the only place every byte passes through.
           onChunk: (chunk) => writePane(slot, chunk),
           onRefused: (reason) => setFailure(reason),
+          onEnded: () => ended(),
         });
 
         // Now the sinks have somewhere to go. Set per view rather than per

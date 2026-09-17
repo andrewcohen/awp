@@ -195,6 +195,18 @@ export function Shell({
       });
   };
 
+  // Re-asks what exists. Shared by the close button and by a shell exiting
+  // under somebody's `exit` or ctrl-D, because the two are the same event
+  // reached by different routes and the panel's response to both is the same
+  // question.
+  const relist = (): void => {
+    listSessions()
+      .then(setSessions)
+      .catch((error: unknown) => {
+        setFailure(said(error));
+      });
+  };
+
   const shut = (name: string): void => {
     setFailure("");
     closeShell(name)
@@ -303,6 +315,14 @@ export function Shell({
             session={showing.session.name}
             fixture=""
             scheme={scheme}
+            // ctrl-D is a close, and nothing else reports it. The strip is
+            // drawn from a listing taken at mount, so a shell somebody exited
+            // left a tab behind and a pane frozen on its last frame — the
+            // session is `ended`, which `shellsOf` drops, but only once this
+            // panel asks again. This is the ask, and it is the *only* notice:
+            // there is no session feed, and the Attach stream ending is a
+            // success rather than a failure.
+            onEnded={relist}
           />
         </Tabs.Panel>
       )}

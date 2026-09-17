@@ -40,7 +40,8 @@ import {
   type Task,
   type Thread,
 } from "@awp-kit/protocol";
-import { homedir } from "node:os";
+import { execFileSync } from "node:child_process";
+import { homedir, userInfo } from "node:os";
 import { basename } from "node:path";
 import { Clock, Effect, FileSystem, Option, Path, Ref, Schema, Stream } from "effect";
 import { Chat } from "./chat";
@@ -123,21 +124,80 @@ const asReviewFailure = <A, R>(
 const AGENT = "agent";
 
 /**
- * What a shell pane runs: the person's own shell.
+ * The shell the operating system says this user has, out of the passwd entry.
+ *
+ * **`os.userInfo().shell` does not answer this under bun, and it looks like it
+ * does.** Measured 2026-09-17: bun returns `process.env.SHELL`, and the string
+ * `"unknown"` when that is unset — it never consults passwd. `username` is the
+ * same; only `uid` and `homedir` are real. So the obvious call returns a
+ * plausible wrong answer rather than failing, which is the shape that gets
+ * shipped.
+ *
+ * And the environment is exactly what cannot be trusted here: the daemon
+ * inherits `SHELL` from whatever started it — a zmx session, a script, a
+ * launch agent — so a person whose shell is fish got zsh, because that is what
+ * the daemon's parent had. Reported as "my shell is fish tho".
+ *
+ * Queried by **uid**, which is the one field bun reads honestly. `undefined`
+ * for anything unreadable, so every caller's fallback still applies.
+ */
+const passwdShell = (): string | undefined => {
+  const { uid } = userInfo();
+  try {
+    // Blocking, and deliberately: this is read once for the life of the
+    // daemon and an async read would have to be threaded through a handler
+    // that has no other reason to spawn anything.
+    const read =
+      process.platform === "darwin"
+        ? execFileSync("dscacheutil", ["-q", "user", "-a", "uid", String(uid)], {
+            encoding: "utf8",
+          })
+        : execFileSync("getent", ["passwd", String(uid)], { encoding: "utf8" });
+    const said =
+      process.platform === "darwin"
+        ? /^shell:[^\S\n]*(?<path>\S.*)$/mu.exec(read)?.groups?.["path"]
+        : read.split("\n")[0]?.split(":")[6];
+    const trimmed = said?.trim();
+    return trimmed === undefined || trimmed === "" ? undefined : trimmed;
+  } catch {
+    // Neither tool exists, or the uid is not in any directory this machine
+    // serves. Not a failure worth a sentence — the fallback is a shell.
+    return undefined;
+  }
+};
+
+/** Read once. A login shell does not change while a daemon is running. */
+let shellCommand: ReadonlyArray<string> | undefined;
+
+/**
+ * What a shell pane runs: the person's own shell, as a **login** shell.
  *
  * Not configured, and not `agent` — a shell is the one thing here nobody needs
  * to declare, and a setting would be a second answer to a question the
- * environment already answers. `bash` is the floor rather than a preference:
- * every machine has one, and a wrong guess at `zsh` is a session that starts
+ * operating system already answers. `bash` is the floor rather than a
+ * preference: every machine has one, and a wrong guess is a session that starts
  * and immediately exits.
  *
- * Empty is absent. `SHELL=""` reaches a `??` guard untouched and would be
- * handed to zmx as a command with no name — see AGENTS.md, where this has cost
- * weeks three times.
+ * **`-l` is the other half, and without it this is not the shell somebody
+ * has.** The command inherits the *daemon's* environment — on this machine a
+ * bun workspace run, so PATH arrives with nine `node_modules/.bin` entries
+ * prepended and the profile that built the real one never runs. Measured: the
+ * inherited entries sit first without `-l` and sixteenth with it, because
+ * `path_helper` lives in `/etc/zprofile` and only a login shell reads it. A
+ * terminal emulator opens a login shell; so does this.
+ *
+ * `SHELL` is the last resort rather than the first, for the reason in
+ * `passwdShell`. Empty is absent: `SHELL=""` reaches a `??` guard untouched and
+ * would be handed to zmx as a command with no name — see AGENTS.md, where that
+ * has cost weeks three times.
  */
-const loginShell = (): string => {
-  const said = process.env["SHELL"];
-  return said === undefined || said === "" ? "/bin/bash" : said;
+const loginShell = (): ReadonlyArray<string> => {
+  if (shellCommand === undefined) {
+    const said = process.env["SHELL"];
+    const fromEnv = said === undefined || said === "" ? undefined : said;
+    shellCommand = [passwdShell() ?? fromEnv ?? "/bin/bash", "-l"];
+  }
+  return shellCommand;
 };
 
 /**
@@ -1199,7 +1259,7 @@ export const layer = AwpRpcs.toLayer(
           );
 
           yield* mux
-            .start({ name, cwd: dir, command: [loginShell()] })
+            .start({ name, cwd: dir, command: [...loginShell()] })
             .pipe(Effect.mapError((error) => new SessionStartFailed({ reason: error.reason })));
 
           // Its own call for the same reason SessionStart makes it: the name is
