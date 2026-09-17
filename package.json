@@ -39,6 +39,7 @@
     "dev": "bash $PWD/scripts/dev/dev.sh",
     "daemon": "bun run --filter @awp-kit/server daemon",
     "probe:child-env": "bun packages/server/src/probe/child-env.ts",
+    "probe:adapter-release": "bun packages/server/src/probe/adapter-release.ts",
     "probe:child-tree": "bun packages/server/src/probe/child-tree.ts",
     "probe:daemon": "bun packages/server/src/probe/daemon-roundtrip.ts",
     "probe:skeleton": "bun packages/server/src/probe/skeleton.ts",
