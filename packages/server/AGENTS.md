@@ -555,9 +555,13 @@ adapter is spawned — `session-claim.ts`. Two guards, in this order:
                                                agent, a hand-typed resume
 ```
 
-- **The process check runs only when no conversation of ours held the claim.**
-  Ours means this pid's own adapter, and a `ps` would find our own grandchild
-  and refuse to open what we are already holding.
+- **The process check runs only on a session `take` reports as free.** It
+  answers three states, not a boolean: ours, a predecessor at this address
+  taken over, or free. Only free knows nothing about who was in the session —
+  under either other one a `ps` finds an awp adapter, this daemon's own or the
+  outgoing one's, and refuses a conversation awp is handing over. Collapsing
+  the first two is what left the restart lockout standing after the takeover
+  rule that was written to end it.
 - **A dead holder is taken over at once** — `process.kill(pid, 0)`, not the
   heartbeat. Waiting out `STALE_AFTER` after every `dev restart daemon` is how
   a refusal becomes a sentence everybody learns to ignore.

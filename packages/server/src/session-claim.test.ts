@@ -70,9 +70,10 @@ describe("the claim", () => {
     const answer = await on((claims) =>
       Effect.runPromise(claims({ owner: "port 5274", pid: 100 }).take(ONE)),
     );
-    // False is what sends the caller on to the process check: nothing of ours
-    // was in this session, so something that is not ours might be.
-    expect(answer).toBe(false);
+    // `free` is what sends the caller on to the process check: nothing is
+    // known about who was in this session, so something that is not ours
+    // might be.
+    expect(answer).toBe("free");
   });
 
   test("the same process taking it twice is told it already had it", async () => {
@@ -83,7 +84,7 @@ describe("the claim", () => {
     });
     // Which is what stops `/new` — invalidate, then immediately re-open —
     // paying for a `ps` scan that would find this daemon's own adapter.
-    expect(answer).toBe(true);
+    expect(answer).toBe("ours");
   });
 
   test("a second live process is refused, and the sentence says where to go", async () => {
@@ -126,16 +127,35 @@ describe("the claim", () => {
     // old one is still unwinding. Its pid is alive and its beat is seconds
     // old, so both of the other guards hold. One port is one listener, and
     // that is what decides it.
+    //
+    // Taken, and *said to be* a takeover: the caller skips the process table
+    // on this answer, because what a `ps` would find is the predecessor's own
+    // adapter on its way out. Answering "free" here took the claim and then
+    // handed it straight back — the lockout survived the fix that named it.
     const answer = await on(
       async (claims) => {
         await Effect.runPromise(claims({ owner: "port 5274", pid: 100 }).take(ONE));
-        return reasonOf(claims({ owner: "port 5274", pid: 101 }).take(ONE));
+        return Effect.runPromise(claims({ owner: "port 5274", pid: 101 }).take(ONE));
       },
       // Still there. Stating it is the test.
       () => true,
     );
 
-    expect(answer).toBe("taken");
+    expect(answer).toBe("predecessor");
+  });
+
+  test("a decayed row at this same address is free, not a takeover", async () => {
+    // The predecessor rule turns the process check off, so it has to be about
+    // a daemon that was here a moment ago and not one that used to be. A
+    // minute on, anybody could have typed `claude --resume` — and that is the
+    // one thing the process table is there to find.
+    const answer = await on(async (claims, clock) => {
+      await Effect.runPromise(claims({ owner: "port 5274", pid: 100 }).take(ONE));
+      clock.now += STALE_AFTER + 1;
+      return Effect.runPromise(claims({ owner: "port 5274", pid: 101 }).take(ONE));
+    });
+
+    expect(answer).toBe("free");
   });
 
   test("a holder that is alive but has stopped beating decays", async () => {

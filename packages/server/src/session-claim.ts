@@ -96,18 +96,33 @@ export const STALE_AFTER = 60_000;
 /** How often a held claim says it is still there. */
 export const BEAT_EVERY = 20_000;
 
+/**
+ * What was there before the claim was written.
+ *
+ * Three states and not a boolean, because the caller's next move is the
+ * process table and only one of them wants it. A boolean collapsed the two
+ * that do not, and the restart lockout is what that cost: `take` forgave the
+ * predecessor, answered "not yours", and the `ps` underneath found that same
+ * predecessor's adapter and refused anyway — the claim given back a line after
+ * it was won.
+ *
+ *   ours         this pid's own adapter, still holding
+ *   predecessor  a daemon at this address on its way out, taken over
+ *   free         nothing, a decayed row, or a pid that has died
+ *
+ * Only `free` says nothing is known about who was in the session, and only
+ * `free` is worth a scan of the process table.
+ */
+export type Taken = "ours" | "predecessor" | "free";
+
 export interface Claims {
   /**
    * Take the claim, or refuse naming who has it.
    *
-   * Answers **whether this daemon already held it**, which is the one thing
-   * the caller has to know: a claim already ours is this process's own
-   * adapter, so nothing outside can have crept in underneath it and the
-   * slower check below can be skipped. A claim that was free, stale or held
-   * by a process that has died answers false, and is then worth looking at
-   * the process table for.
+   * Answers **what was there**, which is the one thing the caller has to know
+   * — see `Taken`.
    */
-  readonly take: (sessionId: string) => Effect.Effect<boolean, SessionHeld | DbError>;
+  readonly take: (sessionId: string) => Effect.Effect<Taken, SessionHeld | DbError>;
   /** Say the claim is still held. Failures are nothing to act on — see `beat`. */
   readonly beat: (sessionId: string) => Effect.Effect<void>;
   /** Give it up. Only ours: a claim taken over by somebody else is not ours to delete. */
@@ -210,15 +225,17 @@ export const claims = (
         // refusal names a pid that is gone by the time anybody has read the
         // sentence. That is the restart lockout, and the address is what sees
         // through it.
-        const predecessor = before !== undefined && !ours && before.owner === self.owner;
+        //
+        // Fresh, and that qualification is the whole of what this claims: a
+        // row still beating a moment ago is a daemon that was here until a
+        // moment ago. A *decayed* row at this address is only a daemon that
+        // used to be, and a `claude --resume` could have been typed at any
+        // point in the minute since — so that one is `free`, and the process
+        // table is asked about it like any other.
+        const fresh = before !== undefined && before.at > at - STALE_AFTER;
+        const predecessor = before !== undefined && !ours && fresh && before.owner === self.owner;
 
-        if (
-          before !== undefined &&
-          !ours &&
-          !predecessor &&
-          before.at > at - STALE_AFTER &&
-          alive(before.pid)
-        ) {
+        if (before !== undefined && !ours && !predecessor && fresh && alive(before.pid)) {
           return yield* Effect.fail(heldBy(sessionId, before, at));
         }
 
@@ -237,7 +254,7 @@ export const claims = (
               : heldBy(sessionId, after, at),
           );
         }
-        return ours;
+        return ours ? "ours" : predecessor ? "predecessor" : "free";
       }),
 
     // Ignored, deliberately, and it is the one place in this module that

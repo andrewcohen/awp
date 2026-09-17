@@ -1885,14 +1885,17 @@ export const make = Effect.gen(function* () {
    * Take a session, and hold it for as long as the caller's scope is open.
    *
    * Two guards, cheapest first — see `session-claim.ts`. The process table is
-   * only asked when no conversation of ours already had the claim: if one did,
-   * the adapter under it is this daemon's own, and a `ps` would find our own
-   * grandchild and refuse to open a conversation we are already holding.
+   * only asked when the session was `free`: anything else names a daemon that
+   * was in it, and the `claude --resume` a `ps` finds under such a row is that
+   * daemon's adapter — ours, or a predecessor's on its way out. Refusing on
+   * either is refusing a conversation awp itself is handing over, which is the
+   * restart lockout: `take` forgives the predecessor and this gave it straight
+   * back.
    */
   const claimed = (sessionId: string) =>
     Effect.gen(function* () {
-      const ours = yield* claims.take(sessionId);
-      if (!ours) {
+      const before = yield* claims.take(sessionId);
+      if (before === "free") {
         const outside = yield* outsideHolders(spawner, sessionId, new Set([process.pid]));
         if (outside.length > 0) {
           yield* claims.release(sessionId);
