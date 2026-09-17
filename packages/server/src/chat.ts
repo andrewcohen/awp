@@ -89,19 +89,42 @@ import { childEnv } from "./zmx-session";
 /**
  * How long {@link settledWhen} waits, in the daemon.
  *
- * Both bounds exist because either failure is silent:
- *
  *   startsWithin  a turn that never begins would wait forever. An adapter that
  *                 accepted the prompt and did nothing with it is a real thing
  *                 — the whole reason `send` reports how it was delivered — and
- *                 a job step must not hang on one
- *   holdsFor      a turn that runs for an hour is the agent doing what it was
- *                 asked, and a job has no business holding a step open that
- *                 long. Giving up is not a failure: the transcript is on disk,
- *                 so somebody opening the chat re-acquires the adapter and
- *                 replays what happened
+ *                 nothing should hang on one
+ *   holdsFor      absent, and that is the decision. **A turn in progress is
+ *                 never killed.**
+ *
+ * ── what the bound used to be, and what it cost ────────────────────────────
+ *
+ * It was 20 minutes, under the reasoning that "a turn that runs for an hour is
+ * the agent doing what it was asked, and a job has no business holding a step
+ * open that long — giving up is not a failure: the transcript is on disk".
+ * The first half is right about the daemon and the second is wrong about the
+ * agent, because of *which* transcript is on disk:
+ *
+ *   disk         the Edit ran. a.ts is changed
+ *   transcript   the call that made the change, and no result after it —
+ *                the process that would have written one was killed
+ *
+ * A fresh `claude --resume` reads both and they only reconcile one way: some
+ * other writer touched this file. It says so, and every long refactor produces
+ * a handful at once, which reads as an agent working alongside it. There is no
+ * other writer. There is one agent, killed after it wrote to disk and before
+ * it wrote down that it had.
+ *
+ * So the cap did not trade a held adapter for a lost turn — it traded a held
+ * adapter for a **transcript that disagrees with the working copy**, and a
+ * model reasoning from the disagreement.
+ *
+ * The bound this replaces is not a clock: the status is cleared when the
+ * adapter's update stream ends, so a turn cannot be "in progress" on a process
+ * that has gone. What remains pinnable is a *live* adapter whose `ended` was
+ * missed — a leak of one held conversation, which is a thing to fix where the
+ * edge is counted rather than to paper over with a timer that corrupts.
  */
-export const WAITS = { startsWithin: "30 seconds", holdsFor: "20 minutes" } as const;
+export const WAITS = { startsWithin: "30 seconds" } as const;
 
 /**
  * Hold on until a turn has started and then finished.
@@ -125,7 +148,7 @@ export const WAITS = { startsWithin: "30 seconds", holdsFor: "20 minutes" } as c
  */
 export const settledWhen = (
   busy: Effect.Effect<boolean>,
-  waits: { readonly startsWithin: Duration.Input; readonly holdsFor: Duration.Input },
+  waits: { readonly startsWithin: Duration.Input; readonly holdsFor?: Duration.Input },
 ): Effect.Effect<void> =>
   Effect.gen(function* () {
     const until = (wanted: boolean) =>
@@ -140,7 +163,11 @@ export const settledWhen = (
     if (Option.isNone(yield* Effect.timeoutOption(until(true), waits.startsWithin))) {
       return;
     }
-    yield* Effect.timeoutOption(until(false), waits.holdsFor);
+    // No bound unless a caller asks for one. See WAITS: the turn ending is the
+    // only thing that ends this, and a clock here kills an agent mid-edit.
+    yield* waits.holdsFor === undefined
+      ? until(false)
+      : Effect.timeoutOption(until(false), waits.holdsFor);
   });
 
 /** Anything that stopped a conversation being had. */
@@ -2121,35 +2148,50 @@ export const make = Effect.gen(function* () {
           yield* setStatus(key, waiting ? "waiting" : running > 0 ? "working" : undefined);
         });
         yield* Effect.forkScoped(
-          Effect.ignore(
-            Stream.runForEach(updates, (update) =>
-              Effect.gen(function* () {
-                if (update.kind === "turn") {
-                  yield* Ref.update(inFlight, (was) =>
-                    update.status === "started" ? was + 1 : Math.max(0, was - 1),
-                  );
-                }
-                // Every reading, because the newest is the only true one and
-                // there are four of them a turn — a write of two integers
-                // against a cost measured in seconds of model time.
-                if (
-                  update.kind === "usage" &&
-                  update.used !== undefined &&
-                  update.size !== undefined &&
-                  update.size > 0
-                ) {
-                  yield* Effect.ignore(
-                    attempt("remember the context reading", () =>
-                      writeUsage.run(held.sessionId, update.used as number, update.size as number),
-                    ),
-                  );
-                }
-                if (update.kind === "permission" && update.id !== undefined) {
-                  yield* Ref.update(asks, (all) => new Set(all).add(update.id as string));
-                }
-                yield* say;
-              }),
+          // `ensuring`, so the end of the updates is the end of `working`.
+          //
+          // This is what lets the hold above have no clock. The status is
+          // derived from a counter of turn edges, and a turn whose `ended`
+          // never arrives — because the adapter died holding it — would
+          // otherwise read as in progress forever and pin a conversation
+          // that has no process behind it. An update stream that has ended
+          // is an adapter that has gone, whatever the counter says.
+          Effect.ensuring(
+            Effect.ignore(
+              Stream.runForEach(updates, (update) =>
+                Effect.gen(function* () {
+                  if (update.kind === "turn") {
+                    yield* Ref.update(inFlight, (was) =>
+                      update.status === "started" ? was + 1 : Math.max(0, was - 1),
+                    );
+                  }
+                  // Every reading, because the newest is the only true one and
+                  // there are four of them a turn — a write of two integers
+                  // against a cost measured in seconds of model time.
+                  if (
+                    update.kind === "usage" &&
+                    update.used !== undefined &&
+                    update.size !== undefined &&
+                    update.size > 0
+                  ) {
+                    yield* Effect.ignore(
+                      attempt("remember the context reading", () =>
+                        writeUsage.run(
+                          held.sessionId,
+                          update.used as number,
+                          update.size as number,
+                        ),
+                      ),
+                    );
+                  }
+                  if (update.kind === "permission" && update.id !== undefined) {
+                    yield* Ref.update(asks, (all) => new Set(all).add(update.id as string));
+                  }
+                  yield* say;
+                }),
+              ),
             ),
+            setStatus(key, undefined),
           ),
         );
         // The row keeps no state of its own once the adapter has gone: an

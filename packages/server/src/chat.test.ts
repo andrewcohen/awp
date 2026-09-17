@@ -626,9 +626,9 @@ describe("optionsOf", () => {
 // a brief delivered by `send` alone gets the agent shot two minutes into its
 // first answer.
 //
-// The bounds are here rather than in the daemon because both failures are
-// silent: one hangs a job step forever, the other holds one for twenty
-// minutes over an adapter that ignored what it was told.
+// `startsWithin` is here rather than in the daemon because its failure is
+// silent: without it nothing ever returns from an adapter that took the prompt
+// and ignored it. There is deliberately no bound on the *hold* — see WAITS.
 /** A reading that answers from a script, one call at a time. */
 const readings = (script: ReadonlyArray<boolean>) =>
   Effect.gen(function* () {
@@ -677,10 +677,9 @@ describe("waiting for a turn to settle", () => {
     expect(took).toBeLessThan(2500);
   });
 
-  it("gives up on a turn that outlasts the window, and does not fail", async () => {
-    // A turn running for an hour is the agent doing what it was asked. Giving
-    // up is not a failure: the transcript is on disk, so somebody opening the
-    // chat re-acquires the adapter and replays what happened.
+  it("gives up on a turn that outlasts an explicit window, and does not fail", async () => {
+    // The bound is still offered — a caller that must return can ask for one —
+    // and giving up must not read as a failure.
     const started = Date.now();
     const exit = await Effect.runPromiseExit(settledWhen(Effect.succeed(true), waits));
     const took = Date.now() - started;
@@ -689,6 +688,38 @@ describe("waiting for a turn to settle", () => {
     expect(Exit.isSuccess(exit)).toBe(true);
     expect(took).toBeGreaterThanOrEqual(2500);
     expect(took).toBeLessThan(6000);
+  });
+
+  it("holds a turn in progress with no bound at all, which is what the daemon asks for", async () => {
+    // **A turn in progress is never killed**, and the reason is not that the
+    // turn is precious — it is that killing one mid-edit leaves the working
+    // copy changed and the transcript with no record of the change, so the
+    // next `claude --resume` reads the two and concludes another writer is in
+    // the workspace. There is no other writer.
+    //
+    // Asserted as "still running", which is the only honest shape for a wait
+    // that is supposed to have no end: the effect is raced against a window
+    // several times the old bound's poll and must lose.
+    const exit = await Effect.runPromise(
+      Effect.exit(
+        Effect.timeout(
+          settledWhen(Effect.succeed(true), { startsWithin: "600 millis" }),
+          "2 seconds",
+        ),
+      ),
+    );
+
+    expect(Exit.isFailure(exit)).toBe(true);
+  });
+
+  it("still gives up on a turn that never starts, with no bound on the hold", async () => {
+    // The two bounds answer different questions, and dropping one must not
+    // drop the other: nothing should wait forever on an adapter that took the
+    // prompt and did nothing with it.
+    const started = Date.now();
+    await Effect.runPromise(settledWhen(Effect.succeed(false), { startsWithin: "600 millis" }));
+
+    expect(Date.now() - started).toBeLessThan(2500);
   });
 });
 
