@@ -847,17 +847,126 @@ What has to be decided, and none of it is obvious:
   terminal means the command arrives here to be _run_, so the refusal has to
   happen before we spawn anything rather than after.
 - **Scope and leaks.** A terminal is created by one call and released by
-  another, and an agent that dies between them leaves a process. The
-  conversation's own Scope is the natural owner, the same way the adapter
-  process is.
+  another, and an agent that dies between them leaves a process. **The
+  conversation's Scope is the wrong owner, and that is settled rather than
+  open** — see below.
+
+### The conversation cannot own the process, because clients come and go
+
+This was written as "the conversation's own Scope is the natural owner, the
+same way the adapter process is". That is wrong, and both halves of why are
+now known.
+
+**The reason it was always meant to be a session: a conversation has many
+clients, arriving and leaving.** A window, a second window, the TUI, a client
+on another machine. A process's lifetime must not be a function of who
+happens to be attached — and today it is exactly that, because the reference
+that keeps a conversation alive _is_ a client's subscription.
+
+**And the failure is total, not partial.** Measured by `bun run probe:child-tree`:
+
+    child   pid 54268   group 54268   gone
+    grand   pid 54269   group 54268   gone
+
+`ChildProcessSpawner` makes each child the leader of its own process group and
+the kill goes to the **group**, so everything an agent started dies with the
+adapter. POSIX would have orphaned that grandchild — the opposite is the
+reasonable guess, which is why it was worth asking rather than assuming.
+
+The chain, end to end:
+
+    a client stops watching     Base UI unmounts a hidden tab, so glancing
+                                at the diff drops the reference
+    no turn in flight           a backgrounded command ends its turn at once,
+                                so `mindUntilSettled` lets go immediately
+    2 minutes                   `idleTimeToLive` on the conversations RcMap
+    the whole group dies        chat.ts:2176 → close the Scope → kill
+
+So a dev server an agent starts from the chat is dead about two minutes after
+somebody looks at something else. Reported as "long-lived tasks they spawn end
+up dying a lot"; the evidence is in `docs/daemon.md`.
+
+**Raising the TTL is not the fix, and neither is refcounting the group.** The
+first moves the deadline; the second pins an adapter open forever on a stray
+process — and what gets pinned is not small. One live conversation, measured:
+
+```
+                                                   RSS   phys_footprint
+  adapter   @agentclientprotocol/claude-agent-acp  152MB       84MB
+   claude   --output-format stream-json            325MB      156MB
+    mcp     bun packages/server/src/mcp-main        95MB       57MB
+                                                  ─────      ─────
+                                                  572MB      297MB
+```
+
+**Read the footprint, not the RSS** — all three map the same bun binary and JS
+runtime, and RSS charges every shared page to each of them. About 300MB a chat,
+so _some_ release path is right: ten workspaces visited and held is 3GB of idle
+process. What is wrong is the question that decides it, not that one is asked.
+
+### An adapter with nothing under it must not survive
+
+That tree is the healthy shape, and note who owns what: the MCP server and every
+tool shell are children of **claude**, not of the adapter. So a claude that exits
+leaves an adapter awp spawned, still connected, that can answer no prompt.
+
+awp notices the _adapter_ stopping — the reader ending abandons every waiting
+request with a sentence (`chat.ts`, `abandonWaiting`). It does not notice claude
+stopping, and neither case invalidates the `RcMap` entry: the entry stays live
+until the TTL, so the next message goes to a corpse instead of respawning.
+
+**If claude exits there should be no adapter tree.** Whether the adapter exits
+itself is upstream's business; awp's part is to stop treating the entry as live,
+which is one `RcMap.invalidate` on the edge it already detects.
+
+**So the terminal is a session the daemon owns.** Releasing an idle
+conversation then costs nothing — the transcript is on disk and `session/load`
+replays it — while the command keeps running, stays watchable and killable,
+survives a daemon restart, and is already drawable: the shell pane renders any
+session by name.
+
+**Lifetime follows an explicit act, never attachment — and `/new` is one.**
+This is the rule the whole design turns on, and it cuts both ways:
+
+    a client looking away    not a decision anybody made   → must not destroy
+    an idle release          not a decision anybody made   → must not destroy
+    /new                     a person saying forget this   → KILLS them
+    closing the terminal     a person saying stop that     → kills that one
+
+`/new` must kill the sessions the conversation it is replacing started.
+Today it happens by accident — `/new` invalidates the RcMap entry, the adapter
+is released, and the group takes everything with it. Once a terminal is a
+session the daemon owns, that accident stops working, and **without this the
+change swaps one bug for a worse one**: a dev server per abandoned
+conversation, running, unattributed, and outliving the daemon. `/new` is the
+one place that is easy to miss precisely because it is free today.
+
+So the daemon has to know which sessions a conversation started. The labels
+already carry the shape — `awp_project`, `awp_workspace`, `awp_kind` — and the
+tie wants the ACP session id beside them, because `/new` replaces the session
+id and keeps the workspace. Kind spelling to match the ones that exist:
+`shell_<n>` is a person's own, `service_<name>` is declared in config, so an
+agent's is `term_<n>`.
+
+What this leaves to decide:
+
+- **Which terminals become sessions.** Every `terminal/create`, or only ones
+  that outlive their turn? A session per `ls` is a session list nobody can
+  read, and the kind budget is 16 characters.
+- **`terminal/output` against a session.** `zmx history` is the whole
+  scrollback where ACP asks for what has been written so far; whether the
+  adapter wants bytes since a mark or the lot is unread.
+- **`terminal/release` when a person is still watching.** The agent letting go
+  is not a reason to close a pane somebody has open, and the session outliving
+  the release is the point — so release cannot mean kill.
 
 Do not start this before the permission path has been exercised by hand: this
 moves execution into the daemon, and the daemon is the process holding a
 person's repositories.
 
-Related: #91 (the chat, done), #115 (config strip), #63 (running a
-workspace's services — a different long-running-process problem with some of
-the same answers).
+Related: #91 (the chat, done), #115 (config strip), #126 (the chat rendering a
+running shell — the drawing half of this), #63 (a workspace's services, the
+same ownership answer for a process a _person_ declares rather than an agent).
 
 ## 120. Electron's 317MB runtime must not land in every workspace
 
