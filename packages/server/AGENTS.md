@@ -569,9 +569,8 @@ adapter is spawned — `session-claim.ts`. Two guards, in this order:
 - **The heartbeat is what makes the row an assertion rather than a lock.** Stop
   beating and it decays; without it one `kill -9` makes a conversation
   unopenable forever. It has nothing to do with sockets.
-- **Release is refcounted in-process.** `RcMap.invalidate` then `RcMap.get` —
-  what `/new` and the terminal fork both do — runs the new lookup while the old
-  scope is still closing, and both are this pid.
+- **Release is refcounted in-process**, because `/new` and the terminal fork
+  both re-get a key they just gave up, and both are this pid.
 - **The refusal must reach the window.** `subscribe` retries a feed forever and
   then swallows the cause, so a refusal caught there is a chat that spins with
   nothing on screen. `watchChat` catches `ChatUnavailable` _inside_ the retry,
@@ -593,15 +592,34 @@ backgrounded command ends its turn at once, so nothing is holding it. **Anything
 meant to outlive a turn needs a session of its own** — holding the adapter open
 longer only moves the deadline.
 
-### An adapter that stopped is not a conversation
+### `RcMap.invalidate` does not release a conversation anybody holds
 
-The reader ending is the only stop this side sees, and knowing was all it did:
-the `RcMap` entry stayed live to the TTL, so the next message went to a corpse.
-`Conversation.gone` is that edge, and the lookup invalidates its own entry on it.
+It removes the key **unconditionally** and closes the scope only if `refCount`
+is zero — Effect's own source, pinned by a test in `chat.test.ts` because the
+whole design below rests on it. So invalidating a held conversation leaves the
+adapter running with nothing pointing at it, and the next `get` opens a **second
+one on the same stored session**. Two `claude` on one transcript, which is what
+`chat_claims` is for and the one case it cannot see: both holders are this pid.
+Found live, twice in eleven minutes.
 
-**A finalizer may not reach for a key by name.** `invalidate` then `get` — `/new`,
-the fork, and this — runs the new lookup while the old scope is still closing, so
-a watcher naming the key would kill the conversation `/new` just opened.
-`generations` hands out a token and the holder speaks only while it is still the
-key's; registered **last**, so LIFO makes it the first finalizer to run and a
-kill this daemon asked for has given the key up before `gone` completes.
+**Never `RcMap.invalidate` a conversation — `retire` it.** It ends the process
+with `Conversation.stop` rather than trusting a scope that may never close.
+
+**A hold must name the conversation, not the key.** `statuses` is keyed by
+workspace and `WAITS` has no `holdsFor` — right separately, wrong together: once
+a key is retired and re-got, `settled` reads the _replacement's_ status, so the
+outgoing holder waits on a turn that is not its own and keeps an unreachable
+adapter alive for as long as the workspace stays busy. `generations` hands out a
+token, and everything that names a key carries one: `settled` stops when the key
+means something else, and a finalizer speaks only while it is still the key's —
+without which a watcher would kill the conversation `/new` just opened.
+
+**A lookup finding the key still taken kills what is there, and says so.** A
+lookup runs only when the key is absent from the map, so anything still
+registered is unreachable by definition. The backstop, not the guard — and it
+logs, because this daemon has twice accumulated processes in silence (two
+adapters on a session; fourteen daemons at once, see `main.ts`) and both were
+found with `ps`. `zmx history awp-dev-daemon | grep stranded` replaces that.
+
+`Conversation.gone` is the other edge: the reader ending is the only stop this
+side sees. `bun run probe:adapter-release` ruled out the close itself.

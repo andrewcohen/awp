@@ -2417,3 +2417,138 @@ Two orderings decide whether this works, and neither is obvious:
 signal that fired only on an unexpected death would need the death detected
 somewhere else to be sure it was unexpected, and the place that knows is the
 scope.
+
+### Two adapters on one session, and the call that made it possible
+
+Reported as the chat losing its daemon connection and messages not appearing.
+The connection was the symptom; this is what was underneath.
+
+Measured on the live daemon, 2026-09-17:
+
+```
+daemon 21021                                 started 16:31:14
+├─ adapter 21128  16:31:16  claude --session-id=808a…   ← alive 10 min
+└─ adapter 38770  16:39:00  claude --resume=808a…
+
+    three minutes later, 21128 gone and it had happened again:
+
+├─ adapter 38770  16:39:00  claude --resume=808a…
+└─ adapter 40098  16:42:29  claude --resume=808a…
+```
+
+One daemon pid, one workspace key, one row in `chat_sessions`, and two live
+adapters each with its own `claude` and its own MCP server. `chat_claims` held
+one row and read correct the whole time: the table answers "which daemon", and
+this was one daemon disagreeing with itself.
+
+#### What it was not
+
+The first guess was that the close fails to kill. `conversation` adds two things
+to the spawn that `probe:child-tree` never measured — stdin fed from a queue
+that never ends, and a reader parked on stdout at the moment of the close —
+and either could plausibly block a scope. `bun run probe:adapter-release` asks
+all of them:
+
+```
+                        close      child
+  bare spawn             1012ms    gone
+  stdin from a queue     1008ms    gone
+  a forked reader        1007ms    gone
+  both, over sh          1005ms    gone
+  the adapter: bun       1008ms    gone
+```
+
+Every close returned in single-digit milliseconds and killed its child,
+including a bun child with a live event loop, which was the last way a signal
+could have been ignored. Five plausible causes, all wrong. The scope is not
+closed slowly; it is not closed at all.
+
+#### What it is
+
+`RcMap.invalidate`, effect 4.0.0-rc.112:
+
+```ts
+MutableHashMap.remove(self.state.map, key);
+if (entry.refCount > 0) return; // ← key gone from the map, scope NOT closed
+if (entry.fiber) yield * Fiber.interrupt(entry.fiber);
+yield * Scope.close(entry.scope, Exit.void);
+```
+
+The key is removed unconditionally; the scope is closed only if nothing holds a
+reference. An invalidate against a held conversation therefore returns having
+released nothing, and the adapter keeps running with the map no longer pointing
+at it — unreachable, unkillable, counted by nothing. The next `get` misses, runs
+the lookup, and opens a second adapter on the same stored session id.
+
+`chat.test.ts` pins this against the real `RcMap` rather than describing it: a
+holder that does not let go, an `invalidate`, then a `get`, and the assertion is
+that **two** resources were built and neither was released until the holder
+finally did. An Effect upgrade that changes this breaks there.
+
+#### Why it got worse, and why that change was still right
+
+`fix(chat): never kill a turn in progress` removed `holdsFor` from `WAITS`,
+leaving `settledWhen` with no upper bound on the hold. That is correct on its own
+terms — a clock there killed agents mid-edit — and it is what turned a bounded
+orphan into an unbounded one. The daemon in the measurement above started 21
+seconds after that commit.
+
+The compounding half is subtler and is the one worth remembering: **`settled`
+polls `statuses`, which is keyed by workspace rather than by adapter.** Once a
+replacement has taken the key, the orphaned holder is waiting on the _new_
+conversation's status — so a stray adapter is released only when whatever now
+answers to its name goes idle. On a workspace being actively worked, that is
+indefinitely, and it matches 21128 dying exactly when things went quiet.
+
+So the repair is in two places, and neither alone is enough:
+
+```
+  retire            ends the process rather than trusting the scope —
+                    invalidate, then `Conversation.stop`, which is SIGKILL to
+                    the group
+  settled(key, token)
+                    stops the moment the key means a different conversation.
+                    Without it the orphan is merely rarer, not shorter
+```
+
+`Conversation.stop` was written for the probe and documented as probe-only. It
+is now the only way to end an adapter that `invalidate` has orphaned, which is
+the sort of thing a "probe only" label hides: the probe had the one capability
+the production path turned out to need.
+
+#### The backstop, and where it announces
+
+`retire` closes the routes that were found. The lookup carries a backstop for the
+ones that were not: a lookup runs only when the key is absent from the map, so a
+conversation still registered under it is unreachable by definition — no `get`
+will return it and no holder will be handed it again — and killing it before
+opening another is always right.
+
+The interesting part is not the repair, it is that the repair has to say
+something. Asked where a recurrence would announce itself, the answer was
+nowhere:
+
+```
+  Effect.log across the whole daemon        2 calls, both at startup
+  a warning or health feed                  none
+  a diagnostics call probe:ask could make   none
+  WorkspaceStatus "error"                   about the AGENT, not the daemon
+```
+
+So the only surface that reaches a person is a refusal on a call they made, and
+**refusing here was considered and rejected.** During a legitimate release there
+is a window in which the key is out of the map and the token has not yet been
+dropped; a refusal firing there would break a healthy chat to guard against a bug
+that is already repaired by then. An assertion that can misfire on a correct
+conversation is worse than the thing it guards.
+
+What is left is a log line, which is honest about what it is: evidence rather
+than an announcement. It makes the recurrence question a grep instead of a
+stakeout, which is the whole distance between this being found in a day and being
+found in an afternoon. This daemon has now accumulated processes invisibly twice
+— two adapters on one session, and fourteen daemons at once — and both were found
+by somebody running `ps` on a hunch.
+
+The surface that is actually missing is a diagnostics call: adapters per key,
+claims held, entries live, printed by `probe:ask`. That would have answered this
+in one command. It is filed separately rather than smuggled in here.

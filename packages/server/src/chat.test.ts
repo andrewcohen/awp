@@ -1,4 +1,4 @@
-import { Effect, Exit, Ref, Scope } from "effect";
+import { Effect, Exit, RcMap, Ref, Scope } from "effect";
 import { describe, expect, it } from "vitest";
 import {
   MODE,
@@ -487,17 +487,17 @@ describe("letting go once", () => {
 
 describe("which conversation a key currently means", () => {
   it("lets the holder speak, and the one it replaced say nothing", () => {
-    const keys = generations();
+    const keys = generations<string>();
     const key = "thicket\nlantern";
 
-    const first = keys.take(key);
+    const first = keys.take(key, "the first adapter");
     expect(keys.current(key, first)).toBe(true);
 
     // `/new`, the fork, and an adapter that died all do this: invalidate, then
     // get, so the replacement is taken while the old entry's scope is still
     // closing. The old holder's finalizer runs after, and the one thing it
     // would do is invalidate — the conversation `/new` just opened.
-    const second = keys.take(key);
+    const second = keys.take(key, "the one that replaced it");
     expect(keys.current(key, first)).toBe(false);
     expect(keys.current(key, second)).toBe(true);
 
@@ -510,14 +510,99 @@ describe("which conversation a key currently means", () => {
     expect(keys.current(key, second)).toBe(false);
   });
 
+  it("reads the current token without minting one", () => {
+    const keys = generations<string>();
+    const key = "thicket\nlantern";
+
+    // Nothing has taken it, so there is nothing to hold: a holder asking this
+    // before a lookup has run must not be told it owns the key.
+    expect(keys.at(key)).toBeUndefined();
+    expect(keys.current(key, keys.at(key))).toBe(false);
+
+    const token = keys.take(key, "an adapter");
+    // A reader, not a second `take` — whoever asks is JOINING a conversation
+    // somebody else created, and minting here would retire the holder that
+    // did, which is the bug this exists to prevent rather than cause.
+    expect(keys.at(key)).toBe(token);
+    expect(keys.current(key, keys.at(key))).toBe(true);
+  });
+
+  it("keeps what is on the key, so the lookup has something to kill", () => {
+    const keys = generations<string>();
+    const key = "thicket\nlantern";
+
+    // The repair in the lookup runs when a key still has a conversation on it.
+    // A token says somebody is there; it does not say who, and what the repair
+    // needs is the thing itself.
+    expect(keys.valueAt(key)).toBeUndefined();
+
+    const token = keys.take(key, "the stranded adapter");
+    expect(keys.valueAt(key)).toBe("the stranded adapter");
+
+    keys.drop(key, token);
+    // Dropped means nothing is on the key, so the next lookup kills nothing —
+    // which is the ordinary path and must stay silent.
+    expect(keys.valueAt(key)).toBeUndefined();
+  });
+
   it("does not confuse two workspaces", () => {
-    const keys = generations();
-    const one = keys.take("thicket\nlantern");
-    const two = keys.take("thicket\norchard");
+    const keys = generations<string>();
+    const one = keys.take("thicket\nlantern", "one adapter");
+    const two = keys.take("thicket\norchard", "another");
 
     keys.drop("thicket\nlantern", one);
 
     expect(keys.current("thicket\norchard", two)).toBe(true);
+  });
+});
+
+describe("RcMap.invalidate against an entry somebody holds", () => {
+  it("removes the key and releases nothing, which is why `retire` kills the process", async () => {
+    // Not a test of our code. This pins Effect's behaviour, because the whole
+    // argument for `retire` rests on it and an upgrade that changed it should
+    // break here rather than in a daemon at four in the afternoon.
+    //
+    // Measured first on a live daemon: two adapters, one session id, one pid.
+    const released: Array<string> = [];
+
+    const leftOver = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const map = yield* RcMap.make({
+            lookup: (key: string) =>
+              Effect.acquireRelease(Effect.succeed(`adapter for ${key}`), () =>
+                Effect.sync(() => released.push(key)),
+              ),
+          });
+
+          // The holder that does not let go: the chat panel's subscription, or
+          // `mindUntilSettled` on a turn that has not ended.
+          const holder = yield* Scope.make();
+          yield* Scope.provide(RcMap.get(map, "lantern"), holder);
+
+          yield* RcMap.invalidate(map, "lantern");
+
+          // The key is gone from the map...
+          const present = yield* RcMap.has(map, "lantern");
+          // ...and nothing was released, so the adapter is still running with
+          // nothing pointing at it.
+          const releasedByInvalidate = [...released];
+
+          // So the next lookup misses and builds a SECOND one beside the first.
+          // In the daemon both of these are `claude --resume=<the same id>`.
+          yield* Scope.provide(RcMap.get(map, "lantern"), holder);
+
+          yield* Scope.close(holder, Exit.void);
+          return { present, releasedByInvalidate, afterTheHolderLetGo: [...released] };
+        }),
+      ),
+    );
+
+    expect(leftOver.present).toBe(false);
+    expect(leftOver.releasedByInvalidate).toEqual([]);
+    // Two of them, and only once the holder finally let go — which for an
+    // unbounded `settled` on a busy workspace is a long time.
+    expect(leftOver.afterTheHolderLetGo).toEqual(["lantern", "lantern"]);
   });
 });
 

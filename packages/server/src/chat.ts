@@ -356,12 +356,19 @@ interface Conversation {
   /**
    * Kill the adapter process where it stands.
    *
-   * Only the probe asks, and it asks the one question no fake can answer:
-   * **what does a turn do when the process answering it goes away?** Every
-   * ordinary end — a reply, a refusal, a cancel — comes back through
-   * `session/prompt`. A killed adapter sends nothing at all, which is an
-   * absence rather than an edge, and an absence is what left a conversation
-   * saying `working` for the rest of its life.
+   * Two callers, and they want it for the same reason from opposite ends.
+   * `retire` needs it because **the scope is not a way to end this process**:
+   * `RcMap.invalidate` leaves a held entry's scope open, so an adapter nobody
+   * can reach any longer keeps running unless something signals it. SIGKILL
+   * reaches the whole group, which is what makes `/new` take the agent's
+   * children with it — `probe:child-tree`.
+   *
+   * The probe asks the one question no fake can answer: **what does a turn do
+   * when the process answering it goes away?** Every ordinary end — a reply, a
+   * refusal, a cancel — comes back through `session/prompt`. A killed adapter
+   * sends nothing at all, which is an absence rather than an edge, and an
+   * absence is what left a conversation saying `working` for the rest of its
+   * life.
    *
    * Not `cancel`, which is the adapter being asked nicely and answering. This
    * is the adapter not being there.
@@ -1872,17 +1879,35 @@ export const oneAtATime = (where: Scope.Scope) => {
  *
  * Exported for its test rather than for a second caller, like {@link once}.
  */
-export const generations = () => {
-  const live = new Map<string, symbol>();
+export const generations = <A>() => {
+  const live = new Map<string, { readonly token: symbol; readonly value: A }>();
   return {
-    take: (key: string): symbol => {
+    take: (key: string, value: A): symbol => {
       const token = Symbol(key);
-      live.set(key, token);
+      live.set(key, { token, value });
       return token;
     },
-    current: (key: string, token: symbol): boolean => live.get(key) === token,
+    /**
+     * What the key means right now, for a caller that is about to hold it.
+     *
+     * A reader rather than a second `take`: whoever asks this is joining a
+     * conversation somebody else created, and minting a token here would
+     * silently retire the holder that did.
+     */
+    at: (key: string): symbol | undefined => live.get(key)?.token,
+    /**
+     * What is still on this key, for the one caller that has to end it.
+     *
+     * A token says whether somebody is there; it does not say who, and the
+     * repair in the lookup needs the conversation itself to kill. Carried here
+     * rather than in a second map beside this one, because two maps with one
+     * lifetime is a pair that drifts.
+     */
+    valueAt: (key: string): A | undefined => live.get(key)?.value,
+    current: (key: string, token: symbol | undefined): boolean =>
+      token !== undefined && live.get(key)?.token === token,
     drop: (key: string, token: symbol): void => {
-      if (live.get(key) === token) live.delete(key);
+      if (live.get(key)?.token === token) live.delete(key);
     },
   };
 };
@@ -2096,7 +2121,7 @@ export const make = Effect.gen(function* () {
   const forget = new Map<string, (request: string) => Effect.Effect<void>>();
 
   /** Which adapter each key currently means. See {@link generations}. */
-  const current = generations();
+  const current = generations<Conversation>();
 
   /**
    * The map, named before it exists, because a lookup has to invalidate the
@@ -2110,6 +2135,35 @@ export const make = Effect.gen(function* () {
     lookup: (key: string) =>
       Effect.gen(function* () {
         const [project, workspace] = partsOf(key);
+
+        // ── nothing may already be on this key, and if it is, it is stranded ─
+        //
+        // A lookup runs only when the key is **absent from the map**, so a
+        // conversation still registered here is one nothing can reach: no
+        // `get` will ever return it and no holder will ever be handed it
+        // again. Whether it was orphaned by an `invalidate` this file has not
+        // learned about yet, or is a release already tearing down, the answer
+        // is the same and killing it is always right.
+        //
+        // The backstop rather than the guard — `retire` is what should have
+        // ended it. It is here because the failure mode is silent
+        // accumulation, which this daemon has now been caught by twice: two
+        // adapters on one session, and before that fourteen daemons at once
+        // (see `main.ts`). Both were invisible until somebody ran `ps`.
+        //
+        // Said out loud for that reason. It is the only record a recurrence
+        // leaves, and `zmx history awp-dev-daemon | grep stranded` is the
+        // question this makes answerable without a stakeout.
+        const stranded = current.valueAt(key);
+        const strandedToken = current.at(key);
+        if (stranded !== undefined && strandedToken !== undefined) {
+          yield* Effect.logWarning(
+            `a stranded conversation was still on ${project}/${workspace} — killing it before opening another. This is a bug: something released the key without ending the adapter.`,
+          );
+          current.drop(key, strandedToken);
+          yield* stranded.stop;
+        }
+
         const remembered = yield* Effect.orElseSucceed(
           attempt("read the chat session", () => readSession.all(project, workspace)),
           () => [],
@@ -2291,7 +2345,7 @@ export const make = Effect.gen(function* () {
         // completes this token is no longer the key's. That is how a kill
         // this process asked for is told from an adapter that died: one of
         // them has already given the key up.
-        const token = current.take(key);
+        const token = current.take(key, held);
         yield* Effect.addFinalizer(() => Effect.sync(() => current.drop(key, token)));
         yield* Effect.forkIn(
           Effect.andThen(
@@ -2325,10 +2379,29 @@ export const make = Effect.gen(function* () {
   // that writing to a session nobody is attached to has to fail — a pty is a
   // live thing — where saying something to a conversation nobody has open is
   // perfectly meaningful, and opening one to say it is the right answer.
-  /** Whether a turn is in flight on this key, and holding on until none is. */
-  const settled = (key: string) =>
+  /**
+   * Whether a turn is in flight on this key, and holding on until none is.
+   *
+   * ── the status is the key's, so the hold has to name the conversation ────
+   *
+   * `statuses` is keyed by workspace, not by adapter, and `WAITS` has no
+   * `holdsFor` — a turn in progress is never killed. Those two are right on
+   * their own and wrong together: once the key has been retired and re-got,
+   * this poll is reading the **replacement's** status, so the holder of the
+   * outgoing conversation waits for a turn that is not its own. An adapter
+   * nobody can reach is then kept alive by whatever now answers to its name,
+   * and on a busy workspace that is indefinitely.
+   *
+   * So the token is part of the question. The moment the key means a different
+   * conversation this holder has nothing left to protect: the turn it was
+   * minding belonged to a process that has already been retired.
+   */
+  const settled = (key: string, token: symbol | undefined) =>
     settledWhen(
-      Effect.map(SubscriptionRef.get(statuses), (all) => all.get(key) !== undefined),
+      Effect.map(
+        SubscriptionRef.get(statuses),
+        (all) => current.current(key, token) && all.get(key) !== undefined,
+      ),
       WAITS,
     );
 
@@ -2380,7 +2453,67 @@ export const make = Effect.gen(function* () {
   const mindUntilSettled = (key: string) =>
     // One holder per conversation: a steer arriving mid-turn must not take a
     // second reference that nothing will release.
-    alone(key, Effect.scoped(Effect.andThen(RcMap.get(conversations, key), settled(key))));
+    alone(
+      key,
+      Effect.scoped(
+        Effect.gen(function* () {
+          yield* RcMap.get(conversations, key);
+          // Read after the acquire, so it is the conversation this holder is
+          // actually holding rather than whatever the key meant a moment ago.
+          yield* settled(key, current.at(key));
+        }),
+      ),
+    );
+
+  /**
+   * Throw this key's conversation away, and mean it.
+   *
+   * ── `RcMap.invalidate` does not release a conversation anybody holds ──────
+   *
+   * Measured on a live daemon and then confirmed in Effect's own source
+   * (`RcMap.ts`, 4.0.0-rc.112):
+   *
+   * ```ts
+   *   MutableHashMap.remove(self.state.map, key)
+   *   if (entry.refCount > 0) return      // ← key gone, scope NOT closed
+   *   if (entry.fiber) yield* Fiber.interrupt(entry.fiber)
+   *   yield* Scope.close(entry.scope, Exit.void)
+   * ```
+   *
+   * The key is removed **unconditionally** and the scope is closed only if
+   * nothing holds it. So an invalidate against a held conversation leaves the
+   * adapter running with the map no longer pointing at it: unreachable,
+   * unkillable, and counted by nothing. The next `get` misses, runs a fresh
+   * lookup, and opens a **second** adapter on the same stored session — which
+   * is two `claude` processes on one transcript, the thing `chat_claims`
+   * exists to prevent and the one case it cannot see, because both holders
+   * are this pid.
+   *
+   * Two adapters were found alive that way, twice in eleven minutes. It is not
+   * a slow close: `probe:adapter-release` measures every close this file makes
+   * returning in single-digit milliseconds and killing its child, bun and all.
+   * The scope is never closed at all.
+   *
+   * So the process is ended here rather than left to a holder that may never
+   * let go. `getOption` and never `get`: the point is to end what is there,
+   * and `get` would spawn an adapter for the privilege of killing it.
+   *
+   * The token goes too, which is what releases anyone still minding a turn on
+   * this key — see `settled`. Without that the holder waits on the status of
+   * whatever takes the key next.
+   */
+  const retire = (key: string) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const was = current.at(key);
+        const one = yield* Effect.orElseSucceed(RcMap.getOption(conversations, key), () =>
+          Option.none<Conversation>(),
+        );
+        yield* RcMap.invalidate(conversations, key);
+        if (was !== undefined) current.drop(key, was);
+        if (Option.isSome(one)) yield* one.value.stop;
+      }),
+    );
 
   const held = <A>(
     project: string,
@@ -2412,7 +2545,13 @@ export const make = Effect.gen(function* () {
           // conversation, so there is nothing running to cut short, and a job
           // is in no position to decide to stop somebody's agent.
           one.send(text, `brief-${crypto.randomUUID()}`, false),
-          settled(keyOf(project, workspace)),
+          // `suspend`, so the token is read once the conversation exists — and
+          // read at all, so a job waiting on a brief lets go if the chat is
+          // retired underneath it rather than minding a stranger's turn.
+          Effect.suspend(() => {
+            const key = keyOf(project, workspace);
+            return settled(key, current.at(key));
+          }),
         ),
       ),
 
@@ -2442,7 +2581,7 @@ export const make = Effect.gen(function* () {
     openTerminal: (project: string, workspace: string) =>
       Effect.gen(function* () {
         const key = keyOf(project, workspace);
-        yield* RcMap.invalidate(conversations, key);
+        yield* retire(key);
         yield* Ref.update(forkNext, (all) => new Set(all).add(key));
         return yield* Effect.scoped(
           Effect.map(RcMap.get(conversations, key), (one) => one.sessionId),
@@ -2486,7 +2625,7 @@ export const make = Effect.gen(function* () {
     fresh: (project: string, workspace: string) =>
       Effect.gen(function* () {
         const key = keyOf(project, workspace);
-        yield* RcMap.invalidate(conversations, key);
+        yield* retire(key);
         // Ignored, like every other write to this table. A row that could not
         // be deleted means the next open continues the old conversation, which
         // is the previous behaviour rather than a broken one — and refusing to
