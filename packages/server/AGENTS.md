@@ -579,3 +579,16 @@ adapter is spawned — `session-claim.ts`. Two guards, in this order:
 
 `bun run probe:claim` spawns a second process against one store and prints what
 it was told. It runs no agent and writes nothing that outlives it.
+
+### Nothing an agent starts outlives the conversation
+
+`ChildProcessSpawner` makes each child the leader of its **own process group**,
+and the kill goes to the group — so a dev server an agent backgrounds dies with
+the adapter, half a second after the `RcMap` releases it. Measured, because
+POSIX would have orphaned it and the opposite is the reasonable guess:
+`bun run probe:child-tree`.
+
+`mindUntilSettled` holds a conversation for the length of a **turn**, and a
+backgrounded command ends its turn at once, so nothing is holding it. **Anything
+meant to outlive a turn needs a session of its own** — holding the adapter open
+longer only moves the deadline.

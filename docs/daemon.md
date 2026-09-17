@@ -2312,3 +2312,56 @@ is not exotic, it is what the tests do by default. `list` reverses before a
 stable sort, so insertion order breaks it, and `show` deletes an address from the
 map before setting it, so a rewrite takes the newest position rather than keeping
 the one its first writing had.
+
+## What dies with the adapter, measured
+
+Reported as "long-lived tasks an agent starts end up dying a lot". Two things
+had to be told apart, because they have different cures: whether the adapter is
+killed at all, and how far the killing reaches.
+
+The first half was already written down in `chat.ts` — `RcMap` releases a
+conversation two minutes after its last reference, the reference is the chat
+panel's subscription, and Base UI unmounts a hidden tab. `mindUntilSettled`
+holds a reference for the length of a **turn**, which is what stopped agents
+being shot mid-thought. What it does not do, and was never meant to, is hold
+anything open for a process that outlives the turn it was started in — and a
+backgrounded command ends its turn at once.
+
+The second half was a guess until `bun run probe:child-tree` asked. POSIX does
+not kill an orphan when its parent dies, so an agent's backgrounded dev server
+surviving the adapter was a perfectly reasonable expectation. It does not:
+
+```
+  this probe   pid 54267    group 54247
+  child        pid 54268    group 54268    gone
+  grand        pid 54269    group 54268    gone
+```
+
+The child's group id **is its own pid**, and it differs from the spawner's. So
+`ChildProcessSpawner` starts each child as the leader of a new process group,
+and the kill goes to the group rather than to the pid — which is why a
+grandchild that nothing signalled directly is gone half a second later.
+
+That settles which problem it is. Every descendant of the adapter is in one
+group with it, so **nothing an agent starts can outlive the conversation**, and
+no amount of holding the adapter open longer fixes it — it only moves the
+deadline. A process that must survive belongs to the daemon, in a zmx session of
+its own, which is what the services task is for.
+
+The probe runs two `sh` processes and a `ps`, never invokes zmx and kills what
+it planted, so it is safe to run beside a live session.
+
+### The other half of the question: does an unanswered permission hold it open
+
+It would. `session/request_permission` becomes a `permission` update carrying
+`permission-<id>`, the statuses fold adds that id to `asks`, a non-empty `asks`
+reports `waiting`, and `settled` treats a reported status as a turn in flight —
+so the reference is held. Bounded, like everything else there, by
+`WAITS.holdsFor`: a question left unanswered for twenty minutes stops being
+minded, and the agent asking it is released two minutes later.
+
+**It is inert on this machine**, which is why it was not measured end to end:
+`defaults.mode` is `auto` and the agent line carries `--permission-mode auto`,
+and `chat.test.ts` records — as a measurement, against a real adapter — that in
+`auto` the request never arrives at all. So `working` is the only status holding
+a conversation open here, and a turn that backgrounds something is over.
