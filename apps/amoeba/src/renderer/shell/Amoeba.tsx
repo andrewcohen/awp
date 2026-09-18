@@ -218,34 +218,6 @@ const styles = stylex.create({
       },
     },
   },
-  /**
-   * Not looked at yet: a wall around a hole, which is `◉` with a body.
-   *
-   * The fill goes rather than a second element going in, so there is nothing
-   * to paint the hole *with* — the row's own ground shows through, and a
-   * selected row has a different one. An inner span filled with `base` would
-   * be a plug that is the wrong colour on exactly the row somebody is on.
-   *
-   * The bud goes with it. Two overlapping rings at this size is not a bud on
-   * a body, it is a smudge with a hole in it — and the ring is already
-   * carrying "not looked at" on its own.
-   */
-  hollow: {
-    "::before": {
-      backgroundColor: "transparent",
-      // 2px and not the 1.5 this was first written at. Chromium reports a used
-      // border width snapped to whole device pixels, so a hairline ring is at
-      // the mercy of the display it lands on — and the one thing this shape
-      // has to keep doing is saying "not looked at" at a glance, in a column
-      // somebody is scanning.
-      borderWidth: "2px",
-      borderStyle: "solid",
-      borderColor: "currentColor",
-    },
-    "::after": { opacity: 0 },
-  },
-  /** The ring, at rest, is `◉` — which is wider than `●` and drawn as such. */
-  hollowRest: { transform: "scale(0.78)" },
 });
 
 /**
@@ -259,17 +231,6 @@ const styles = stylex.create({
 export const Amoeba = ({
   /** An agent is mid-turn. Anything else is the bullet. */
   crawling,
-  unread,
 }: {
   readonly crawling: boolean;
-  readonly unread: boolean;
-}) => (
-  <span
-    {...stylex.props(
-      styles.body,
-      crawling && styles.crawling,
-      unread && styles.hollow,
-      unread && !crawling && styles.hollowRest,
-    )}
-  />
-);
+}) => <span {...stylex.props(styles.body, crawling && styles.crawling)} />;

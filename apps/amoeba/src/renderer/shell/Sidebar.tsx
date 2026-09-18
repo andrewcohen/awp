@@ -365,10 +365,15 @@ const styles = stylex.create({
     transitionDuration: { default: timing.enter, "@media (prefers-reduced-motion: reduce)": "0s" },
     transitionTimingFunction: timing.ease,
   },
-  // One per state, and named for the state rather than the colour so a theme
-  // can move them. `exited` deliberately has none: a session that ended is what
-  // the muted default already says, and giving it a hue would put a colour on
-  // the strip for the one thing nobody needs to look at.
+  // Named for the state rather than the colour, so a theme can move them.
+  // `idle` and `exited` deliberately have none — see `Dot`: a row that wants
+  // nothing is drawn as nothing, and a hue for "finished a while ago" was ink
+  // spent on the rows nobody is looking for.
+  //
+  // `dotWorking` is the unread mark too. One green, two shapes: an agent
+  // working and its result unlooked-at are the same thread's business, and
+  // giving the second a hue of its own put a third colour on the strip for a
+  // distinction the *shape* already makes.
   dotWorking: { color: colors.live },
   dotWaiting: { color: colors.waiting },
   /**
@@ -406,19 +411,18 @@ const styles = stylex.create({
     },
   },
   dotError: { color: colors.warn },
-  dotIdle: { color: colors.muted },
-  // A workspace nothing has reported on, with an unread mark. There is a state
-  // to draw and no hue for it, so the unread colour is the whole signal — which
-  // is the only case it may be, and the reason this is not applied over a known
-  // status. The first version did apply it over one, and the measurement said
-  // so before a screenshot could have:
-  //
-  //   "working, unread"   rgb(138, 173, 244)   ← the ready blue, not the green
-  //
-  // Two facts on one mark only works if they use different channels. Colouring
-  // by unread spends the channel the state was using and leaves a strip where
-  // every row that needs attention is the same colour whatever it needs.
-  dotUnknownUnread: { color: colors.ready },
+  /**
+   * Read, idle, exited, or never reported on — the row has nothing to say.
+   *
+   * Transparent rather than absent. The box keeps its width, so every name on
+   * the strip starts at one left edge whatever its row is doing, and `color`
+   * is already transitioned on `dot` — so a turn ending fades its mark out
+   * instead of taking it away between two frames.
+   *
+   * `colors.muted` was here, and it is what this replaced: a grey bullet on
+   * every quiet row is ink saying "this row exists", which the row said.
+   */
+  dotBlank: { color: "transparent" },
 
   meta: {
     display: "flex",
@@ -477,63 +481,81 @@ const styles = stylex.create({
   reason: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
 });
 
-// Two facts on one mark: the *hue* is the state, and the *shape* is whether it
-// has been read. That pairing is deliberate — a colour alone excludes anyone
-// who cannot see the difference between the amber and the green, and a shape
-// alone would need five of them, which is a legend nobody has.
+// Three states, and the third of them is the absence of a mark.
 //
-// Both are `Amoeba` now, and there is no glyph table left. `●` and `◉` were
-// literals here for as long as the mark was text; a state change was then a
-// change of *text node*, which nothing can transition. The same two shapes are
-// a border-radius and a fill on one element, which can.
+//   working        a green amoeba, wobbling   an agent is mid-turn
+//   unread         a green bullet, still      it finished, nobody has looked
+//   anything else  nothing at all
+//
+// Two more are kept and neither is a state of the *thread*: `waiting` is an
+// amber bullet breathing, because an agent blocked on a person is the one row
+// that cannot make progress until somebody acts on it, and folding it into
+// the green would lose the difference between "answer this" and "read this".
+// `error` is red, and nothing in this process writes it — see
+// workspace-state.ts.
+//
+// ── why "read" is drawn as nothing ─────────────────────────────────────────
+//
+// The strip carried five hues and two shapes, and the two states worth acting
+// on were a green oval and a green ring — told apart by a 2px wall on an
+// eleven pixel mark. Everything else on it was a mark for a row that wanted
+// nothing: `idle`, `exited`, and the fallback for a workspace nothing had
+// reported on, which is MOST rows on a real machine. A column where every row
+// has ink is a column with no signal in it.
+//
+// So a row that wants nothing says nothing, and the ink that is left means
+// "this one". Liveness is not lost with it — the kinds chip on line two
+// already says what is running, and a stopped row says so in words.
+//
+// The mark is drawn transparent rather than removed. The box stays, so the
+// names stay on one left edge whatever the row is doing, and `color` is
+// already transitioned on `dot` — so a turn ending fades its mark out instead
+// of taking it away between frames.
 
-const DOT: Record<WorkspaceStatus, { readonly style: stylex.StyleXStyles; readonly say: string }> =
-  {
-    working: { style: styles.dotWorking, say: "working" },
-    waiting: { style: styles.dotWaiting, say: "waiting for you" },
-    error: { style: styles.dotError, say: "error" },
-    idle: { style: styles.dotIdle, say: "idle" },
-    exited: { style: styles.dotIdle, say: "exited" },
-  };
+const SAY: Partial<Record<WorkspaceStatus, string>> = {
+  working: "working",
+  waiting: "waiting for you",
+  error: "error",
+};
 
 const Dot = ({
-  live,
   status,
   unread,
 }: {
-  /** A session is running, which is all this knew before facts existed. */
-  readonly live: boolean;
   readonly status: WorkspaceStatus | undefined;
   readonly unread: boolean;
 }) => {
-  // The fallback is not "idle". A workspace nothing has ever reported on is a
-  // different thing from one an agent has finished in, and drawing them alike
-  // would claim knowledge this does not have — so an unknown state keeps the
-  // one fact that is certain, which is whether anything is running.
-  const known = status === undefined ? undefined : DOT[status];
-  const style = known?.style ?? (live ? styles.dotWorking : styles.dotIdle);
-  const say = known?.say ?? (live ? "running" : "not running");
-  // An agent working right now, and only that. A workspace nothing has
-  // reported on falls back to "something is live", which is most rows on a
-  // real machine — see `Amoeba` on why the shape is not spent there.
+  // Precedence, and it is an order rather than a table: what an agent is doing
+  // now outranks what it left behind. A row can be working AND unread — the
+  // previous turn's result is still unlooked-at — and the answer to "what is
+  // this row" is the turn in flight.
   const crawling = status === "working";
   // What is left of the pair that used to move. See `breathing`.
   const moving = status === "waiting";
+  const style = crawling
+    ? styles.dotWorking
+    : moving
+      ? styles.dotWaiting
+      : status === "error"
+        ? styles.dotError
+        : unread
+          ? styles.dotWorking
+          : styles.dotBlank;
+  const named = status === undefined ? undefined : SAY[status];
+  const say = named ?? (unread ? "done, not read" : undefined);
 
   return (
     <span
       // The name, not the glyph. A screen reader reading "●" says "black
-      // circle", which is a description of the ink rather than of the row.
-      role="img"
-      aria-label={unread ? `${say}, unread` : say}
-      {...stylex.props(
-        styles.dot,
-        style,
-        moving && styles.breathing,
-        known === undefined && unread && styles.dotUnknownUnread,
-      )}
+      // circle", which is a description of the ink rather than of the row. A
+      // blank mark announces nothing: there is no state here to read out, and
+      // "read" said on every quiet row is the same noise the ink was.
+      role={say === undefined ? undefined : "img"}
+      aria-label={say}
+      aria-hidden={say === undefined}
+      {...stylex.props(styles.dot, style, moving && styles.breathing)}
     >
-      <Amoeba crawling={crawling} unread={unread} />
+      <Amoeba crawling={crawling} />
     </span>
   );
 };
@@ -606,7 +628,6 @@ function Row({
     pair !== undefined && at !== undefined
       ? pair.project === at.project && pair.workspace === at.workspace
       : workspace.sessions.some((session) => session.name === selected);
-  const live = workspace.sessions.some((session) => !session.ended);
   const primary = openable(workspace);
   const several = workspace.sessions.length > 1;
   // Nothing is running here, and it is one of ours. A foreign row IS its
@@ -778,7 +799,7 @@ function Row({
               shut && styles.titleShut,
             )}
           >
-            <Dot live={live} status={facts?.status} unread={facts?.unread === true} />
+            <Dot status={facts?.status} unread={facts?.unread === true} />
             <span
               onDoubleClick={(event) => {
                 // The row's own click opens the workspace, and a double click

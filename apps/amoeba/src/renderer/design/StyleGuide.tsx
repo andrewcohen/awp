@@ -1306,9 +1306,11 @@ export function StyleGuide() {
                 </Case>
 
                 {/* The one mark in the window that cannot be a screenshot, and
-                    therefore the one most worth having a fixture for: `working`
-                    needs an agent mid-turn to see at all, and `working, unread`
-                    needs one that answered while somebody was looking away. */}
+                    therefore the one most worth having a fixture for: it needs
+                    an agent mid-turn to see at all. The sidebar draws the same
+                    element still and green for a finished turn nobody has read
+                    yet, and transparent for everything else — so the two states
+                    worth pressing are the two here. */}
                 <Case name="amoeba" wide>
                   <button
                     type="button"
@@ -1322,14 +1324,10 @@ export function StyleGuide() {
                     {crawling ? "settle" : "set to work"}
                   </button>
                   <span {...stylex.props(styles.mark)}>
-                    <Amoeba crawling={crawling} unread={false} />
-                  </span>
-                  <span {...stylex.props(styles.t14)}>{crawling ? "working" : "idle"}</span>
-                  <span {...stylex.props(styles.markWaiting)}>
-                    <Amoeba crawling={crawling} unread />
+                    <Amoeba crawling={crawling} />
                   </span>
                   <span {...stylex.props(styles.t14)}>
-                    {crawling ? "working, unread" : "waiting, unread"}
+                    {crawling ? "working" : "done, not read"}
                   </span>
                 </Case>
 
