@@ -11,6 +11,7 @@ import {
   optionsOf,
   permissionOf,
   settledWhen,
+  untilQuiet,
   updateOf,
   oneAtATime,
 } from "./chat";
@@ -1028,6 +1029,84 @@ describe("one at a time, per conversation", () => {
       ),
     );
     expect(held).toBe(2);
+  });
+});
+
+// ── a queued message is a SECOND turn, and the hold was armed for the first ─
+//
+// `send` arms `mindUntilSettled`, and `oneAtATime` makes that a no-op while a
+// hold is already running. That is right for a **steer**: it is injected into
+// the turn already going, so the holder minding that turn is minding this
+// message too — which is what the test above pins.
+//
+// A queued message is not that. The adapter keeps it, finishes the turn it
+// arrived during, and then promotes its queue head and notifies nobody (see
+// `conversation.ts`). So the second turn begins just after the holder that
+// would have minded it watched the first one end and let go, and the only
+// thing left holding the conversation is whatever window is subscribed.
+//
+// A window is free to look away. `watchChat` is keyed on the workspace, so
+// switching threads tears `ChatOpen` down — and then `idleTimeToLive` kills an
+// adapter that is mid-turn.
+//
+// Measured on this daemon, 2026-09-18: an adapter respawned at the second a
+// tool call died, with no `stranded` warning in the log — so the conversation
+// was released cleanly rather than orphaned, with a turn in flight. The TTL
+// here is 100ms against the daemon's two minutes; nothing else is scaled.
+describe("the turn a queued message starts", () => {
+  it("is held too, rather than left to whoever happens to be watching", async () => {
+    const released: Array<string> = [];
+
+    const stillThere = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const scope = yield* Effect.scope;
+          const map = yield* RcMap.make({
+            lookup: (key: string) =>
+              Effect.acquireRelease(Effect.succeed(key), () =>
+                Effect.sync(() => released.push(key)),
+              ),
+            idleTimeToLive: "100 millis",
+          });
+
+          const working = yield* Ref.make(false);
+          const hold = oneAtATime(scope);
+          // `mindUntilSettled`, with the conversation's status standing in for
+          // the `SubscriptionRef` the daemon polls.
+          const mind = hold(
+            "harbor-works",
+            Effect.scoped(
+              Effect.andThen(
+                RcMap.get(map, "harbor-works"),
+                untilQuiet(Ref.get(working), { startsWithin: "600 millis" }, "600 millis"),
+              ),
+            ),
+          );
+
+          // Somebody sends, and the turn starts.
+          yield* mind;
+          yield* Ref.set(working, true);
+          yield* Effect.sleep("250 millis");
+
+          // Somebody types again while it is still going. The adapter queues
+          // it; `send` arms the hold and `oneAtATime` drops it on the floor.
+          yield* mind;
+
+          // The first turn ends...
+          yield* Ref.set(working, false);
+          yield* Effect.sleep("120 millis");
+          // ...and the adapter promotes the message it was holding.
+          yield* Ref.set(working, true);
+
+          // Well past the TTL, with that turn still running. Nobody is
+          // subscribed — this is the window having switched threads.
+          yield* Effect.sleep("400 millis");
+          return released.length === 0;
+        }),
+      ),
+    );
+
+    expect(stillThere).toBe(true);
   });
 });
 

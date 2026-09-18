@@ -128,6 +128,18 @@ import { childEnv } from "./zmx-session";
 export const WAITS = { startsWithin: "30 seconds" } as const;
 
 /**
+ * How long a settled conversation is minded for, in case another turn is next.
+ *
+ * A queued message is promoted by the adapter the instant the turn it arrived
+ * during ends, and nothing announces it — so the turn it starts would begin
+ * unheld. See `mindUntilSettled`. Three seconds is an adapter's own latency
+ * and nothing like a person's: a conversation somebody has actually finished
+ * with is released three seconds later than it was, against a TTL of two
+ * minutes.
+ */
+export const PROMOTES_WITHIN = "3 seconds";
+
+/**
  * Hold on until a turn has started and then finished.
  *
  * Takes a reading rather than the ref, which is what makes the two bounds
@@ -150,7 +162,7 @@ export const WAITS = { startsWithin: "30 seconds" } as const;
 export const settledWhen = (
   busy: Effect.Effect<boolean>,
   waits: { readonly startsWithin: Duration.Input; readonly holdsFor?: Duration.Input },
-): Effect.Effect<void> =>
+): Effect.Effect<boolean> =>
   Effect.gen(function* () {
     const until = (wanted: boolean) =>
       Effect.andThen(Effect.sleep("100 millis"), busy).pipe(
@@ -162,13 +174,61 @@ export const settledWhen = (
     // waiting the whole window would be a step asleep for twenty minutes over
     // an adapter that ignored what it was told.
     if (Option.isNone(yield* Effect.timeoutOption(until(true), waits.startsWithin))) {
-      return;
+      return false;
     }
     // No bound unless a caller asks for one. See WAITS: the turn ending is the
     // only thing that ends this, and a clock here kills an agent mid-edit.
     yield* waits.holdsFor === undefined
       ? until(false)
       : Effect.timeoutOption(until(false), waits.holdsFor);
+    // Whether there was anything to wait for. The caller minding a live
+    // conversation asks again on a `true`, because a queue can hold more than
+    // one message — see `mindUntilSettled`.
+    return true;
+  });
+
+/**
+ * Settled, and still settled a moment later.
+ *
+ * ── a queued message is a SECOND turn, and the hold was armed for the first ─
+ *
+ * `alone` is right for a **steer**: it joins the turn already running, so the
+ * holder minding that turn is minding the steer too. A queued message is the
+ * other thing entirely — the adapter keeps it, ends the turn it arrived
+ * during, then promotes its queue head and notifies nobody. So {@link
+ * settledWhen} returns on a conversation that is about to be busy again, the
+ * holder lets the key go on the way out, and that second turn runs held by
+ * nothing but whatever window happens to be subscribed.
+ *
+ * A window is free to look away. `watchChat` is keyed on the workspace, so
+ * switching threads tears `ChatOpen` down, and `idleTimeToLive` then kills an
+ * adapter that is mid-turn. Measured on this daemon on 2026-09-18: an adapter
+ * respawned at the second a tool call died, with no `stranded` warning in the
+ * log — released cleanly, with a turn in flight.
+ *
+ * So the hold ends on a conversation that stays quiet rather than on the first
+ * quiet reading. Each pass is the minding of whatever turn it found, and the
+ * first pass that finds none is the one that ends it — which is also what
+ * makes a queue of several messages one hold rather than a race per message.
+ *
+ * Exported for its test: the composition is the part that was wrong, and a
+ * test that rebuilt it out of the pieces would be testing its own copy.
+ */
+export const untilQuiet = (
+  busy: Effect.Effect<boolean>,
+  waits: { readonly startsWithin: Duration.Input; readonly holdsFor?: Duration.Input },
+  promotesWithin: Duration.Input,
+): Effect.Effect<void> =>
+  Effect.gen(function* () {
+    yield* settledWhen(busy, waits);
+    let again = true;
+    yield* Effect.whileLoop({
+      while: () => again,
+      body: () => settledWhen(busy, { startsWithin: promotesWithin }),
+      step: (found) => {
+        again = found;
+      },
+    });
   });
 
 /** Anything that stopped a conversation being had. */
@@ -2396,14 +2456,13 @@ export const make = Effect.gen(function* () {
    * conversation this holder has nothing left to protect: the turn it was
    * minding belonged to a process that has already been retired.
    */
-  const settled = (key: string, token: symbol | undefined) =>
-    settledWhen(
-      Effect.map(
-        SubscriptionRef.get(statuses),
-        (all) => current.current(key, token) && all.get(key) !== undefined,
-      ),
-      WAITS,
+  const busyOn = (key: string, token: symbol | undefined) =>
+    Effect.map(
+      SubscriptionRef.get(statuses),
+      (all) => current.current(key, token) && all.get(key) !== undefined,
     );
+  const settled = (key: string, token: symbol | undefined) =>
+    settledWhen(busyOn(key, token), WAITS);
 
   /**
    * Hold the adapter open for the length of a turn, whoever is watching.
@@ -2460,7 +2519,11 @@ export const make = Effect.gen(function* () {
           yield* RcMap.get(conversations, key);
           // Read after the acquire, so it is the conversation this holder is
           // actually holding rather than whatever the key meant a moment ago.
-          yield* settled(key, current.at(key));
+          const token = current.at(key);
+          // Settled, and still settled a moment later — see `untilQuiet`. The
+          // plain `settled` would let go on the reading between a turn ending
+          // and the queued message behind it starting.
+          yield* untilQuiet(busyOn(key, token), WAITS, PROMOTES_WITHIN);
         }),
       ),
     );
