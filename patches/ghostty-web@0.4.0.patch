@@ -1,5 +1,8 @@
+diff --git a/node_modules/ghostty-web/.bun-tag-b7208e32b38a474 b/.bun-tag-b7208e32b38a474
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/dist/ghostty-web.js b/dist/ghostty-web.js
-index a4ca427b95288e70c782ce303013cd644893dcec..588d05dd12ad4789adee0b849ba779c44058aecc 100644
+index a4ca427b95288e70c782ce303013cd644893dcec..1371eb653eaadeac479416d7e21f8cdb27eaa034 100644
 --- a/dist/ghostty-web.js
 +++ b/dist/ghostty-web.js
 @@ -1363,7 +1363,7 @@ class $ {
@@ -20,7 +23,32 @@ index a4ca427b95288e70c782ce303013cd644893dcec..588d05dd12ad4789adee0b849ba779c4
        const M = C + this.metrics.baseline + 2;
        this.ctx.strokeStyle = this.ctx.fillStyle, this.ctx.lineWidth = 1, this.ctx.beginPath(), this.ctx.moveTo(E, M), this.ctx.lineTo(E + I, M), this.ctx.stroke();
      }
-@@ -2961,3 +2961,108 @@ export {
+@@ -2387,7 +2387,7 @@ class IA {
+    */
+   writeInternal(A, B) {
+     var g;
+-    this.wasmTerm.write(A), this.processTerminalResponses(), typeof A == "string" && A.includes("\x07") ? this.bellEmitter.fire() : A instanceof Uint8Array && A.includes(7) && this.bellEmitter.fire(), (g = this.linkDetector) == null || g.invalidateCache(), this.viewportY !== 0 && this.scrollToBottom(), typeof A == "string" && A.includes("\x1B]") && this.checkForTitleChange(A), B && requestAnimationFrame(B);
++    this.awpDirtyAt = awpNow(), this.wasmTerm.write(A), this.processTerminalResponses(), typeof A == "string" && A.includes("\x07") ? this.bellEmitter.fire() : A instanceof Uint8Array && A.includes(7) && this.bellEmitter.fire(), (g = this.linkDetector) == null || g.invalidateCache(), this.viewportY !== 0 && this.scrollToBottom(), typeof A == "string" && A.includes("\x1B]") && this.checkForTitleChange(A), B && requestAnimationFrame(B);
+   }
+   /**
+    * Write data with newline
+@@ -2639,9 +2639,12 @@ class IA {
+   startRenderLoop() {
+     const A = () => {
+       if (!this.isDisposed && this.isOpen) {
+-        this.renderer.render(this.wasmTerm, !1, this.viewportY, this, this.scrollbarOpacity);
+-        const B = this.wasmTerm.getCursor();
+-        B.y !== this.lastCursorY && (this.lastCursorY = B.y, this.cursorMoveEmitter.fire()), this.animationFrameId = requestAnimationFrame(A);
++        if (awpShouldRender(this)) {
++          this.renderer.render(this.wasmTerm, !1, this.viewportY, this, this.scrollbarOpacity);
++          const B = this.wasmTerm.getCursor();
++          B.y !== this.lastCursorY && (this.lastCursorY = B.y, this.cursorMoveEmitter.fire());
++        }
++        this.animationFrameId = requestAnimationFrame(A);
+       }
+     };
+     A();
+@@ -2961,3 +2964,173 @@ export {
    CA as getGhostty,
    oA as init
  };
@@ -128,4 +156,69 @@ index a4ca427b95288e70c782ce303013cd644893dcec..588d05dd12ad4789adee0b849ba779c4
 +  if (w2) { const t = gauge(w2); ctx.fillRect(x0, midY - Math.round(t / 2), midX - x0 + Math.round(t / 2), t); }
 +  if (e) { const t = gauge(e); ctx.fillRect(midX - Math.round(t / 2), midY - Math.round(t / 2), x1 - midX + Math.round(t / 2), t); }
 +  return true;
++}
++
++
++// --- awp: render when something changed, not every frame -------------------
++//
++// The render loop above called `renderer.render` unconditionally for as long
++// as the terminal was open — no dirty check anywhere in it. Measured over CDP
++// on a window with one idle terminal in it: ~100 animation frames a second,
++// each ending in a FULL-WINDOW paint (1692x1370, twice a frame, 1000 paints
++// in five seconds), which three backdrop-filter surfaces then re-blur over.
++// The renderer never reached idle. That is the whole of the window's cost
++// when nothing at all is happening.
++//
++// The loop itself is left running. A rAF that returns immediately is cheap;
++// what was expensive was the paint, and stopping the loop would mean owning
++// the question of when to start it again.
++//
++// ── a safety net rather than an exhaustive list of what dirties ───────────
++//
++// The honest way to do this is a dirty flag set by every mutation, and the
++// honest problem with it is that this is a minified bundle and a mutation
++// missed is a terminal that never repaints. So the flag is an optimisation
++// and the CLOCK is the guarantee: anything nobody thought of still reaches
++// the screen within IDLE_MS. Wrong here costs latency, not correctness.
++//
++//   output just arrived     render every frame for BUSY_MS after a write —
++//                           this is the case that has to be smooth
++//   the viewport moved      scrolling, which writes nothing
++//   the scrollbar is fading its opacity is animated by a timer, so it moves
++//                           with no write behind it
++//   otherwise               IDLE_MS, which is the cursor blink's cadence and
++//                           the floor for anything unaccounted for
++const AWP_BUSY_MS = 150;
++const AWP_IDLE_MS = 200;
++
++const awpNow = () => (typeof performance === "object" ? performance.now() : Date.now());
++
++function awpShouldRender(term) {
++  const now = awpNow();
++  if (term.awpViewportY !== term.viewportY) {
++    term.awpViewportY = term.viewportY;
++    term.awpRenderedAt = now;
++    return true;
++  }
++  // A scrollbar mid-fade animates on a timer with nothing written behind it.
++  if (term.scrollbarOpacity > 0) {
++    term.awpRenderedAt = now;
++    return true;
++  }
++  // Selection is dragged with the pointer and writes nothing either. Guarded
++  // with `?.` because it is one more name in a minified bundle: if it is not
++  // there the clock below still covers it, a little less smoothly.
++  if (term.selectionManager?.isSelecting === true) {
++    term.awpRenderedAt = now;
++    return true;
++  }
++  if (now - (term.awpDirtyAt ?? 0) < AWP_BUSY_MS) {
++    term.awpRenderedAt = now;
++    return true;
++  }
++  if (now - (term.awpRenderedAt ?? 0) >= AWP_IDLE_MS) {
++    term.awpRenderedAt = now;
++    return true;
++  }
++  return false;
 +}

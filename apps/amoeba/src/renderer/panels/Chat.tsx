@@ -1,4 +1,4 @@
-import type { ChatConfigOption } from "@awp-kit/protocol";
+import type { ChatConfigOption, ChatUpdate } from "@awp-kit/protocol";
 import * as stylex from "@stylexjs/stylex";
 import { ArrowDownIcon } from "@phosphor-icons/react/ArrowDown";
 import { AnimatePresence, motion } from "motion/react";
@@ -249,7 +249,7 @@ const Panel = ({
    * to the end.
    */
   const dock = useRef<HTMLDivElement>(null);
-  const [under, setUnder] = useState(0);
+
   // The activity ledge carries the composer with it, so it moves like a
   // panel rather than like a row — see `heavy`.
   const ledgeSpring = useSpring(heavy);
@@ -356,26 +356,54 @@ const Panel = ({
     [onFresh, deliver],
   );
 
-  useEffect(
-    () =>
-      watchChat(
-        project,
-        workspace,
-        (update) => {
-          setHeld((current) => fold(current, update));
-          // An update is proof the conversation opened. Clearing here rather
-          // than on subscribe keeps the sentence on screen for as long as it
-          // is true, including across the retries underneath.
-          setRefused(undefined);
-        },
-        // A resubscription replays the conversation from the start — see
-        // `watchChat`. Emptied first, so what arrives rebuilds the panel
-        // rather than doubling it.
-        () => setHeld(nothing),
-        setRefused,
-      ),
-    [project, workspace],
-  );
+  useEffect(() => {
+    // ── one state update per frame, not one per chunk ─────────────────────
+    //
+    // An agent writing a paragraph sends a chunk at a time, and each one was
+    // its own `setHeld` — so a render of the whole transcript per chunk, and
+    // a replay of a long conversation was six hundred renders in a burst.
+    // React batches within a tick and these do not arrive in one: each is its
+    // own message off the socket.
+    //
+    // A frame is the right grain because it is the one the screen has. What
+    // is lost is nothing — no render was ever seen between two frames.
+    let buffered: Array<ChatUpdate> = [];
+    let queued = 0;
+    const flush = () => {
+      queued = 0;
+      const batch = buffered;
+      buffered = [];
+      if (batch.length === 0) return;
+      setHeld((current) => batch.reduce((state, update) => fold(state, update), current));
+      // An update is proof the conversation opened. Cleared here rather than
+      // on subscribe, so the sentence stays up for as long as it is true —
+      // including across the retries underneath.
+      setRefused(undefined);
+    };
+    const stop = watchChat(
+      project,
+      workspace,
+      (update) => {
+        buffered.push(update);
+        if (queued === 0) queued = requestAnimationFrame(flush);
+      },
+      // A resubscription replays the conversation from the start — see
+      // `watchChat`. Emptied first, so what arrives rebuilds the panel rather
+      // than doubling it, and anything already buffered belongs to the
+      // conversation being thrown away.
+      () => {
+        buffered = [];
+        if (queued !== 0) cancelAnimationFrame(queued);
+        queued = 0;
+        setHeld(nothing);
+      },
+      setRefused,
+    );
+    return () => {
+      if (queued !== 0) cancelAnimationFrame(queued);
+      stop();
+    };
+  }, [project, workspace]);
 
   useEffect(() => {
     // There is no call that answers "what are my options" on the adapter
@@ -471,10 +499,27 @@ const Panel = ({
    * invisible boxes to reason about, against an assignment that cannot be
    * wrong about where the bottom is.
    */
+  const following = useRef(0);
   const follow = useCallback(() => {
-    const column = scroll.current;
-    if (column === null) return;
-    column.scrollTop = column.scrollHeight;
+    // ── at most one of these per frame, because each one is a full layout ──
+    //
+    // Reading `scrollHeight` forces the browser to lay the scroller out
+    // synchronously, and the scroller is the whole conversation. This was
+    // driven by `grown`, which changes on every CHARACTER of a streaming
+    // message, and by the ledge's spring, which calls it every animation
+    // frame — so an agent writing a paragraph re-laid-out every message,
+    // every tool row and every code fence in the transcript, per character.
+    //
+    // Coalesced rather than debounced: the tail has to be reached on the
+    // frame it moved, not a moment after, or following visibly trails the
+    // text. A frame is the resolution the screen has anyway.
+    if (following.current !== 0) return;
+    following.current = requestAnimationFrame(() => {
+      following.current = 0;
+      const column = scroll.current;
+      if (column === null) return;
+      column.scrollTop = column.scrollHeight;
+    });
   }, []);
 
   /** Follow, but only if there is a reader at the tail to follow. */
@@ -559,6 +604,9 @@ const Panel = ({
     if (grown !== "0:0") followIfStuck();
   }, [grown, followIfStuck]);
 
+  /** What the padding was last time, so growth can be told from shrinkage. */
+  const stood = useRef(0);
+
   /**
    * Keep the scroller's bottom padding equal to the dock standing on it.
    *
@@ -566,36 +614,59 @@ const Panel = ({
    * changed by things this component does not re-render for — the textarea
    * growing a line, the settings chips wrapping at a narrower column, the
    * activity ledge's own height spring, which produces a height per frame.
+   *
+   * ── and the height per frame was the whole problem ──────────────────────
+   *
+   * That last clause was true and the measurement was put into React state
+   * anyway, which made the spring re-render this component — and therefore
+   * every message, every tool row and every code fence — once per frame, for
+   * the length of every spring. The same shape as the turning clock, one
+   * level up: a value that changes at animation rate must not be state that
+   * a list is drawn from.
+   *
+   * So it is a custom property written straight onto the scroller. The
+   * padding reads it in `calc`, which is a style recalculation on one
+   * element and no React work at all. What is genuinely state here is
+   * nothing: no part of this tree branches on the number.
    */
   useEffect(() => {
     const pane = dock.current;
     if (pane === null) return;
-    const watching = new ResizeObserver(() => setUnder(pane.offsetHeight));
+    const apply = () => {
+      const column = scroll.current;
+      const height = pane.offsetHeight;
+      // ── written on the element, NOT as a custom property ──────────────
+      //
+      // `--dock` was the first shape and it is the expensive one: setting a
+      // custom property on the scroller invalidates the computed style of
+      // every descendant, because any of them might read it — so a spring
+      // producing a height per frame restyled six hundred rows per frame.
+      // Measured as compositing cost going UP while React work went down.
+      //
+      // The padding is on this element and read by nothing else, so writing
+      // it here touches one element's style and no descendant's.
+      if (column !== null) {
+        column.style.paddingBottom = `calc(${String(height)}px + 1.25rem)`;
+      }
+      const grew = height > stood.current;
+      stood.current = height;
+      // Nothing to follow to before the first measurement: the padding is
+      // zero, so the tail is already where the dock is about to be.
+      //
+      // And only when it grew. Shrinking padding uncovers the tail rather
+      // than burying it, so there is nothing to be taken back to — following
+      // there is a jump to the bottom for somebody who did not ask, which is
+      // what closing the pill on the way back down produced.
+      if (height > 0 && grew) followIfStuck();
+      // A reader who is *not* being followed still had the distance under
+      // them change, and no scroll event says so.
+      measureAway();
+    };
+    const watching = new ResizeObserver(apply);
     watching.observe(pane);
-    setUnder(pane.offsetHeight);
+    apply();
     return () => watching.disconnect();
-  }, []);
-
-  /** What the padding was last time, so growth can be told from shrinkage. */
-  const stood = useRef(0);
-
-  // Padding that grows pushes the tail under the dock, so a reader at the
-  // bottom has to be taken back to it — the same rule as content arriving.
-  useEffect(() => {
-    const grew = under > stood.current;
-    stood.current = under;
-    // Nothing to follow to before the first measurement: the padding is zero,
-    // so the tail is already where the dock is about to be.
-    //
-    // And only when it grew. Shrinking padding uncovers the tail rather than
-    // burying it, so there is nothing to be taken back to — following there is
-    // a jump to the bottom for somebody who did not ask, which is what closing
-    // the pill on the way back down produced.
-    if (under > 0 && grew) followIfStuck();
-    // A reader who is *not* being followed still had the distance under them
-    // change, and no scroll event says so.
-    measureAway();
-  }, [under, followIfStuck, measureAway]);
+  }, [followIfStuck, measureAway]);
 
   useEffect(() => {
     // ── settled gestures only ──────────────────────────────────────────────
@@ -725,7 +796,7 @@ const Panel = ({
           so "the bottom" for it is the top of the session bar below. That is
           what stacks them without either measuring the other. */}
       <div {...stylex.props(styles.stage)}>
-        <div ref={scroll} {...stylex.props(styles.scroll, space.under(under))} onScroll={watch}>
+        <div ref={scroll} {...stylex.props(styles.scroll)} onScroll={watch}>
           {items.length === 0 && held.running === 0 ? (
             // ── the empty state is where the fork belongs ────────────────────
             //
@@ -793,8 +864,23 @@ const Panel = ({
 
           It carries no fill of its own: the ledge and the composer are each
           their own pane of glass, so the composer looks the same drawn on
-          its own in the style guide as it does here. */}
-        <div ref={dock} {...stylex.props(styles.dock)}>
+          its own in the style guide as it does here.
+
+          `layoutRoot` is what keeps typing cheap. The ledge animates its
+          size, and a projection node measures itself and every ancestor on
+          each render of the tree it is in — so a keystroke in the composer
+          paid for a forced layout of the whole column. Measured over thirty
+          synthetic keystrokes, by `EventDispatch` per `input`:
+
+              ledge as written                 7.55ms per keystroke
+              ledge's `layout` deleted         2.58ms
+              this, animation kept             2.74ms
+              no state write at all            0.92ms  — the floor
+
+          The projection stops here, which is as far as it ever had to
+          reach: the dock is anchored, so nothing outside it moves when the
+          ledge changes height. */}
+        <motion.div layoutRoot ref={dock} {...stylex.props(styles.dock)}>
           {/* ── the activity is a ledge on the composer, not the tail of the
           transcript ────────────────────────────────────────────────────────
 
@@ -914,7 +1000,7 @@ const Panel = ({
               box.current = node;
             }}
           />
-        </div>
+        </motion.div>
       </div>
 
       {/* ── the bottom, and it is a real one ─────────────────────────────────
@@ -1229,7 +1315,7 @@ export const Row = ({
   readonly project: string;
   readonly workspace: string;
   /** The frame a live call turns on. See `Tool` — undefined is most rows. */
-  readonly turning?: number | undefined;
+  readonly turning?: boolean | undefined;
   /** Whether this row is the answer currently arriving. */
   readonly streaming?: boolean;
   /**
@@ -1258,7 +1344,7 @@ export const Row = ({
     );
   }
   if (item.kind === "compacted") {
-    return <Boundary item={item} arriving={arriving} turning={turning} />;
+    return <Boundary item={item} arriving={arriving} />;
   }
   return <Permission item={item} project={project} workspace={workspace} arriving={arriving} />;
 };
@@ -1287,13 +1373,14 @@ export const Row = ({
 const Boundary = ({
   item,
   arriving,
-  turning,
 }: {
   readonly item: Compacted;
   readonly arriving: Arriving;
-  readonly turning?: number | undefined;
 }) => {
   const running = item.status === "running";
+  // Subscribed here rather than handed down — see `useTurning`. A compaction
+  // is one row, and it is the only thing on screen that has to move for it.
+  const turning = useTurning(running);
   const failed = item.status === "failed";
   return (
     <motion.div {...stylex.props(styles.item, styles.boundary)} {...arriving}>
@@ -1485,9 +1572,12 @@ export const Transcript = ({
    */
   readonly live?: number | undefined;
 }) => {
-  // One clock for the panel — see `useTurning`. It is stopped whenever
-  // nothing is in flight, so an idle conversation costs no timer at all.
-  const turning = useTurning(live !== undefined);
+  // No clock here, deliberately — see `useTurning`. Subscribing at this level
+  // re-rendered the whole conversation ten times a second for as long as an
+  // agent was working, and the cost of one of those renders grows with the
+  // conversation. What a row needs from here is whether it is the live one,
+  // which changes when a turn does and not on a timer; the frame itself is
+  // subscribed by the one cell that draws it.
   const arriving = useArriving();
   /**
    * Which rows were already here when this panel mounted.
@@ -1504,9 +1594,8 @@ export const Transcript = ({
    */
   const [known] = useState(() => new Set(items.map((one) => one.key)));
   const enters = (key: string): Arriving => (known.has(key) ? STILL : arriving);
-  /** The frame, for a call of the live turn only. */
-  const frameFor = (item: Ran): number | undefined =>
-    live !== undefined && item.turn === live ? turning : undefined;
+  /** Whether a call belongs to the turn in flight, which is when it turns. */
+  const turns = (item: Ran): boolean => live !== undefined && item.turn === live;
   return (
     <>
       {grouped(items).map((block) =>
@@ -1516,7 +1605,7 @@ export const Transcript = ({
             items={block.items}
             project={project}
             workspace={workspace}
-            turning={block.items.some((one) => one.turn === live) ? turning : undefined}
+            turning={block.items.some((one) => one.turn === live)}
             enters={enters}
           />
         ) : (
@@ -1525,7 +1614,7 @@ export const Transcript = ({
             item={block.item}
             project={project}
             workspace={workspace}
-            turning={block.item.kind === "ran" ? frameFor(block.item) : undefined}
+            turning={block.item.kind === "ran" && turns(block.item)}
             // The last row, and only while a turn is in flight: an answer
             // that has stopped mid-sentence is the case this exists for,
             // and a caret on a finished one would be a lie about it.
@@ -1565,8 +1654,8 @@ const Calls = ({
   readonly items: ReadonlyArray<Ran>;
   readonly project: string;
   readonly workspace: string;
-  /** The frame a live call turns on. */
-  readonly turning?: number | undefined;
+  /** Whether a live call is among these, so its mark turns. */
+  readonly turning?: boolean | undefined;
   /** Whether a given row is new, and therefore whether it springs in. */
   readonly enters?: ((key: string) => Arriving) | undefined;
 }) => {
@@ -1625,8 +1714,13 @@ const Tool = ({
    * "not finished" left a row from this morning spinning under one from
    * now. Reported as exactly that.
    */
-  readonly turning?: number | undefined;
+  readonly turning?: boolean | undefined;
 }) => {
+  // The frame is subscribed here and nowhere above it — see `useTurning`. A
+  // transcript of two hundred rows has at most a handful turning, and this is
+  // what keeps the rest of them still while those few move.
+  const frame = useTurning(turning === true);
+
   // Shut by default, and open once for anything that went wrong.
   //
   // Output is usually long and usually uninteresting — the row already says
@@ -1681,10 +1775,10 @@ const Tool = ({
           typeset.address,
           styles.status,
           item.status === "failed" && styles.failed,
-          turning !== undefined && styles.turning,
+          turning === true && styles.turning,
         )}
       >
-        {going(item.status) ? turningAt(turning) : mark(item.status)}
+        {going(item.status) ? turningAt(frame) : mark(item.status)}
       </span>
       <div {...stylex.props(styles.grow)}>
         <button
@@ -1857,34 +1951,6 @@ const Answering = ({
   );
 };
 
-/**
- * The scroller's bottom padding, which is the dock's height.
- *
- * A dynamic style because the value is measured at runtime, and because an
- * ordinary constant inside `stylex.create` is a build error about theming
- * rules — the trap this file's own notes record three times.
- */
-const space = stylex.create({
-  /**
-   * Room under the transcript for the card floating over it — and then some.
-   *
-   * `px` is the dock's measured height, which clears the card exactly: the
-   * last line of a conversation stops on its top edge, touching it. That read
-   * as the message being *behind* the composer, and it is — a card with a
-   * blur and a shadow needs the text to stop short of it, not at it.
-   *
-   * It used to get that slack by accident. The dock held the session bar as
-   * well, so this padding was the card's height plus a strip nothing was
-   * drawn over; the bar is the column's own bottom now, and the accident went
-   * with it.
-   *
-   * The clearance is `1.25rem` because that is the transcript's own gutter —
-   * the air it keeps at the top and on both sides. One measure, so the column
-   * has one margin rather than three numbers that nearly agree.
-   */
-  under: (px: number) => ({ paddingBottom: `calc(${String(px)}px + 1.25rem)` }),
-});
-
 const styles = stylex.create({
   chat: {
     display: "flex",
@@ -1940,11 +2006,13 @@ const styles = stylex.create({
     // reads for minutes at a time rather than glances at, and text pressed
     // against a column edge is what makes a transcript tiring — the gutter is
     // what the eye returns to at the start of every line.
-    // A longhand, because the bottom is not a constant: `space.under` sets it
-    // to the dock's measured height so the transcript can be scrolled clear
-    // of the glass standing on it. Two declarations rather than the shorthand
-    // plus an override — StyleX resolves a shorthand against a longhand by
+    // A longhand, because the bottom is not a constant: the ResizeObserver
+    // above overwrites it with the dock's measured height, so the transcript
+    // can be scrolled clear of the glass standing on it without the number
+    // ever being React state. Two declarations rather than the shorthand plus
+    // an override — StyleX resolves a shorthand against a longhand by
     // nulling, and which of the two wins is a question not worth having.
+    paddingBottom: "1.25rem",
     paddingTop: "1.25rem",
     paddingInline: "1.25rem",
     display: "flex",
@@ -1985,6 +2053,19 @@ const styles = stylex.create({
     // Kept as an entry because it is where a row's own geometry lives, and
     // because two animations on one element is the fight this removed.
     position: "relative",
+    // ── `content-visibility: auto` was here, and it made things worse ─────
+    //
+    // The idea was right and the interaction was not: this scroller is driven
+    // to the bottom with `scrollTop = scrollHeight`, and a skipped row has no
+    // measured height — so the browser resolves intrinsic sizes for the whole
+    // column, renders the rows that come into view, and their real heights
+    // change `scrollHeight` under the write that asked for it. That is the
+    // loop this file's own notes say it has already had twice: a row whose
+    // height moves the scroll.
+    //
+    // Bounding the layout is still the right answer; it cannot be bought with
+    // a property while something measures the full column every frame. The
+    // follow has to stop asking for `scrollHeight` first.
   },
   said: { display: "flex", flexDirection: "column", gap: "0.15rem" },
   /**

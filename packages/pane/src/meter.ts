@@ -57,12 +57,45 @@ let running = false;
  * whether the window is producing frames, and a loop that only ticks when the
  * renderer does would report a healthy rate while the page was locked up.
  */
+/**
+ * How long the frame loop keeps going after the last reading.
+ *
+ * Long enough that a person watching the numbers does not see them freeze
+ * between polls, short enough that a window nobody is measuring goes quiet.
+ */
+const LINGER_MS = 4000;
+
+/** When the meter was last read. Zero means nobody has ever looked. */
+let lastRead = 0;
+
+// ── this loop was the thing it was built to catch ──────────────────────────
+//
+// "A meter that costs something is measuring itself", says the note at the
+// top — and this one ran a `requestAnimationFrame` chain from the moment a
+// pane mounted until the window closed, whether or not anybody ever read it.
+//
+// Measured over CDP on a window with an idle terminal in it: ~88 rAF
+// callbacks a second from here, each one ending in a full-window paint,
+// alongside ghostty-web's own loop. The renderer never reached idle. A
+// diagnostic was a permanent 100fps wake-up.
+//
+// So the loop lives as long as somebody is reading it and no longer. `frameP50`
+// and `frameMax` are the only readings that need it; every other counter is
+// incremented by the thing it counts and costs nothing when nobody asks.
 const tick = (now: number): void => {
   if (lastFrame !== 0) {
     frames[frameAt] = now - lastFrame;
     frameAt = (frameAt + 1) % FRAMES;
   }
   lastFrame = now;
+  if (now - lastRead > LINGER_MS) {
+    // Nobody is looking. Stop, and let `readMeter` start it again — the next
+    // reader gets a stale ring for one linger and a live one after that,
+    // which is the right trade for a window that is otherwise never idle.
+    running = false;
+    lastFrame = 0;
+    return;
+  }
   requestAnimationFrame(tick);
 };
 
@@ -97,6 +130,9 @@ export const meterWrite = (size: number): void => {
 };
 
 export const readMeter = (): Meter => {
+  // Reading is what keeps the frame loop alive — see `tick`.
+  lastRead = typeof performance === "object" ? performance.now() : 0;
+  startMeter();
   const sorted = [...frames].filter((ms) => ms > 0).toSorted((a, b) => a - b);
   return {
     wheelEvents,

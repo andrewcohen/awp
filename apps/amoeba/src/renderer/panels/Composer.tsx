@@ -190,22 +190,45 @@ const styles = stylex.create({
    * or not, never changes.
    */
   breathing: {
-    animationName: {
-      default: stylex.keyframes({
-        "0%, 100%": { borderColor: colors.border },
-        "50%": { borderColor: `color-mix(in oklab, ${colors.accent} 45%, ${colors.border})` },
-      }),
-      ":focus-within": stylex.keyframes({
-        "0%, 100%": { borderColor: colors.accent },
-        "50%": { borderColor: `color-mix(in oklab, ${colors.accent} 50%, ${colors.border})` },
-      }),
-    },
-    // Reduced motion means none, not slower. The window's rule.
-    animationDuration: { default: "2.6s", "@media (prefers-reduced-motion: reduce)": "0s" },
-    animationTimingFunction: "cubic-bezier(0.45, 0, 0.55, 1)",
-    animationIterationCount: {
-      default: "infinite",
-      "@media (prefers-reduced-motion: reduce)": "1",
+    // ── opacity, because a colour is a repaint ────────────────────────────
+    //
+    // This animated `borderColor` for as long as a turn was running, and
+    // border colour is a paint property: measured over CDP, it was 450 paint
+    // events every five seconds on its own — half of every paint the window
+    // made, for a line that warms and cools. `will-change` does not help, and
+    // was tried: promoting the element gives the repaint its own layer, not
+    // fewer of them.
+    //
+    // So the warm border is a second border, laid over the real one and faded
+    // in and out. Opacity is handled by the compositor without repainting
+    // anything, which is the only category of animation that is free — the
+    // same reason the sidebar's `breathing` dot animates opacity and scale
+    // rather than cycling a hue.
+    //
+    // It reads identically because it IS the same two colours: the base
+    // border underneath is whatever the state is already wearing, focused or
+    // not, and this is the accent mix sitting on top at a varying strength.
+    // The pair of keyframe sets that existed for focus goes away with it —
+    // what changes under focus is the border beneath, and the overlay does
+    // not care.
+    "::after": {
+      content: "''",
+      position: "absolute",
+      inset: "-1px",
+      borderRadius: "0.6rem",
+      borderStyle: "solid",
+      borderWidth: 1,
+      borderColor: colors.accent,
+      pointerEvents: "none",
+      opacity: 0,
+      animationName: stylex.keyframes({ "0%, 100%": { opacity: 0 }, "50%": { opacity: 0.45 } }),
+      // Reduced motion means none, not slower. The window's rule.
+      animationDuration: { default: "2.6s", "@media (prefers-reduced-motion: reduce)": "0s" },
+      animationTimingFunction: "cubic-bezier(0.45, 0, 0.55, 1)",
+      animationIterationCount: {
+        default: "infinite",
+        "@media (prefers-reduced-motion: reduce)": "1",
+      },
     },
   },
   /**

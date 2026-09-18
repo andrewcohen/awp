@@ -18,4 +18,24 @@ export AMOEBA_DEV_SERVER=http://127.0.0.1:5273
 # The app path is still `.`, so `process.defaultApp` and everything downstream
 # of it are exactly as they were.
 BUNDLE="$(bun run --silent scripts/dev-bundle.ts | tail -1)" || exit 1
+
+# ── the renderer is not profilable without this ───────────────────────────
+#
+# Chrome DevTools attaches over a port the process has to be started with, and
+# there is no way to open one afterwards. So a window that is behaving badly
+# cannot be measured — it has to be restarted first, which is the moment the
+# behaviour usually stops.
+#
+# Paid for once, here. `bun run dev logs app` still reads the same; what this
+# adds is `http://127.0.0.1:9222/json` listing the renderer, so a trace or a
+# CPU profile can be taken of the window somebody is actually complaining
+# about rather than of a fresh one.
+#
+# Loopback only, and this is the DEV shell: `bun run amoeba` and every packaged
+# build go nowhere near this file. Set AMOEBA_DEBUG_PORT= (empty) to drop it.
+: "${AMOEBA_DEBUG_PORT:=9222}"
+if [ -n "$AMOEBA_DEBUG_PORT" ]; then
+  exec "$BUNDLE" . --remote-debugging-port="$AMOEBA_DEBUG_PORT" \
+    --remote-allow-origins=http://127.0.0.1:"$AMOEBA_DEBUG_PORT"
+fi
 exec "$BUNDLE" .
