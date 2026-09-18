@@ -1168,7 +1168,10 @@ describe("the diff a workspace is asked for", () => {
       (rpc) =>
         Effect.gen(function* () {
           const thread = yield* inThread(rpc, [["awp", "discounts"]]);
-          yield* rpc.ThreadLinkPr({ thread, pr: { project: "awp", number: 412 } });
+          yield* rpc.ThreadLinkPr({
+            thread,
+            pr: { project: "awp", workspace: "discounts", number: 412 },
+          });
           // Read first, because that is where the base branch comes from: what
           // `gh` last said, kept. A daemon that has never listed the queue
           // falls through to the bookmark below, which is the honest answer
@@ -2809,7 +2812,7 @@ describe("ReviewQueueList", () => {
     // And the row now offers to open rather than to create: it said "makes a
     // workspace" for a workspace already on disk.
     expect(row?.workspace).toBe("lantern");
-    expect(answer.thread?.prs).toEqual([{ project: "awp", number: 51 }]);
+    expect(answer.thread?.prs).toEqual([{ project: "awp", workspace: "lantern", number: 51 }]);
   });
 
   // ── and the branch is frequently not named after the workspace ────────────
@@ -2847,7 +2850,7 @@ describe("ReviewQueueList", () => {
     const row = answer.reviewQueue.items.find((item) => item.number === 61);
     expect(row?.thread).toBe(answer.thread?.id);
     expect(row?.workspace).toBe("lantern");
-    expect(answer.thread?.prs).toEqual([{ project: "awp", number: 61 }]);
+    expect(answer.thread?.prs).toEqual([{ project: "awp", workspace: "lantern", number: 61 }]);
   });
 
   it("adopts nothing when the head is not among the checkout's own commits", async () => {
@@ -2962,14 +2965,14 @@ describe("ReviewQueueList", () => {
           const thread = yield* rpc.ThreadCreate({ title: "the lantern rewrite" });
           const linked = yield* rpc.ThreadLinkPr({
             thread: thread.id,
-            pr: { project: "awp", number: 88 },
+            pr: { project: "awp", workspace: "lantern", number: 88 },
           });
           return { linked, reviewQueue: yield* rpc.ReviewQueueList({}) };
         }),
       { viewer: "me", prs: [pr({ number: 88 })] },
     );
 
-    expect(answer.linked.prs).toEqual([{ project: "awp", number: 88 }]);
+    expect(answer.linked.prs).toEqual([{ project: "awp", workspace: "lantern", number: 88 }]);
     expect(answer.reviewQueue.items[0]?.thread).toBe(answer.linked.id);
     // And no workspace: the link says which thread, not that anything is built.
     expect(answer.reviewQueue.items[0]?.workspace).toBeUndefined();
@@ -2983,10 +2986,13 @@ describe("ReviewQueueList", () => {
         Effect.gen(function* () {
           const first = yield* rpc.ThreadCreate({ title: "first" });
           const second = yield* rpc.ThreadCreate({ title: "second" });
-          yield* rpc.ThreadLinkPr({ thread: first.id, pr: { project: "awp", number: 90 } });
+          yield* rpc.ThreadLinkPr({
+            thread: first.id,
+            pr: { project: "awp", workspace: "lantern", number: 90 },
+          });
           const taken = yield* rpc.ThreadLinkPr({
             thread: second.id,
-            pr: { project: "awp", number: 90 },
+            pr: { project: "awp", workspace: "lantern", number: 90 },
           });
           const every = yield* rpc.ThreadList();
           return { taken, every };
@@ -2994,7 +3000,7 @@ describe("ReviewQueueList", () => {
       { viewer: "me" },
     );
 
-    expect(answer.taken.prs).toEqual([{ project: "awp", number: 90 }]);
+    expect(answer.taken.prs).toEqual([{ project: "awp", workspace: "lantern", number: 90 }]);
     expect(answer.every.find((one) => one.title === "first")?.prs).toEqual([]);
   });
 
@@ -3011,7 +3017,9 @@ describe("ReviewQueueList", () => {
 
     // Linked at creation rather than by the job, so the sidebar and the row can
     // name the pull request now instead of in half a minute.
-    expect(started.thread?.prs).toEqual([{ project: "awp", number: 61 }]);
+    // The workspace too: a review names its checkout `pr-<number>` before the
+    // job runs, which is what lets the link say WHICH checkout it is about.
+    expect(started.thread?.prs).toEqual([{ project: "awp", workspace: "pr-61", number: 61 }]);
   });
 
   it("a session makes the row openable before the thread claim lands", async () => {
@@ -3132,7 +3140,10 @@ describe("PullRequestRepair", () => {
       (rpc) =>
         Effect.gen(function* () {
           const thread = yield* rpc.ThreadCreate({ title: "#80 a change" });
-          yield* rpc.ThreadLinkPr({ thread: thread.id, pr: { project: "awp", number: 80 } });
+          yield* rpc.ThreadLinkPr({
+            thread: thread.id,
+            pr: { project: "awp", workspace: "typed-router", number: 80 },
+          });
           yield* rpc.ThreadAttach({
             thread: thread.id,
             // The fixture's own session is `awp.awp.other.agent`, so this is the

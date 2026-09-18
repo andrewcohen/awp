@@ -99,6 +99,37 @@ export const migrations: ReadonlyArray<Migration> = [
       `create index thread_prs_thread on thread_prs (thread_id)`,
     ],
   },
+  {
+    // Which *checkout* the pull request is about, and not merely which thread.
+    //
+    // A thread holds several workspaces and 003 recorded only the project, so
+    // the read had no way to tell two members of one thread apart and guessed.
+    // Seen live: a thread across three repositories with one pull request drew
+    // that number on all three rows, two of them pointing into a repository
+    // the row has nothing to do with.
+    //
+    // The table is emptied rather than back-filled. Every link is re-made from
+    // the pull request list the next time it is read, so a guessed answer would
+    // be a guess with a lifetime of minutes — and back-filling a `not null`
+    // column is exactly the pressure that produces an empty string standing in
+    // for an absent value, which this repository has paid for three times.
+    //
+    // Recreated rather than altered for the same reason: `alter table add
+    // column` cannot add a `not null` one without a constant default, and the
+    // only constant available is `''`.
+    name: "threads.004-pr-workspace",
+    up: [
+      `drop table thread_prs`,
+      `create table thread_prs (
+         thread_id text not null references threads (id) on delete cascade,
+         project   text not null,
+         workspace text not null,
+         number    integer not null,
+         unique (project, number)
+       ) strict`,
+      `create index thread_prs_thread on thread_prs (thread_id)`,
+    ],
+  },
 ];
 
 export class Threads extends Context.Service<
@@ -302,13 +333,16 @@ export const make = Effect.gen(function* () {
   // `(project, number)`, so the row already there for another thread is the row
   // this rewrites — the release and the claim in one statement.
   const linkPr = db.prepare(
-    `insert into thread_prs (thread_id, project, number) values (?, ?, ?)
-     on conflict (project, number) do update set thread_id = excluded.thread_id`,
+    `insert into thread_prs (thread_id, project, workspace, number) values (?, ?, ?, ?)
+     on conflict (project, number) do update set
+       thread_id = excluded.thread_id, workspace = excluded.workspace`,
   );
   const unlinkPr = db.prepare(
     "delete from thread_prs where thread_id = ? and project = ? and number = ?",
   );
-  const readPrs = db.prepare("select thread_id, project, number from thread_prs order by number");
+  const readPrs = db.prepare(
+    "select thread_id, project, workspace, number from thread_prs order by number",
+  );
   // One statement, so the emptiness check and the delete cannot disagree. A
   // thread that gains a workspace between a read and a write is exactly the
   // race this shape removes.
@@ -324,7 +358,11 @@ export const make = Effect.gen(function* () {
       const id = String(row["thread_id"]);
       prs.set(id, [
         ...(prs.get(id) ?? []),
-        { project: String(row["project"]), number: Number(row["number"]) },
+        {
+          project: String(row["project"]),
+          workspace: String(row["workspace"]),
+          number: Number(row["number"]),
+        },
       ]);
     }
     const members = new Map<string, ThreadMember[]>();
@@ -459,7 +497,7 @@ export const make = Effect.gen(function* () {
         // thread came back without its pull request would leave the reviewQueue row
         // unable to find the thread being built for it.
         if (pr !== undefined) {
-          linkPr.run(thread, pr.project, pr.number);
+          linkPr.run(thread, pr.project, pr.workspace, pr.number);
         }
         return true;
         // Only when it actually put one back. A restore that found the thread
@@ -509,7 +547,7 @@ export const make = Effect.gen(function* () {
       change(
         thread,
         `cannot link ${pr.project}#${pr.number} to ${thread}`,
-        () => void linkPr.run(thread, pr.project, pr.number),
+        () => void linkPr.run(thread, pr.project, pr.workspace, pr.number),
       ),
 
     unlink: (thread: string, pr: ThreadPr) =>

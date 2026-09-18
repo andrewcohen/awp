@@ -246,7 +246,7 @@ describe("awp_thread", () => {
           id: "t1",
           title: "tabular exports",
           parent: "the api rewrite",
-          prs: [{ project: "beta", number: 2418 }],
+          prs: [{ project: "beta", workspace: "tabular-exports", number: 2418 }],
           checkouts: [
             { project: "rowan", workspace: "tabular-exports", dir: HERE, running: false },
             { project: "beta", workspace: "api", dir: "/w/beta/api", running: true },

@@ -419,6 +419,20 @@ export type ThreadMember = (typeof ThreadMember)["Type"];
  */
 export const ThreadPr = Schema.Struct({
   project: Schema.String,
+  /**
+   * The checkout it is about, and the field the rendering turns on.
+   *
+   * Without it a thread holding three workspaces had one answer for all three,
+   * and the row could only filter by project — so a thread spanning a service
+   * and the pipeline behind it drew the service's number on both rows. The
+   * project alone cannot say which, and a stack is the case where even the
+   * project is the same for two of them.
+   *
+   * Required rather than optional. It is knowable at every point a link is
+   * made — each caller has the workspace in hand already — and an optional one
+   * would have the read guessing again for whichever rows lacked it.
+   */
+  workspace: Schema.String,
   number: Schema.Int,
 });
 

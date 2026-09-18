@@ -501,25 +501,42 @@ export const threadOf = (
       );
 
 /**
- * Which of a thread's pull requests a checkout in `project` is about.
+ * Which of a thread's pull requests a checkout is about.
  *
- * Its own function because two places need the same tie-break and a second
- * copy of it is the one that drifts: the accessory strip, which draws a tab
- * for the open workspace, and the sidebar row, which draws the number. A
- * thread can hold several — a frontend change and the api behind it is one
- * piece of work and two pull requests — so "the first one in this project,
- * else the first one at all" is a rule rather than an obvious answer.
+ * Its own function because two places need the same answer and a second copy
+ * of it is the one that drifts: the accessory strip, which draws a tab for the
+ * open workspace, and the sidebar row, which draws the number.
+ *
+ * ── it was a tie-break, and a tie-break is a guess ─────────────────────────
+ *
+ * This read `filter by project, else the first one at all`, from a record that
+ * named no workspace. Both halves are wrong once a thread holds more than one
+ * checkout, and a thread holding several is the ordinary case this feature
+ * exists for:
+ *
+ *   two checkouts, one project   the filter narrows nothing, so both rows
+ *                                draw the first pull request — a stack shows
+ *                                its own second PR on neither row
+ *   a checkout with no PR        the `else` hands it another project's
+ *                                number, so the row links into a repository
+ *                                it has nothing to do with
+ *
+ * Seen live on a thread across three repositories with one pull request: all
+ * three rows drew that number and two of them were lying. `ThreadPr` carries
+ * the workspace now, so this is a lookup and no longer a rule — and a row with
+ * no pull request of its own draws nothing, which is the honest answer and was
+ * always available.
  */
 export const prIn = (
   thread: Thread | undefined,
-  project: string | undefined,
-): { readonly project: string; readonly number: number } | undefined => {
-  const mine = thread?.prs.filter((pr) => pr.project === project) ?? [];
-  return mine[0] ?? thread?.prs[0];
-};
+  at: { readonly project: string; readonly workspace: string } | undefined,
+): { readonly project: string; readonly number: number } | undefined =>
+  at === undefined
+    ? undefined
+    : thread?.prs.find((pr) => pr.project === at.project && pr.workspace === at.workspace);
 
 export const prOf = (
   identity: { readonly project: string; readonly workspace: string } | undefined,
   threads: ReadonlyArray<Thread>,
 ): { readonly project: string; readonly number: number } | undefined =>
-  identity === undefined ? undefined : prIn(threadOf(identity, threads), identity.project);
+  identity === undefined ? undefined : prIn(threadOf(identity, threads), identity);

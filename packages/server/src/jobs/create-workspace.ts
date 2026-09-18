@@ -318,9 +318,19 @@ export const createWorkspace = (deps: WorkspaceDeps): JobKind<CreateWorkspace> =
                   // would leave the reviewQueue row unable to find the work being
                   // done for it — which is the same failure this step exists to
                   // prevent for the thread itself.
-                  input.review === undefined
+                  // A review names its workspace up front — `pr-<number>` is
+                  // decided before the job is enqueued, which is why the name
+                  // step skips the model for one. So the second half of this
+                  // is a narrowing rather than a case: a link records which
+                  // checkout it is about, and there is no link to restore for
+                  // a job that has not been told.
+                  input.review === undefined || input.workspace === undefined
                     ? undefined
-                    : { project: input.project, number: input.review.number },
+                    : {
+                        project: input.project,
+                        workspace: input.workspace,
+                        number: input.review.number,
+                      },
                 )
                 .pipe(
                   Effect.mapError(refused("could not restore the thread")),

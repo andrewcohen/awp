@@ -1936,7 +1936,7 @@ export const layer = AwpRpcs.toLayer(
                 return item;
               }
               yield* threads
-                .link(holding.id, { project: item.project, number: item.number })
+                .link(holding.id, { project: item.project, workspace, number: item.number })
                 .pipe(Effect.ignore);
               // The workspace as well as the thread: the row's action is
               // decided by whether there is something to open, and there is —
@@ -2016,7 +2016,11 @@ export const layer = AwpRpcs.toLayer(
                   continue;
                 }
                 yield* threads
-                  .link(candidate.thread, { project, number: pr.number })
+                  .link(candidate.thread, {
+                    project,
+                    workspace: candidate.workspace,
+                    number: pr.number,
+                  })
                   .pipe(Effect.ignore);
                 adopted.set(`${project}:${pr.number}`, {
                   thread: candidate.thread,
@@ -2302,7 +2306,7 @@ export const layer = AwpRpcs.toLayer(
           // waiting for a job that takes half a minute. The job restores the
           // link if a rollback takes the thread — see the `thread` step, which
           // is the one place a thread is rebuilt.
-          yield* threads.link(thread.id, { project, number }).pipe(Effect.ignore);
+          yield* threads.link(thread.id, { project, workspace, number }).pipe(Effect.ignore);
 
           const job = yield* jobs
             .enqueue(

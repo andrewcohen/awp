@@ -559,32 +559,51 @@ describe("the order workspaces come back in", () => {
 });
 
 describe("prIn", () => {
-  // A thread can hold a frontend change and the api behind it — one piece of
-  // work, two pull requests, two projects. Which one a checkout is about is
-  // the project it is standing in.
+  // A thread holds a change and the pipeline behind it — one piece of work,
+  // two checkouts, two pull requests. Which one a row is about is the checkout
+  // it names, and nothing weaker: the project cannot tell two members of one
+  // thread apart, and a stack puts two of them in the SAME project.
   const both = thread({
     prs: [
-      { project: "orchard", number: 88 },
-      { project: "thicket", number: 2418 },
+      { project: "orchard", workspace: "lantern", number: 88 },
+      { project: "thicket", workspace: "typed-router", number: 2418 },
     ],
   });
 
-  it("answers the pull request in the checkout's own project", () => {
-    expect(prIn(both, "thicket")?.number).toBe(2418);
+  it("answers the pull request made for this very checkout", () => {
+    expect(prIn(both, { project: "thicket", workspace: "typed-router" })?.number).toBe(2418);
   });
 
-  it("falls back to the first when the project has none", () => {
-    // A workspace in a third repository is still part of this work, and the
-    // thread's first pull request is the better answer than nothing at all.
-    expect(prIn(both, "harbor-works")?.number).toBe(88);
+  it("tells two checkouts in one project apart", () => {
+    // The case the old rule could not express at all: it filtered by project,
+    // so a stack drew its first pull request on both rows.
+    const stack = thread({
+      prs: [
+        { project: "orchard", workspace: "lantern", number: 88 },
+        { project: "orchard", workspace: "harbor-works", number: 91 },
+      ],
+    });
+    expect(prIn(stack, { project: "orchard", workspace: "harbor-works" })?.number).toBe(91);
+  });
+
+  it("answers nothing for a checkout with no pull request of its own", () => {
+    // This is the fix, and it is a deletion. The old rule handed this row
+    // `orchard#88` — a number belonging to a repository the row has nothing to
+    // do with, and a link that opened the wrong pull request. Seen live on a
+    // thread across three repositories.
+    expect(prIn(both, { project: "harbor-works", workspace: "lantern" })).toBeUndefined();
   });
 
   it("answers nothing for a thread with no pull requests", () => {
-    expect(prIn(thread(), "thicket")).toBeUndefined();
+    expect(prIn(thread(), { project: "thicket", workspace: "lantern" })).toBeUndefined();
   });
 
   it("answers nothing when there is no thread", () => {
     // Most workspaces on a real machine belong to no thread at all.
-    expect(prIn(undefined, "thicket")).toBeUndefined();
+    expect(prIn(undefined, { project: "thicket", workspace: "lantern" })).toBeUndefined();
+  });
+
+  it("answers nothing when the caller is standing nowhere", () => {
+    expect(prIn(both, undefined)).toBeUndefined();
   });
 });

@@ -35,7 +35,10 @@ const program = Effect.gen(function* () {
         console.log(`  already  ${member.project}#${number}  ${thread.title}`);
         continue;
       }
-      yield* rpc.ThreadLinkPr({ thread: thread.id, pr: { project: member.project, number } });
+      yield* rpc.ThreadLinkPr({
+        thread: thread.id,
+        pr: { project: member.project, workspace: member.workspace, number },
+      });
       linked += 1;
       console.log(`  linked   ${member.project}#${number}  ${thread.title}`);
     }

@@ -662,7 +662,7 @@ function Row({
    * it stands; the link is about the work, and the two only disagree while
    * somebody is doing something the record has not caught up with.
    */
-  const pr = facts?.pr ?? prIn(thread, pair?.project)?.number;
+  const pr = facts?.pr ?? prIn(thread, pair)?.number;
 
   // ── the label takes line one, and the slug moves down ────────────────────
   //
