@@ -269,10 +269,10 @@ export const hanging = (updates: ReadonlyArray<ChatUpdate>): ReadonlyArray<strin
  *
  * `SubscriptionRef` publishes on every write, not on every change, and this is
  * written once per streamed chunk. `Chat.statuses` is `Stream.changes` over
- * those writes, which compares with `Equal.equals` — on a plain `Map` that is
- * `===`. So returning a fresh copy here would be correct, would pass every
- * test about what the map contains, and would silently restore a 17-frame-a-
- * second re-send of the whole workspace table to every connected window.
+ * those writes, and `Equal.equals` on a plain `Map` is `===`. So a fresh copy
+ * here would be correct, would pass every test about what the map contains,
+ * and would silently re-send the whole workspace table to every window
+ * seventeen times a second. docs/daemon.md has the measurement.
  *
  * Exported for the test that removing the early return has to fail.
  */
@@ -2737,20 +2737,11 @@ export const make = Effect.gen(function* () {
     /**
      * Every workspace's status, now and on each change.
      *
-     * `changes` is not decoration. A `SubscriptionRef` publishes on every
-     * write, and `setStatus` writes on every status *report* — which, while an
-     * agent streams, is once per chunk. The guard there already returns the
-     * identical map when nothing moved, so this collapses those to nothing by
-     * reference alone; `Equal.equals` on a plain `Map` is `===`, which is
-     * exactly the question being asked.
-     *
-     * Measured on the socket with an agent mid-turn, before this existed:
-     * `WorkspaceFactsChanges` is `zipLatest` of the facts table and this, so
-     * each of those non-changes re-sent the whole table — 17 frames a second
-     * at ~8.5KB, 140KB/s, and a sidebar re-render for every one of them. The
-     * protocol's own note said a delta would be "machinery in service of an
-     * economy nobody can measure"; that is still true, and this is not a
-     * delta. It is not announcing a change that did not happen.
+     * `changes` is not decoration — see `withStatus`. Without it this
+     * announces a non-change once per streamed chunk, and because
+     * `WorkspaceFactsChanges` is `zipLatest` of the facts table and this, each
+     * of those re-sends the whole table. It is not a delta; it is the feed
+     * declining to speak when nothing moved.
      */
     statuses: () =>
       Stream.changes(

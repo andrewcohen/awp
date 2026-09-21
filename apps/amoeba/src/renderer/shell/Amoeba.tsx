@@ -170,21 +170,17 @@ const styles = stylex.create({
   crawling: {
     transform: "scale(1.06, 0.84)",
     "::before": {
-      // ── the wobble is a transform, and that is a performance rule ────────
+      // ── the wobble is a transform, and that is a rule ────────────────────
       //
-      // This was four `border-radius` pairs at 30/70, and it was 80% of
-      // everything the window painted: `border-radius` is a paint property,
-      // so each of its ~110 steps a second repainted the whole viewport —
-      // 447 of 557 Paint events per five seconds, measured by pausing this
-      // one animation and counting. A `transform` composites instead, on a
-      // layer of its own, and costs the main thread nothing.
+      // Never `border-radius` here, or any other paint property: this runs on
+      // an infinite loop while an agent works, and as four radii pairs it was
+      // 80% of everything the window painted — the full viewport, every frame,
+      // for a mark eleven pixels across. docs/window.md has the counts.
       //
-      // It is also very nearly the same picture. This file already argues
-      // that at eleven pixels the radii never take the outline more than a
-      // pixel off a circle — so what the eye was reading was the extent, and
-      // the extent is exactly what a non-uniform scale moves. The axes
-      // disagree and the rotation is slight, which is the lopsidedness the
-      // radii were bought for; the bud on `::after` still does the rest.
+      // It is also very nearly the same picture, for the reason this file
+      // already gives: at this size the radii never take the outline more than
+      // a pixel off a circle, so what the eye reads is the extent — which is
+      // what a non-uniform scale moves. The bud does the lopsidedness.
       animationName: stylex.keyframes({
         "0%, 100%": { transform: "scale(1, 1) rotate(0deg)" },
         "27%": { transform: "scale(0.88, 1.1) rotate(-6deg)" },

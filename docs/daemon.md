@@ -2552,3 +2552,74 @@ by somebody running `ps` on a hunch.
 The surface that is actually missing is a diagnostics call: adapters per key,
 claims held, entries live, printed by `probe:ask`. That would have answered this
 in one command. It is filed separately rather than smuggled in here.
+
+## A feed that announced changes that had not happened
+
+Reported as the window being laggy, four times over an afternoon, and it
+outlived two rounds of fixing genuine paint problems in the renderer because
+it has no signature on that side at all: no long task, nothing hot in a
+profile, the renderer **96.3% idle** while the window felt bad.
+
+It was on the socket. Measured with an agent mid-turn, over the DevTools
+protocol against the running window:
+
+```
+  283KB/s, 34 frames a second, on two streams
+    requestId 337   chat text chunks              expected
+    requestId 20    the whole workspace table     17/s at ~8.5KB
+```
+
+Exactly 100 frames each over six seconds — locked 1:1, which is the shape of
+the answer rather than a coincidence.
+
+`WorkspaceFactsChanges` is `zipLatest` of the facts table and
+`chat.statuses()`, so anything the second announces re-sends the first.
+`zipLatest` is correct here and is not the fault. The fault is that a
+`SubscriptionRef` publishes on every **write**, not on every change, and
+`setStatus` is called once per streamed chunk with, overwhelmingly, the status
+the workspace already had.
+
+So the whole table went out seventeen times a second, to every connected
+window, each one re-rendering its sidebar.
+
+### The fix is to stop announcing non-changes, not to send a delta
+
+The protocol's own note on that stream says the whole table goes each time
+because a delta would be "machinery in service of an economy nobody can
+measure". That is still true, and `Stream.changes` is not a delta — it is the
+feed declining to speak when nothing moved.
+
+`Stream.changes` compares with `Equal.equals`, which on a plain `Map` is
+`===`. That was verified rather than assumed:
+
+```
+  Equal.equals(new Map([["k","working"]]), new Map([["k","working"]]))  false
+  Equal.equals(m, m)                                                    true
+```
+
+Reference equality is exactly the question being asked, because `setStatus`
+already returned the identical map when nothing had moved. The collapse
+therefore costs one comparison.
+
+After, with an agent working, over forty-five seconds: **47 frames, 0.1KB/s,
+and the workspace-table stream absent entirely** — 283KB/s to 0.1KB/s. The
+chat stream is still there, which is what tells "deduped" from "broken".
+
+### The reference identity is the whole mechanism, so it is tested
+
+Nothing would have failed if somebody made `setStatus` build a fresh map every
+time. It would be correct, would pass every test about what the map _contains_,
+and would silently restore the flood. So the pure half is split out as
+`withStatus` and tested on identity: the same map back for a no-op write, a new
+one as soon as anything moves. Removing the early return fails it.
+
+**There is deliberately no test at the stream level.** The obvious one — write
+the same status ten times, count emissions — was written, and it passed with
+the guard removed. `SubscriptionRef` conflates: a subscriber that has not
+caught up sees only the latest value, so the repeats collapse whether or not
+anything deduplicates them. A test that passes under the mutation it exists to
+catch is worse than no test, because it is read as coverage.
+
+That is the same rule `run.ts` was built on, arrived at from the other
+direction: a guard whose removal changes nothing is not doing what it claims,
+and neither is a test whose subject can be deleted under it.

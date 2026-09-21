@@ -2858,3 +2858,223 @@ that was right for a navigation: it replaces what was there, so moving to it
 costs nothing. A gadget is added beside its predecessors and will still be there
 in an hour; taking the column from somebody mid-diff is the worse trade. What is
 visible is the tab appearing, and the agent's own reply says what it says.
+
+## Three kinds of slow, measured
+
+Reported four times over one afternoon as the same complaint — "laggy", "it
+tanks", "real bad" — and it was three unrelated causes with three different
+signatures. Each was found by measuring the running window over the Chrome
+DevTools protocol, and each was mistaken for the others at least once. The
+instruction that made it tractable was **do not guess, measure**, and the
+useful part of what follows is as much the wrong turns as the answers.
+
+`scripts/dev/app.sh` opens a remote debugging port, because none of this is
+answerable from the source.
+
+### What each one looked like
+
+```
+                        paints/5s   rAF/5s   Script%   socket
+  the amoeba's wobble         557      500      10.6    —
+  ghostty's frame loop        118      500       5.8    —
+  the workspace feed          118        0       2.9    283KB/s
+```
+
+The columns are the point. A cause that moves none of the first three
+columns cannot be found by looking at them, which is why the third survived
+two rounds of fixing the first two and came back every time.
+
+### `border-radius` was 80% of everything the window painted
+
+The application's namesake crawls while an agent works: four `border-radius`
+pairs on an eleven-pixel mark, animating on an infinite loop. `border-radius`
+is a paint property, so every step repainted the full 1692×1370 viewport, on a
+120Hz display, for a mark the size of a bullet.
+
+Isolated by pausing one animation at a time and counting `Paint` trace events:
+
+```
+  everything running                557 paints / 5s
+  all CSS animations frozen         117
+  this one animation paused         110      ← the whole difference
+  this one animation as transform   112      ← kept, and free
+```
+
+The other two animations on screen — the composer's breathing and the bud's
+travel — accounted for seven of the 447 between them. Both already animate
+composited properties.
+
+The replacement is a non-uniform `scale` with a slight `rotate`, and it is
+very nearly the same picture. `Amoeba.tsx` already argued that at this size
+the radii never take the outline more than a pixel off a circle, so what the
+eye reads is the _extent_ — which is exactly what a scale moves.
+
+**Two false starts worth keeping.** The first pause test set
+`animationPlayState` through a selector and reported no change, because the
+trace config it used did not carry paint dimensions and every event came back
+`undefined × undefined`; the run was not comparable to its own baseline.
+`Animation.setPlaybackRate` at 0, against an unchanged measurement script, is
+what actually answered it. And `will-change` was tried on both the amoeba and
+the composer before any of this, on the theory that the element merely needed
+promoting. It changed nothing: a paint property is not made composited by
+asking.
+
+### A frame loop that asks for frames it does not use
+
+`ghostty-web` runs a render loop on `requestAnimationFrame`. A patch already
+gated the _drawing_ on something having changed — but the loop re-requested a
+frame every time regardless, and a rAF request is a compositor commit whether
+or not a pixel moves.
+
+Measured against a terminal with **no canvas on screen and not one draw call
+in two seconds** — `clearRect` 0, `fillText` 0, confirmed by wrapping the
+canvas prototype:
+
+```
+  rAF callbacks / 5s        500 → 0
+  compositor commits        500 → 119
+  style recalculations     1075 → 308
+  TaskDuration            17.8% → 11.1% of one core
+```
+
+Cold, it waits on a timer instead. Hot is "the gate said yes for a reason" —
+every branch of it but the idle heartbeat. **A new branch that does not mark
+`awpHotAt` will be slept through**, which is the one way to get this wrong.
+
+The saving must not be bought out of latency, which would be the worse bug, so
+two things hold it: the write path cancels the timer and asks for a frame the
+moment ink arrives, and a cold tick is 32ms — two frames, not the 200ms
+heartbeat — as the floor on anything the write path does not announce, like a
+scroll, a drag-selection or the cursor blink. `dispose` hands
+`animationFrameId` to `cancelAnimationFrame`, which does not cancel a timeout,
+so the timer id is kept apart and cleared beside it.
+
+Verified with `probe:shell` in both schemes, and the check that matters is the
+Latte one: the `░▒▓█` ramp runs light-to-dark where Macchiato's runs
+dark-to-light, which distinguishes a live patched glyph path from a
+plausible-looking screenshot.
+
+### A feed that announced changes that had not happened
+
+The one that kept coming back. It has no signature in any of the frame
+counters at all: no long task, nothing hot in a profile, the renderer
+**96.3% idle** while the window felt bad.
+
+It was on the socket. With an agent mid-turn:
+
+```
+  283KB/s, 34 frames a second, two streams
+    requestId 337   chat text chunks             expected
+    requestId 20    the whole workspace table    17/s at ~8.5KB
+```
+
+Exactly 100 frames each, locked 1:1. `WorkspaceFactsChanges` is `zipLatest` of
+the facts table and `chat.statuses()`, so anything the second announces
+re-sends the first — and a `SubscriptionRef` publishes on every _write_, not
+on every change. The status is written once per streamed chunk.
+
+`Stream.changes` on `statuses` collapses it. The reasoning is in
+`docs/daemon.md`; the part that belongs here is that **every one of those
+frames re-rendered the sidebar**, and nothing on the window's side could have
+found it. A renderer that is idle and a renderer that is being fed are the
+same picture in a flame chart.
+
+### What the measurements said was not the problem
+
+Each of these was a plausible hypothesis, coded against or measured, and wrong.
+They are here so they are not chased again.
+
+```
+  layout thrash          1.2% of the frame
+  `backdrop-filter`      paints identical with it off
+  `content-visibility`   measurably worse, and reverted
+  a memory leak          heap returns to 100MB after a forced collection;
+                         nodes and listeners flat across ten minutes
+  a reconnect loop       `Schedule.min` takes the smaller duration — the
+                         500ms → 5s cap was already right
+  the transcript's rows  cutting 21 rows to 3 moved typing by 0.25ms of 7.55
+  2,555 tasks a second   unchanged at 2,453 with the problem fixed; constant
+                         background message-loop work, never the cause
+```
+
+The last is the instructive one. It was read as "death by a thousand tasks"
+and named as the mechanism before it had been compared against a known-good
+state. **A number is not evidence until it has been seen in both conditions.**
+
+### One measurement contradicted another, and the wrong one was believed
+
+`Performance.getMetrics` reported `ScriptDuration` at 95.6% of one core while
+the sampling profiler, over the same window, reported the renderer 96.3%
+_idle_. Both cannot be true. The contradiction was noticed, written down, and
+then the 95.6% figure was used anyway for the next two steps.
+
+The socket measurement is what actually found the cause. **When two
+instruments disagree, neither is evidence until the disagreement is
+resolved** — and the counters exposed by `getMetrics` are cumulative, so a
+delta across a reload or a target change is not a rate at all.
+
+### Typing, and why the transcript was innocent
+
+A separate thread of the same afternoon. Typing cost 7.55ms per keystroke,
+measured as `EventDispatch` on `input` over thirty synthetic keys:
+
+```
+  as written .................. 7.55ms
+  transcript cut to 3 rows .... 7.30ms   ← the rows are not the cost
+  the ledge's `layout` gone .... 2.58ms   ← the cost, named
+  the dock as `layoutRoot` ..... 2.74ms   ← the fix, animation kept
+  no state write at all ........ 0.92ms   ← the floor
+```
+
+A Motion projection node measures itself **and every ancestor** on each render
+of the tree it sits in, so a keystroke in the composer bought a forced layout
+of the whole agent column — `get scrollLeft` and `get scrollHeight` were the
+top two entries in every profile taken. `layoutRoot` on the dock stops the walk
+where it never had to go further: the dock is anchored, so nothing outside it
+moves when the ledge changes height.
+
+The obvious suspect was the transcript, on the reasoning that `draft` is
+`useState` in the component that also renders the rows. Truncating the
+transcript to three rows disproved it in one run, before any code moved.
+
+### The ledge animates `height`, and that is a decision
+
+`react-doctor` fails the repo on `no-layout-property-animation` — four
+disclosures animating `height: 0 → auto`, which is every place in this window
+that opens a box. It had been failing before any of this work.
+
+The rule is right about the mechanism, and the cost is real:
+
+```
+  ledge height animating   271 Layout events   186.7ms / 8s
+  opacity only             227                  99.9ms
+```
+
+87ms across eight seconds, a little over 1% of one core. What decides it is
+not the average but whether the cost grows with the conversation, since that is
+what a chat panel does. It does not:
+
+```
+    3 rows    p50 0.22ms   p90 0.52ms   max 1.86ms
+   21 rows    p50 0.20ms   p90 0.41ms   max 2.13ms
+  270 rows    p50 0.37ms   p90 1.02ms   max 2.09ms
+```
+
+Thirteen times the rows for under twice the median, a flat maximum, and **not
+one layout over 8ms at any size**. The dock is absolutely positioned, so the
+ledge resizing does not reflow the rows behind it; what is left is the
+scroller's own padding, which is cheap however many children sit under it. The
+assumed chain — ledge → dock resize → padding write → transcript reflow —
+does not exist.
+
+Neither suggested alternative applies. Moving your neighbours **is** layout, by
+definition, and no composited property does it: `transform: scale` distorts
+what is drawn rather than revealing it, and Motion's `layout` prop FLIPs
+_changes_ to elements that already exist, where all four sites are
+mount/unmount inside `AnimatePresence` with no "before" to project from.
+
+Suppressed per site rather than disabled for the repo, so a new height
+animation still has to answer for itself. If it ever needs to come down, the
+cheaper half is `onUpdate={followIfStuck}` on the same element: it forces a
+`scrollHeight` read on every frame of an animation that is already writing
+layout.

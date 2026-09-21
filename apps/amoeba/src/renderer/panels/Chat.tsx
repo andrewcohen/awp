@@ -866,20 +866,13 @@ const Panel = ({
           their own pane of glass, so the composer looks the same drawn on
           its own in the style guide as it does here.
 
-          `layoutRoot` is what keeps typing cheap. The ledge animates its
-          size, and a projection node measures itself and every ancestor on
-          each render of the tree it is in — so a keystroke in the composer
-          paid for a forced layout of the whole column. Measured over thirty
-          synthetic keystrokes, by `EventDispatch` per `input`:
-
-              ledge as written                 7.55ms per keystroke
-              ledge's `layout` deleted         2.58ms
-              this, animation kept             2.74ms
-              no state write at all            0.92ms  — the floor
-
-          The projection stops here, which is as far as it ever had to
-          reach: the dock is anchored, so nothing outside it moves when the
-          ledge changes height. */}
+          `layoutRoot` is what keeps typing cheap, and it is not optional.
+          The ledge animates its size, and a projection node measures itself
+          and every ancestor on each render of the tree it is in — so before
+          this, a keystroke in the composer paid for a forced layout of the
+          whole column: 7.55ms each, against 0.92ms with no state write at
+          all. The projection stops here, which is as far as it ever had to
+          reach, the dock being anchored. docs/window.md has the figures. */}
         <motion.div layoutRoot ref={dock} {...stylex.props(styles.dock)}>
           {/* ── the activity is a ledge on the composer, not the tail of the
           transcript ────────────────────────────────────────────────────────
@@ -906,44 +899,24 @@ const Panel = ({
               <motion.div
                 key="ledge"
                 {...stylex.props(styles.ledge)}
-                /* ── the height is animated on purpose, and it was measured ──
+                /* ── the height is animated on purpose ──────────────────────
                 react-doctor is right that this relays the column out on every
-                frame of the spring, and it is the largest layout line left in
-                the window. It is also small, and it was measured rather than
-                argued about: over eight seconds mid-turn, with the animation
-                and without it,
+                frame of the spring. It is kept, and the case was checked
+                rather than argued: the cost does not grow with the
+                conversation — thirteen times the rows for under twice the
+                median, a flat maximum, and not one layout over 8ms at any
+                size. The dock is absolute, so the ledge does not reflow the
+                rows behind it.
 
-                    ledge height animating   271 Layout events   186.7ms
-                    opacity only             227                  99.9ms
+                Neither suggested alternative applies. Moving your neighbours
+                *is* layout, and no composited property does it; Motion's
+                `layout` prop FLIPs changes to elements that already exist,
+                and this is a mount inside `AnimatePresence`.
 
-                — 87ms across eight seconds, a little over 1% of one core.
-
-                The question that decides it is not the average but whether
-                the cost grows with the conversation, since that is what a
-                chat panel does. It does not. Layout duration against the
-                number of rows on screen, while the ledge animates:
-
-                      3 rows    p50 0.22ms   p90 0.52ms   max 1.86ms
-                     21 rows    p50 0.20ms   p90 0.41ms   max 2.13ms
-                    270 rows    p50 0.37ms   p90 1.02ms   max 2.09ms
-
-                Thirteen times the rows for under twice the median, a flat
-                maximum, and **not one layout over 8ms at any size** — no
-                dropped frame in any run. The dock is absolutely positioned,
-                so the ledge resizing does not reflow the rows behind it; what
-                is left is the scroller's own padding, which is cheap however
-                many children are under it.
-
-                The
-                alternatives are both worse: `layout` projection is what cost
-                5ms a keystroke until it was scoped to the dock, and height is
-                not a property that can be composited. The window's mandate is
-                that a thing which appears is animated, and the ledge appearing
-                under the composer is exactly the case it was written for.
-
-                If this ever needs to come down, `onUpdate={followIfStuck}`
-                below is the cheaper half: it forces a `scrollHeight` read on
-                every frame of an animation that is already writing layout. */
+                docs/window.md has the numbers, and the cheaper half if this
+                ever has to come down — `onUpdate` below forces a
+                `scrollHeight` read per frame of an animation already writing
+                layout. */
                 // react-doctor-disable-next-line react-doctor/no-layout-property-animation
                 initial={{ height: 0, opacity: 0 }}
                 // react-doctor-disable-next-line react-doctor/no-layout-property-animation
