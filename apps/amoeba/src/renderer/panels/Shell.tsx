@@ -7,7 +7,7 @@ import { XIcon } from "@phosphor-icons/react/X";
 import * as stylex from "@stylexjs/stylex";
 import { useEffect, useState } from "react";
 import { Nothing } from "./Nothing";
-import { shellsOf } from "./shells";
+import { servicesOf, shellsOf } from "./shells";
 import { Pane } from "./Pane";
 import { closeShell, listSessions, onReconnect, openShell, said } from "../data/daemon";
 import { typeset } from "../design/typeset";
@@ -72,6 +72,24 @@ const styles = stylex.create({
     WebkitUserSelect: "none",
   },
   tabOn: { backgroundColor: colors.raised, color: colors.accent },
+  /**
+   * A service, told from a shell before it is read.
+   *
+   * A mark rather than a colour: the strip already spends colour on which tab
+   * is *open*, and a second hue there would be two things to learn in a row of
+   * five items. `::before` because the name is the tab's whole content and
+   * putting a glyph in the markup would put it in the accessible name too —
+   * what a screen reader should hear is `dev`, which the title attribute
+   * qualifies.
+   */
+  service: {
+    "::before": {
+      content: "'▸'",
+      marginInlineEnd: "0.3rem",
+      fontSize: text.small,
+      opacity: 0.65,
+    },
+  },
   spacer: { flex: 1 },
   /** Ends the shell on screen. See the note at the control itself. */
   shut: {
@@ -164,12 +182,31 @@ export function Shell({
   }, []);
 
   const shells = shellsOf(sessions, project, workspace);
+  // ── a service is on this strip because a service is a session ─────────────
+  //
+  // The panel already renders any session by name, so a declared service that
+  // is up costs one more tab and buys the thing a person actually wants from a
+  // dev server: its own output, including the line where it says which port it
+  // took. It is also the honest answer to "is it up" — a live session *is* a
+  // running server, which is the property `ShellOpen` and this share.
+  //
+  // Only the running ones. A service that is declared and stopped belongs to
+  // whatever lists declarations, because that list can tell "stopped" from
+  // "never declared" and this one cannot.
+  const services = servicesOf(sessions, project, workspace);
+  const every = [
+    ...shells.map((one) => ({ session: one.session, say: `shell ${String(one.n)}` })),
+    ...services.map((one) => ({ session: one.session, say: one.name })),
+  ];
   // Derived rather than corrected by an effect. A picked shell that has gone —
   // closed here, or exited under somebody's `exit` — falls back to the first
   // rather than selecting nothing, which is what Base UI draws for a value none
   // of its tabs carry: no panel at all, which reads as the column being broken.
   const open =
-    shells.find((one) => one.session.name === picked)?.session.name ?? shells[0]?.session.name;
+    every.find((one) => one.session.name === picked)?.session.name ?? every[0]?.session.name;
+  // Shells only, and deliberately: the control beside it ends a shell. A
+  // service is *stopped*, which is a different call with a different meaning —
+  // closing a tab must not take down something another window is watching.
   const showing = shells.find((one) => one.session.name === open);
 
   const add = (): void => {
@@ -249,6 +286,27 @@ export function Shell({
             {...stylex.props(typeset.control, styles.tab, session.name === open && styles.tabOn)}
           >
             shell {n}
+          </Tabs.Tab>
+        ))}
+
+        {/* After the shells and before `+`, so the control that adds one stays
+            beside the things it adds to. A service is not opened from here —
+            it is declared in `.awp/config.json` and started by name, by
+            somebody or by the agent, which is what keeps the set of commands
+            this window can run to the set somebody wrote down. */}
+        {services.map(({ session, name }) => (
+          <Tabs.Tab
+            key={session.name}
+            value={session.name}
+            title={`${name} — a declared service, running`}
+            {...stylex.props(
+              typeset.control,
+              styles.tab,
+              styles.service,
+              session.name === open && styles.tabOn,
+            )}
+          >
+            {name}
           </Tabs.Tab>
         ))}
 

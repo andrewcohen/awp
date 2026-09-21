@@ -261,6 +261,29 @@ export const startSession = (project: string, workspace: string): Promise<string
 export const openShell = (project: string, workspace: string): Promise<string> =>
   runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.ShellOpen({ project, workspace })));
 
+/**
+ * The services this checkout declares, and what each is doing.
+ *
+ * Asked rather than subscribed to, and re-asked on a timer by whoever draws
+ * it: a port is not an event. A server binds seconds after its session starts
+ * and nothing anywhere tells the daemon when it did, so there is no change to
+ * push — see `ServiceList` in the contract.
+ */
+export const listServices = (project: string, workspace: string) =>
+  runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.ServiceList({ project, workspace })));
+
+/** Start a declared service. Refused for a name the checkout does not declare. */
+export const startService = (project: string, workspace: string, name: string): Promise<string> =>
+  runtime.runPromise(
+    Effect.flatMap(AwpClient, (rpc) => rpc.ServiceStart({ project, workspace, name })),
+  );
+
+/** Stop one, and everything in its session. */
+export const stopService = (project: string, workspace: string, name: string): Promise<void> =>
+  runtime.runPromise(
+    Effect.flatMap(AwpClient, (rpc) => rpc.ServiceStop({ project, workspace, name })),
+  );
+
 /** End a shell and everything in it. Refused for anything that is not one. */
 export const closeShell = (session: string): Promise<void> =>
   runtime.runPromise(Effect.flatMap(AwpClient, (rpc) => rpc.ShellClose({ session })));

@@ -1,6 +1,6 @@
 import type { SessionInfo } from "@awp-kit/protocol";
 import { describe, expect, it } from "vitest";
-import { shellsOf } from "./shells";
+import { servicesOf, shellsOf } from "./shells";
 
 // `zmx ls` lists every session on the machine, so the whole of this function is
 // deciding which of them are *this* workspace's shells. Each test below is a
@@ -101,5 +101,52 @@ describe("a workspace's shells", () => {
   // is the answer; the panel says so itself.
   it("has nothing to show with no workspace open", () => {
     expect(shellsOf([session({})], undefined, undefined)).toEqual([]);
+  });
+});
+
+// A service is a session on the same list, so the whole of `servicesOf` is
+// telling one kind of session from another — and the cases below are the ones
+// that would put a tab on the strip that should not be there.
+describe("a workspace's services", () => {
+  const svc = (kind: string, over: Partial<SessionInfo> = {}) =>
+    session({
+      name: `awp.thicket.lantern.${kind}`,
+      identity: { project: "thicket", workspace: "lantern", kind, label: undefined },
+      ...over,
+    });
+
+  it("takes the services and leaves the shells", () => {
+    const found = servicesOf([svc("service_dev"), svc("shell_1")], "thicket", "lantern");
+    expect(found.map((one) => one.name)).toEqual(["dev"]);
+  });
+
+  // The same rule a dead shell gets, and for the same reason: zmx keeps a
+  // session listed after its command exits, and a tab attached to one draws a
+  // frozen screen and takes no keys. A dev server that crashed is exactly this.
+  it("leaves out one whose command has exited", () => {
+    expect(servicesOf([svc("service_dev", { ended: true })], "thicket", "lantern")).toEqual([]);
+  });
+
+  it("leaves another workspace's alone", () => {
+    const elsewhere = svc("service_dev", {
+      identity: { project: "orchard", workspace: "lantern", kind: "service_dev", label: undefined },
+    });
+    expect(servicesOf([elsewhere], "thicket", "lantern")).toEqual([]);
+  });
+
+  // `service` on its own is not a service, the same way `shell_01` is not a
+  // shell: the prefix decides, on the daemon's side, whether a session may be
+  // killed.
+  it("is strict about the spelling", () => {
+    expect(servicesOf([svc("service"), svc("services_dev")], "thicket", "lantern")).toEqual([]);
+  });
+
+  it("is in name order, so the strip does not reshuffle as they start", () => {
+    const found = servicesOf(
+      [svc("service_web"), svc("service_api"), svc("service_db")],
+      "thicket",
+      "lantern",
+    );
+    expect(found.map((one) => one.name)).toEqual(["api", "db", "web"]);
   });
 });
