@@ -1,4 +1,5 @@
 import { Effect, Exit, RcMap, Ref, Scope } from "effect";
+import type { WorkspaceStatus } from "@awp-kit/protocol";
 import { describe, expect, it } from "vitest";
 import {
   MODE,
@@ -14,6 +15,7 @@ import {
   untilQuiet,
   updateOf,
   oneAtATime,
+  withStatus,
 } from "./chat";
 
 // The shapes here are not invented: they are the updates a real turn produced,
@@ -1135,4 +1137,35 @@ describe("whether a message cuts the agent off", () => {
   it("waits through a compaction, however it was asked for", () => {
     expect(interrupts({ ...asking, compacting: true })).toBe(false);
   });
+});
+
+describe("a status that did not change", () => {
+  // The facts feed is `zipLatest` of the workspace table and this, so anything
+  // this announces re-sends the whole table to every window. It is written once
+  // per streamed chunk, and measured on the socket mid-turn that came to 17
+  // frames a second at ~8.5KB — 140KB/s of a table that had not moved.
+  //
+  // The dedupe is `Stream.changes`, which compares with `Equal.equals`, which
+  // on a plain `Map` is `===`. So the property to hold is *reference identity*,
+  // not contents: a `withStatus` that returned a faithful copy would pass any
+  // test about what the map contains and restore the flood in silence.
+
+  it("is the same map, not an equal one", () => {
+    const all: ReadonlyMap<string, WorkspaceStatus> = new Map([["thicket/lantern", "working"]]);
+    expect(withStatus(all, "thicket/lantern", "working")).toBe(all);
+  });
+
+  it("is a new map as soon as something moves", () => {
+    const all: ReadonlyMap<string, WorkspaceStatus> = new Map([["thicket/lantern", "working"]]);
+    expect(withStatus(all, "thicket/lantern", "waiting")).not.toBe(all);
+    expect(withStatus(all, "orchard/harbor-works", "working")).not.toBe(all);
+    expect(withStatus(all, "thicket/lantern", undefined)).not.toBe(all);
+  });
+
+  // There is deliberately no test at the stream level. `SubscriptionRef`
+  // conflates — a subscriber that has not caught up sees only the latest
+  // value — so a test that writes the same status ten times and counts
+  // emissions passes whether or not the guard is there, which is the one
+  // thing a regression test must not do. The reference identity above is the
+  // property, and removing the early return in `withStatus` fails it.
 });

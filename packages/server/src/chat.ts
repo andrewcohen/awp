@@ -263,6 +263,36 @@ export const hanging = (updates: ReadonlyArray<ChatUpdate>): ReadonlyArray<strin
   return [...last].filter(([, status]) => !ENDED.has(status)).map(([id]) => id);
 };
 
+/**
+ * One workspace's status written into the table — **the same table back when
+ * nothing moved**, and that identity is the whole economy of the facts feed.
+ *
+ * `SubscriptionRef` publishes on every write, not on every change, and this is
+ * written once per streamed chunk. `Chat.statuses` is `Stream.changes` over
+ * those writes, which compares with `Equal.equals` — on a plain `Map` that is
+ * `===`. So returning a fresh copy here would be correct, would pass every
+ * test about what the map contains, and would silently restore a 17-frame-a-
+ * second re-send of the whole workspace table to every connected window.
+ *
+ * Exported for the test that removing the early return has to fail.
+ */
+export const withStatus = (
+  all: ReadonlyMap<string, WorkspaceStatus>,
+  key: string,
+  status: WorkspaceStatus | undefined,
+): ReadonlyMap<string, WorkspaceStatus> => {
+  if (all.get(key) === status) {
+    return all;
+  }
+  const next = new Map(all);
+  if (status === undefined) {
+    next.delete(key);
+  } else {
+    next.set(key, status);
+  }
+  return next;
+};
+
 /** The statuses that mean a call is over, whatever it did. */
 const ENDED = new Set(["completed", "failed", "cancelled"]);
 
@@ -2157,18 +2187,7 @@ export const make = Effect.gen(function* () {
   const statuses = yield* SubscriptionRef.make<ReadonlyMap<string, WorkspaceStatus>>(new Map());
 
   const setStatus = (key: string, status: WorkspaceStatus | undefined) =>
-    SubscriptionRef.update(statuses, (all) => {
-      if (all.get(key) === status) {
-        return all;
-      }
-      const next = new Map(all);
-      if (status === undefined) {
-        next.delete(key);
-      } else {
-        next.set(key, status);
-      }
-      return next;
-    });
+    SubscriptionRef.update(statuses, (all) => withStatus(all, key, status));
 
   /**
    * How to tell a workspace's watcher that a question has been answered.
@@ -2715,10 +2734,30 @@ export const make = Effect.gen(function* () {
     set: (project: string, workspace: string, option: string, value: string) =>
       held(project, workspace, (one) => one.set(option, value)),
 
+    /**
+     * Every workspace's status, now and on each change.
+     *
+     * `changes` is not decoration. A `SubscriptionRef` publishes on every
+     * write, and `setStatus` writes on every status *report* — which, while an
+     * agent streams, is once per chunk. The guard there already returns the
+     * identical map when nothing moved, so this collapses those to nothing by
+     * reference alone; `Equal.equals` on a plain `Map` is `===`, which is
+     * exactly the question being asked.
+     *
+     * Measured on the socket with an agent mid-turn, before this existed:
+     * `WorkspaceFactsChanges` is `zipLatest` of the facts table and this, so
+     * each of those non-changes re-sent the whole table — 17 frames a second
+     * at ~8.5KB, 140KB/s, and a sidebar re-render for every one of them. The
+     * protocol's own note said a delta would be "machinery in service of an
+     * economy nobody can measure"; that is still true, and this is not a
+     * delta. It is not announcing a change that did not happen.
+     */
     statuses: () =>
-      Stream.concat(
-        Stream.fromEffect(SubscriptionRef.get(statuses)),
-        SubscriptionRef.changes(statuses),
+      Stream.changes(
+        Stream.concat(
+          Stream.fromEffect(SubscriptionRef.get(statuses)),
+          SubscriptionRef.changes(statuses),
+        ),
       ),
   };
 });
