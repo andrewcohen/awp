@@ -217,6 +217,16 @@ export interface Daemon {
   readonly tagTask: (id: string, tag: string, on: boolean) => Effect.Effect<Task, Refusal>;
   readonly sendMessage: (from: string, to: string, body: string) => Effect.Effect<Message, Refusal>;
   readonly inbox: (from: string) => Effect.Effect<ReadonlyArray<Message>, Refusal>;
+  readonly services: (from: string) => Effect.Effect<ReadonlyArray<ServiceHere>, Refusal>;
+  readonly startService: (from: string, name: string) => Effect.Effect<ServiceHere, Refusal>;
+}
+
+/** One declared service of the checkout an agent is working in. */
+export interface ServiceHere {
+  readonly name: string;
+  readonly command: string;
+  readonly running: boolean;
+  readonly port?: number | undefined;
 }
 
 /**
@@ -514,6 +524,31 @@ export const TOOLS = [
     },
   },
   {
+    name: "awp_service",
+    description:
+      "Start or list the long-running processes this checkout declares — a dev server, " +
+      "a worker, a database. Prefer this over running one yourself: a service started " +
+      "here keeps running after this conversation ends, survives a restart, and is shown " +
+      "to the person working with you, with its port. A dev server you background " +
+      "yourself dies with this conversation and nothing will say that it did. Calling it " +
+      "with no name lists what is declared and what each one is doing. Starting one " +
+      "already running is safe and answers with the port it is on.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: {
+          type: "string",
+          description:
+            "A service this checkout declares. Call with no name first to see them: " +
+            "only names written in .awp/config.json can be started, and a command " +
+            "passed here is not one.",
+        },
+      },
+      required: [],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "awp_messages",
     description:
       "Read the messages other checkouts in this thread have sent you. Reading marks " +
@@ -564,6 +599,50 @@ const ownTask = (
 const OPEN = ["pending", "in_progress", "blocked"] as const;
 
 /** A tool's answer, as MCP carries one: content, and whether it went wrong. */
+/**
+ * One service, as a sentence.
+ *
+ * The port is the whole answer and it leads. A model that has just started a
+ * dev server is about to need the URL, and burying it behind the name and the
+ * command is making it parse prose for the one field it came for.
+ *
+ * A running service with no port yet is the ordinary first second of its life,
+ * so it says so rather than reporting "no port" — which reads as a failure of
+ * the thing that just succeeded.
+ */
+export const saidOneService = (one: {
+  readonly name: string;
+  readonly command: string;
+  readonly running: boolean;
+  readonly port?: number | undefined;
+}): string => {
+  if (!one.running) {
+    return `${one.name} is not running — \`${one.command}\``;
+  }
+  return one.port === undefined
+    ? `${one.name} is running and has not bound a port yet — \`${one.command}\`. Ask again in a moment.`
+    : `${one.name} is running at http://localhost:${String(one.port)} — \`${one.command}\``;
+};
+
+/**
+ * Every declared service, as prose.
+ *
+ * The empty case says how to fix it, in the file's own words. It is the
+ * answer a model gets in every repository that has not declared anything,
+ * which is most of them — so it is the sentence most likely to be read.
+ */
+export const saidServices = (
+  all: ReadonlyArray<{
+    readonly name: string;
+    readonly command: string;
+    readonly running: boolean;
+    readonly port?: number | undefined;
+  }>,
+): string =>
+  all.length === 0
+    ? 'This checkout declares no services. They are declared under "services" in .awp/config.json, as a name and a command — only a declared name can be started here.'
+    : all.map((one) => saidOneService(one)).join("\n");
+
 const said = (text: string, failed = false): unknown => ({
   content: [{ type: "text", text }],
   // ── a refused tool is a RESULT, not a JSON-RPC error ────────────────────
@@ -1021,6 +1100,27 @@ export const answer = (
                     `Sent to ${sent.success.to.workspace}. It will be delivered when that agent is next free.`,
                   )
                 : said(sent.failure.reason, true),
+            );
+          }
+
+          case "awp_service": {
+            const wanted = text(args, "name");
+            if (wanted === undefined) {
+              const found = yield* Effect.result(daemon.services(cwd));
+              return reply(
+                Result.isFailure(found)
+                  ? said(found.failure.reason, true)
+                  : said(saidServices(found.success)),
+              );
+            }
+            const started = yield* Effect.result(daemon.startService(cwd, wanted));
+            return reply(
+              Result.isFailure(started)
+                ? // The daemon's own sentence, which names what *is* declared —
+                  // see `serviceCommand`. A model that guessed a name can act
+                  // on that; "refused" is not something it can act on.
+                  said(started.failure.reason, true)
+                : said(saidOneService(started.success)),
             );
           }
 

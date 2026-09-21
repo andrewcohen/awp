@@ -34,6 +34,7 @@ import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 import * as attachment from "./attachment";
 import * as handlers from "./handlers";
 import * as ptyBun from "./pty-bun";
+import * as servicePorts from "./service-port";
 import * as sessions from "./sessions";
 import * as settings from "./settings";
 import { layer as gadgetsLayer, migrations as gadgetMigrations } from "./gadgets";
@@ -259,7 +260,9 @@ export const layer = RpcServer.layer(AwpRpcs).pipe(
   Layer.provide(serialization),
   Layer.provide(NodeSocketServer.layerWebSocket({ host: DAEMON_HOST, port: DAEMON_PORT })),
   Layer.provide(handlers.layer),
-  Layer.provide(services),
+  // Merged rather than given a line of its own: `Layer.provide` in a pipe tops
+  // out at twenty arguments and this list was at it.
+  Layer.provide(Layer.merge(servicePorts.layer, services)),
   // ── one Chat, and both of its consumers get that one ──────────────────────
   //
   // The handlers hold the conversations a window watches; the create job's

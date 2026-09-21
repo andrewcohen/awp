@@ -52,6 +52,22 @@ const File = Schema.Struct({
   hooks: Schema.optional(
     Schema.Struct({ bootstrap: Schema.optional(Schema.Array(Schema.String)) }),
   ),
+  /**
+   * The long-running processes this checkout needs while it is worked in.
+   *
+   * A third thing beside `hooks.bootstrap`, and the distinction is the whole
+   * of why it is not one of those: bootstrap runs once and must finish, a
+   * service is started once and is expected never to end. Its interesting
+   * output is a port somebody clicks rather than an exit code.
+   *
+   * Declared rather than handed over, and that is a safety property rather
+   * than tidiness. An agent starts a service **by name**, so the only commands
+   * it can cause to run are ones already written down here by a person. There
+   * is no path from the chat to an arbitrary command line.
+   */
+  services: Schema.optional(
+    Schema.Record(Schema.String, Schema.Struct({ command: Schema.String })),
+  ),
   deck: Schema.optional(
     Schema.Struct({
       bookmark_prefix: Schema.optional(Schema.String),
@@ -111,6 +127,18 @@ export interface AwpSettings {
    */
   readonly bootstrap: ReadonlyArray<string>;
   /**
+   * The services this checkout declares, by name.
+   *
+   * A whole shell line, like {@link bootstrap} and unlike {@link agent}: `bun
+   * run dev` is what somebody writes in a config file, and splitting it would
+   * make one field mean two things depending on who read it.
+   *
+   * Project config only — a service is bound to a checkout. A global `dev`
+   * would be one dev server for every repository on the machine, which is
+   * exactly the case two workspaces on one repo get wrong.
+   */
+  readonly services: ReadonlyMap<string, string>;
+  /**
    * Directories to look under for repositories to offer as projects.
    *
    * Tilde-expanded where it is used rather than here, because expansion needs a
@@ -148,6 +176,7 @@ export interface AwpSettings {
 export const DEFAULTS: AwpSettings = {
   agent: ["claude"],
   bootstrap: [],
+  services: new Map(),
   projectRoots: [],
   bookmarkPrefix: undefined,
   model: undefined,
@@ -181,6 +210,14 @@ const parse = (text: string): AwpSettings => {
     bootstrap: (decoded.hooks?.bootstrap ?? [])
       .map((one) => one.trim())
       .filter((one) => one !== ""),
+    // A name with no command is dropped rather than kept as a row that fails
+    // on start: the list is what a person picks from, and an entry that cannot
+    // run is an offer of a failure.
+    services: new Map(
+      Object.entries(decoded.services ?? {})
+        .map(([name, one]) => [name.trim(), one.command.trim()] as const)
+        .filter(([name, command]) => name !== "" && command !== ""),
+    ),
     bookmarkPrefix: prefix === "" ? undefined : prefix,
     projectRoots: (decoded.deck?.project_roots ?? [])
       .map((one) => one.trim())
@@ -239,6 +276,12 @@ export const merge = (global: AwpSettings, project: AwpSettings): AwpSettings =>
   agent: project.agent === DEFAULTS.agent ? global.agent : project.agent,
   bootstrap: project.bootstrap.length === 0 ? global.bootstrap : project.bootstrap,
   bookmarkPrefix: project.bookmarkPrefix ?? global.bookmarkPrefix,
+  // The project's, and only the project's. Unlike every field above this one
+  // does not fall back: a service is bound to a checkout, so a global `dev`
+  // would start one repository's dev server in another's directory — and the
+  // failure would be a command that runs, binds a port and serves the wrong
+  // tree, which is worse than one that refuses.
+  services: project.services,
   // Global-only in practice — a repository listing the directories to scan for
   // *other* repositories is a strange thing to write — but merged by the same
   // rule as everything else rather than by an exception, because an exception
@@ -361,4 +404,40 @@ export const agentWith = (
     settings.effort,
   );
   return withFlag(withFlag(withDefaults, "--model", chosen.model), "--effort", chosen.effort);
+};
+
+/**
+ * Which command a named service runs, or why it will not run one.
+ *
+ * **This is the security boundary of the whole feature**, so it is a function
+ * rather than three lines inside a handler: `ServiceStart` is reachable by an
+ * agent through the MCP server, and what stops a conversation running an
+ * arbitrary command is that the name has to already be in a file a person
+ * wrote. A test can hold that rule; a handler that reads a config file from a
+ * path derived from the home directory cannot be given one.
+ *
+ * Default-deny, and the empty case is the one worth stating: a checkout that
+ * declares nothing can start nothing. There is no fallback to the global file
+ * — see {@link merge} — so "no project config" and "no services" are the same
+ * answer, which is the safe one.
+ *
+ * The refusal names what *is* declared. The reader is as likely to be a model
+ * as a person, and "no such service" is not something either can act on.
+ */
+export const serviceCommand = (
+  services: ReadonlyMap<string, string>,
+  name: string,
+  where: string,
+): { readonly command: string } | { readonly refusal: string } => {
+  const command = services.get(name);
+  if (command !== undefined) {
+    return { command };
+  }
+  const declared = [...services.keys()];
+  return {
+    refusal:
+      declared.length === 0
+        ? `${where} declares no services — add one under "services" in .awp/config.json`
+        : `no service called ${name} in ${where} — it declares ${declared.join(", ")}`,
+  };
 };

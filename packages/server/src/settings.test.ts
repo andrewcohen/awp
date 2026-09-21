@@ -4,13 +4,14 @@ import { join } from "node:path";
 import { Effect } from "effect";
 import { afterAll, describe, expect, test } from "vitest";
 import {
-  type AwpSettings,
   DEFAULTS,
   SETTINGS_FILE,
   Settings,
   agentWith,
   layer,
   projectConfigPath,
+  serviceCommand,
+  type AwpSettings,
   withFlag,
 } from "./settings";
 
@@ -330,5 +331,43 @@ describe("two files, and the project wins", () => {
 
   test("the project file lives where the Go implementation put it", () => {
     expect(projectConfigPath("/repos/thicket")).toBe("/repos/thicket/.awp/config.json");
+  });
+});
+
+// ── which commands a conversation can cause to run ────────────────────────
+//
+// `ServiceStart` is reachable by an agent through the MCP server, so this
+// function is what stands between a chat and an arbitrary command line. The
+// tests below are the boundary rather than coverage of a helper.
+describe("picking a declared service", () => {
+  const declared = new Map([
+    ["dev", "bun run dev"],
+    ["queue", "bun run worker"],
+  ]);
+
+  test("runs what the file says, not what the caller said", () => {
+    expect(serviceCommand(declared, "dev", "thicket/lantern")).toEqual({
+      command: "bun run dev",
+    });
+  });
+
+  test("refuses a name nobody declared", () => {
+    const picked = serviceCommand(declared, "rm -rf /", "thicket/lantern");
+    expect(picked).not.toHaveProperty("command");
+    // The sentence names what is available, because a model reads it and
+    // "no such service" is not something it can act on.
+    expect(picked).toEqual({
+      refusal: "no service called rm -rf / in thicket/lantern — it declares dev, queue",
+    });
+  });
+
+  // The important one. A checkout with no config can start nothing at all —
+  // there is no fallback to the global file, so the absence of a declaration
+  // is a refusal rather than an unguarded default.
+  test("refuses everything when nothing is declared", () => {
+    expect(serviceCommand(new Map(), "dev", "thicket/lantern")).toEqual({
+      refusal:
+        'thicket/lantern declares no services — add one under "services" in .awp/config.json',
+    });
   });
 });

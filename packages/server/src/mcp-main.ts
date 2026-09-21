@@ -90,6 +90,47 @@ const over = (rpc: client.AwpClientShape): Daemon => ({
   sendMessage: (from, to, body) =>
     rpc.MessageSend({ from, to, body }).pipe(Effect.mapError(refusal)),
   inbox: (from) => rpc.MessageInbox({ from }).pipe(Effect.mapError(refusal)),
+
+  // ── the pair comes from the daemon, never from the model ─────────────────
+  //
+  // `ServiceList` and `ServiceStart` are the window's calls and take a pair,
+  // because the window has one. An agent has a directory, and the tool schema
+  // deliberately has no field for anything else — so the pair is resolved by
+  // asking `ThreadAt`, which is the daemon's own answer to "whose checkout is
+  // this", rather than by taking one apart here.
+  //
+  // That is what keeps the binding structural. A conversation cannot start a
+  // service in somebody else's workspace because there is no argument in which
+  // to name one, at either end.
+  services: (from) =>
+    rpc.ThreadAt({ from }).pipe(
+      Effect.flatMap((here) =>
+        rpc.ServiceList({ project: here.project, workspace: here.workspace }),
+      ),
+      Effect.mapError(refusal),
+    ),
+  startService: (from, name) =>
+    rpc.ThreadAt({ from }).pipe(
+      Effect.flatMap((here) =>
+        rpc
+          .ServiceStart({ project: here.project, workspace: here.workspace, name })
+          // The start answers with a session name, and what the tool has to say
+          // is the port. One more question, to the same daemon, about a service
+          // that is now certainly there.
+          .pipe(
+            Effect.flatMap(() =>
+              rpc.ServiceList({ project: here.project, workspace: here.workspace }),
+            ),
+            Effect.map((all) => all.find((one) => one.name === name)),
+          ),
+      ),
+      Effect.flatMap((found) =>
+        found === undefined
+          ? Effect.fail({ reason: `awp: ${name} started but is not in this checkout's list` })
+          : Effect.succeed(found),
+      ),
+      Effect.mapError(refusal),
+    ),
 });
 
 const program = Effect.gen(function* () {

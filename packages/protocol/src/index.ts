@@ -93,6 +93,23 @@ export type SessionIdentity = (typeof SessionIdentity)["Type"];
 export const shellKind = (n: number): string => `shell_${String(n)}`;
 
 /**
+ * The kind of a workspace's declared service, by its configured name.
+ *
+ * Here beside {@link shellKind} and for the same reason: both sides read it.
+ * The daemon spells it to start one; the window reads it back off
+ * {@link SessionIdentity} to know a session is a service rather than somebody's
+ * shell, and to find which declaration it came from.
+ *
+ * **Compare with `sessionKind`, never with this.** `MAX_KIND` is 16, so
+ * `service_` leaves eight characters and a longer name comes back out of a
+ * session name shortened. A caller matching a running session to a config entry
+ * has to reduce the config's spelling the same way — the rule holds by
+ * construction rather than by two sides agreeing to truncate identically, which
+ * is the mistake `naming.test.ts` exists to pin.
+ */
+export const serviceKind = (name: string): string => `service_${name}`;
+
+/**
  * Which shell a kind names, or `undefined` for a kind that is not one.
  *
  * Deliberately strict about the spelling — `shell_01` and `shell_1x` are not
@@ -2526,6 +2543,62 @@ export class AwpRpcs extends RpcGroup.make(
    * exited session listed so its output can still be read, and without this a
    * shell somebody typed `exit` into would take its number to the grave.
    */
+  /**
+   * One declared service, and whether it is up.
+   *
+   * `port` is what a person actually wants from a dev server, and it is
+   * `undefined` rather than absent-meaning-none: a service that is running and
+   * has not bound anything yet is the ordinary first second of its life, and
+   * drawing "no port" there would be wrong for a moment every single time.
+   */
+  Rpc.make("ServiceList", {
+    payload: { project: Schema.String, workspace: Schema.String },
+    success: Schema.Array(
+      Schema.Struct({
+        /** As written in `.awp/config.json`, not the shortened session kind. */
+        name: Schema.String,
+        command: Schema.String,
+        /** The zmx session, when there is one. */
+        session: Schema.optional(Schema.String),
+        running: Schema.Boolean,
+        port: Schema.optional(Schema.Number),
+      }),
+    ),
+  }),
+
+  /**
+   * Start a declared service, and answer with the session it is in.
+   *
+   * **A name, never a command**, and that is the security property rather than
+   * an interface preference. This call is reachable by an agent through the MCP
+   * server, so the set of commands a conversation can cause to run is exactly
+   * the set a person wrote into `.awp/config.json`. A name that is not declared
+   * is refused — see `handlers.ts`, where that refusal is the one line in this
+   * feature with a test of its own.
+   *
+   * Idempotent, because `Multiplexer.start` is: asking for a service that is
+   * already up answers with the session it is already in rather than starting a
+   * second one on a port that is already taken.
+   */
+  Rpc.make("ServiceStart", {
+    payload: { project: Schema.String, workspace: Schema.String, name: Schema.String },
+    success: Schema.String,
+    error: SessionStartFailed,
+  }),
+
+  /**
+   * Stop a service, and everything running in it.
+   *
+   * Refused for anything that is not a service this workspace declares, by the
+   * same rule as {@link ShellClose} and for the same reason: the check is the
+   * daemon's because a client re-deriving it is a second implementation, and
+   * this one kills processes.
+   */
+  Rpc.make("ServiceStop", {
+    payload: { project: Schema.String, workspace: Schema.String, name: Schema.String },
+    error: SessionStartFailed,
+  }),
+
   Rpc.make("ShellOpen", {
     payload: { project: Schema.String, workspace: Schema.String },
     success: Schema.String,

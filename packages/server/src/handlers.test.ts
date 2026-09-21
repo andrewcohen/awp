@@ -31,6 +31,7 @@ import {
 import * as handlers from "./handlers";
 import { IntentError, WorkspaceIntent } from "./intent";
 import { type DiffOf, Jj, JjError, type RevisionsIn } from "./jj";
+import { ServicePorts } from "./service-port";
 import * as settings from "./settings";
 import { Multiplexer, type Session } from "./multiplexer";
 import { type WorkspaceDeps, createWorkspace, workspacePath } from "./jobs/create-workspace";
@@ -180,6 +181,8 @@ type Client = RpcClient.RpcClient<
  * a real branch in `baseOfThread` that no other test reaches.
  */
 interface Fakes {
+  /** What the port lookup finds. Absent is a service that has bound nothing. */
+  readonly port?: number | undefined;
   /** Every message the handlers accepted, in the order they were sent. */
   readonly sent?: Array<{ readonly to: string; readonly body: string }> | undefined;
   /** Written into a config file, because Settings reads one. */
@@ -335,6 +338,16 @@ const run = <A>(body: (rpc: Client) => Effect.Effect<A, unknown, Scope.Scope>, f
         // faked, because the real one spawns claude and takes ten seconds; the
         // model call has its own probe.
         Layer.provide(settings.layer(configFor(fakes))),
+        // A port lookup that finds nothing. The real one shells out to `pgrep`
+        // and `lsof`, which is exactly the kind of thing a tag exists to keep
+        // out of a test — and what it answers is checked in
+        // `service-port.test.ts`, against captured output rather than a
+        // process.
+        Layer.provide(
+          Layer.succeed(ServicePorts)({
+            portOf: () => Effect.succeed(fakes.port),
+          }),
+        ),
         // A task store that holds nothing. The board's own behaviour — ingest
         // being safe twice, a sweep scoped to one project — is `tasks.test.ts`
         // against a real file; what a fake here could say is that the handler

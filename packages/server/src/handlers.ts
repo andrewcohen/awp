@@ -31,6 +31,7 @@ import {
   type SessionInfo,
   SessionNotFound,
   SessionStartFailed,
+  serviceKind,
   shellKind,
   shellNumber,
   ThreadNotFound,
@@ -54,7 +55,8 @@ import { Jj } from "./jj";
 import { Messages } from "./messages";
 import { archiveThreadRef } from "./jobs/archive-thread";
 import { createWorkspaceRef, workspacePath } from "./jobs/create-workspace";
-import { Settings, agentWith } from "./settings";
+import { Settings, agentWith, serviceCommand } from "./settings";
+import { ServicePorts } from "./service-port";
 import { localBookmarks } from "./jj-parse";
 import { identityLabels, sessionName } from "./naming";
 import { TOOLS, daemonUrl, mcpEntry, serverSpec } from "./mcp";
@@ -562,6 +564,7 @@ export const layer = AwpRpcs.toLayer(
     const reviewQueue = yield* ReviewQueueFeed;
     const facts = yield* WorkspaceState;
     const config = yield* Settings;
+    const ports = yield* ServicePorts;
     const jj = yield* Jj;
     const chat = yield* Chat;
     const faces = yield* Faces;
@@ -1222,6 +1225,123 @@ export const layer = AwpRpcs.toLayer(
        * that appears to do nothing. It is killed first, and only ever one this
        * workspace owns, whose kind this daemon spelled.
        */
+      /**
+       * The services this checkout declares, and what each one is doing.
+       *
+       * Config is read per call rather than cached: `.awp/config.json` is a
+       * file a person edits while looking at this list, and a service they
+       * just declared not appearing is the one thing that would make them
+       * doubt they had declared it.
+       */
+      ServiceList: ({ project, workspace }) =>
+        Effect.gen(function* () {
+          const dir = workspacePath(project, workspace);
+          const settings = yield* config.read(dir);
+          const listed = yield* mux.list().pipe(Effect.orElseSucceed(() => []));
+
+          return yield* Effect.forEach(
+            [...settings.services.entries()],
+            ([name, command]) =>
+              Effect.gen(function* () {
+                const want = sessionName(project, workspace, serviceKind(name));
+                const found = listed.find((one) => one.name === want && !one.ended);
+                if (found === undefined) {
+                  return { name, command, running: false };
+                }
+                // Asked per call, because a port is not an event: a server
+                // binds seconds after the session starts, and nothing tells
+                // anybody when it did.
+                const port = yield* ports.portOf(found.pid);
+                return {
+                  name,
+                  command,
+                  session: found.name,
+                  running: true,
+                  ...(port === undefined ? {} : { port }),
+                };
+              }),
+            // The commands are two per service and cheap, but a workspace with
+            // six services should not pay for them in series while somebody
+            // watches a list draw.
+            { concurrency: "unbounded" },
+          );
+        }),
+
+      /**
+       * Start a declared service.
+       *
+       * **The refusal is the feature.** Everything else here is `ShellOpen`
+       * with a different kind; this one line is what makes the call safe to
+       * hand to an agent, because it means a conversation can only cause
+       * commands to run that a person already wrote into a file. Reachable
+       * through the MCP server, so it is the boundary rather than a check.
+       */
+      ServiceStart: ({ project, workspace, name }) =>
+        Effect.gen(function* () {
+          const dir = workspacePath(project, workspace);
+          const settings = yield* config.read(dir);
+          const picked = serviceCommand(settings.services, name, `${project}/${workspace}`);
+          if ("refusal" in picked) {
+            return yield* Effect.fail(new SessionStartFailed({ reason: picked.refusal }));
+          }
+
+          const session = sessionName(project, workspace, serviceKind(name));
+          // Idempotent, because `Multiplexer.start` is: a service already up
+          // answers with the session it is already in. A second dev server on a
+          // taken port is a failure several steps from here, in somebody else's
+          // log.
+          yield* mux
+            .start({ name: session, cwd: dir, command: [...loginShell(), "-lc", picked.command] })
+            .pipe(Effect.mapError((error) => new SessionStartFailed({ reason: error.reason })));
+
+          const held = yield* threads.list().pipe(Effect.orDie);
+          const claimed = held.find(
+            (thread) =>
+              thread.archivedAt === undefined &&
+              thread.members.some(
+                (member) => member.project === project && member.workspace === workspace,
+              ),
+          );
+          yield* mux
+            .setLabels(
+              session,
+              identityLabels(project, workspace, serviceKind(name), claimed?.title),
+            )
+            .pipe(Effect.mapError((error) => new SessionStartFailed({ reason: error.reason })));
+
+          return session;
+        }),
+
+      /**
+       * Stop a service, and everything in its session.
+       *
+       * Refused for a name this workspace does not declare, by the same
+       * argument as `ShellClose`: this kills a process tree, so it asks the
+       * config what a service *is* rather than trusting the name it was handed.
+       */
+      ServiceStop: ({ project, workspace, name }) =>
+        Effect.gen(function* () {
+          const settings = yield* config.read(workspacePath(project, workspace));
+          if (!settings.services.has(name)) {
+            return yield* Effect.fail(
+              new SessionStartFailed({
+                reason: `no service called ${name} in ${project}/${workspace} — only a declared service can be stopped here`,
+              }),
+            );
+          }
+          const session = sessionName(project, workspace, serviceKind(name));
+          const found = yield* mux
+            .lookup(session)
+            .pipe(Effect.mapError((error) => new SessionStartFailed({ reason: error.reason })));
+          if (found === undefined) {
+            // Already stopped is the outcome asked for.
+            return;
+          }
+          yield* mux
+            .kill(session)
+            .pipe(Effect.mapError((error) => new SessionStartFailed({ reason: error.reason })));
+        }),
+
       ShellOpen: ({ project, workspace }) =>
         Effect.gen(function* () {
           const dir = workspacePath(project, workspace);

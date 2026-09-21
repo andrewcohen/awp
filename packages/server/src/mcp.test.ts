@@ -9,6 +9,7 @@ import {
   commentsSaid,
   kindOf,
   parseLine,
+  saidOneService,
   taskSaid,
   tasksSaid,
   threadSaid,
@@ -77,6 +78,14 @@ const daemonOf = (
       commentsAt: (from) => {
         asked.push({ commentsAt: from });
         return Effect.succeed([]);
+      },
+      services: (from) => {
+        asked.push({ services: from });
+        return Effect.succeed([]);
+      },
+      startService: (from, name) => {
+        asked.push({ startService: from, name });
+        return Effect.succeed({ name, command: "bun run dev", running: true, port: 5273 });
       },
       file: (finding) => {
         asked.push(finding);
@@ -206,6 +215,62 @@ describe("the binding is the absence of an argument", () => {
     expect(call("awp_file_finding", { path: "a.ts", line: 1, body: "x" }).asked[0]).toMatchObject({
       from: HERE,
     });
+    expect(call("awp_service").asked).toEqual([{ services: HERE }]);
+  });
+});
+
+// ── the services this checkout declares ───────────────────────────────────
+//
+// The tool exists to be *preferred* over backgrounding a command, and nothing
+// makes a model prefer it except that it answers better. So what is asserted
+// here is mostly what the sentences say — they are the interface, because what
+// reads them is a model.
+describe("awp_service", () => {
+  it("starts one by name, and leads with the port", () => {
+    const got = call("awp_service", { name: "dev" });
+    expect(got.asked).toEqual([{ startService: HERE, name: "dev" }]);
+    // The URL, not the name and not the command: a model that has just started
+    // a dev server came for the address and should not have to parse prose for
+    // it.
+    expect(got.text).toContain("http://localhost:5273");
+  });
+
+  it("passes the daemon's refusal through in the daemon's own words", () => {
+    const got = call(
+      "awp_service",
+      { name: "rm -rf /" },
+      {
+        startService: () =>
+          Effect.fail({
+            reason: "no service called rm -rf / in thicket/lantern — it declares dev",
+          }),
+      },
+    );
+    expect(got.failed).toBe(true);
+    // Naming what *is* declared is the half a model can act on. A bare refusal
+    // would leave it guessing, and guessing here means trying again.
+    expect(got.text).toContain("it declares dev");
+  });
+
+  it("says how to declare one when the checkout has none", () => {
+    const got = call("awp_service");
+    expect(got.text).toContain(".awp/config.json");
+  });
+});
+
+describe("a service, as a sentence", () => {
+  it("running with no port yet says so, rather than reporting no port", () => {
+    // The ordinary first second of a dev server's life. Reporting "no port"
+    // here reads as a failure of the thing that just succeeded.
+    expect(saidOneService({ name: "dev", command: "bun run dev", running: true })).toContain(
+      "has not bound a port yet",
+    );
+  });
+
+  it("stopped says what it would run", () => {
+    expect(saidOneService({ name: "dev", command: "bun run dev", running: false })).toBe(
+      "dev is not running — `bun run dev`",
+    );
   });
 });
 
