@@ -170,14 +170,26 @@ const styles = stylex.create({
   crawling: {
     transform: "scale(1.06, 0.84)",
     "::before": {
-      // Pairs at 30/70 and wider, and the two axes deliberately disagree. The
-      // first set ran 35–68%, every corner within a sixth of a circle's,
-      // which is a rounded box rather than an organism.
+      // ── the wobble is a transform, and that is a performance rule ────────
+      //
+      // This was four `border-radius` pairs at 30/70, and it was 80% of
+      // everything the window painted: `border-radius` is a paint property,
+      // so each of its ~110 steps a second repainted the whole viewport —
+      // 447 of 557 Paint events per five seconds, measured by pausing this
+      // one animation and counting. A `transform` composites instead, on a
+      // layer of its own, and costs the main thread nothing.
+      //
+      // It is also very nearly the same picture. This file already argues
+      // that at eleven pixels the radii never take the outline more than a
+      // pixel off a circle — so what the eye was reading was the extent, and
+      // the extent is exactly what a non-uniform scale moves. The axes
+      // disagree and the rotation is slight, which is the lopsidedness the
+      // radii were bought for; the bud on `::after` still does the rest.
       animationName: stylex.keyframes({
-        "0%, 100%": { borderRadius: "62% 38% 32% 68% / 58% 30% 70% 42%" },
-        "27%": { borderRadius: "30% 70% 68% 32% / 45% 62% 38% 55%" },
-        "53%": { borderRadius: "72% 28% 55% 45% / 32% 68% 30% 70%" },
-        "79%": { borderRadius: "35% 65% 70% 30% / 65% 35% 62% 38%" },
+        "0%, 100%": { transform: "scale(1, 1) rotate(0deg)" },
+        "27%": { transform: "scale(0.88, 1.1) rotate(-6deg)" },
+        "53%": { transform: "scale(1.12, 0.9) rotate(5deg)" },
+        "79%": { transform: "scale(0.94, 1.06) rotate(-3deg)" },
       }),
       // Held back by exactly the morph's own duration, so the shape has
       // finished growing before it starts changing. Two movements at once on
