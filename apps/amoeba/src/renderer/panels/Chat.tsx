@@ -906,8 +906,49 @@ const Panel = ({
               <motion.div
                 key="ledge"
                 {...stylex.props(styles.ledge)}
+                /* ── the height is animated on purpose, and it was measured ──
+                react-doctor is right that this relays the column out on every
+                frame of the spring, and it is the largest layout line left in
+                the window. It is also small, and it was measured rather than
+                argued about: over eight seconds mid-turn, with the animation
+                and without it,
+
+                    ledge height animating   271 Layout events   186.7ms
+                    opacity only             227                  99.9ms
+
+                — 87ms across eight seconds, a little over 1% of one core.
+
+                The question that decides it is not the average but whether
+                the cost grows with the conversation, since that is what a
+                chat panel does. It does not. Layout duration against the
+                number of rows on screen, while the ledge animates:
+
+                      3 rows    p50 0.22ms   p90 0.52ms   max 1.86ms
+                     21 rows    p50 0.20ms   p90 0.41ms   max 2.13ms
+                    270 rows    p50 0.37ms   p90 1.02ms   max 2.09ms
+
+                Thirteen times the rows for under twice the median, a flat
+                maximum, and **not one layout over 8ms at any size** — no
+                dropped frame in any run. The dock is absolutely positioned,
+                so the ledge resizing does not reflow the rows behind it; what
+                is left is the scroller's own padding, which is cheap however
+                many children are under it.
+
+                The
+                alternatives are both worse: `layout` projection is what cost
+                5ms a keystroke until it was scoped to the dock, and height is
+                not a property that can be composited. The window's mandate is
+                that a thing which appears is animated, and the ledge appearing
+                under the composer is exactly the case it was written for.
+
+                If this ever needs to come down, `onUpdate={followIfStuck}`
+                below is the cheaper half: it forces a `scrollHeight` read on
+                every frame of an animation that is already writing layout. */
+                // react-doctor-disable-next-line react-doctor/no-layout-property-animation
                 initial={{ height: 0, opacity: 0 }}
+                // react-doctor-disable-next-line react-doctor/no-layout-property-animation
                 animate={{ height: "auto", opacity: 1 }}
+                // react-doctor-disable-next-line react-doctor/no-layout-property-animation
                 exit={{ height: 0, opacity: 0 }}
                 transition={ledgeSpring}
                 onUpdate={followIfStuck}

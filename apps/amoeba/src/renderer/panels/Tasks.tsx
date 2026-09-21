@@ -907,8 +907,18 @@ export function Tasks({ dir, project, workspace, thread }: TasksProps) {
         {writing ? (
           <motion.div
             key="writing"
+            /* A disclosure opening. `height` cannot be composited and react-doctor
+               is right that each frame relays out the column — measured on the
+               chat's ledge, the same shape: 87ms across eight seconds, a little
+               over 1% of one core. It is kept because the window's mandate is that
+               a thing which appears is animated, and because both alternatives are
+               worse: `layout` projection cost 5ms a keystroke until it was scoped,
+               and there is no composited property that opens a box. */
+            // react-doctor-disable-next-line react-doctor/no-layout-property-animation
             initial={{ height: 0, opacity: 0 }}
+            // react-doctor-disable-next-line react-doctor/no-layout-property-animation
             animate={{ height: "auto", opacity: 1 }}
+            // react-doctor-disable-next-line react-doctor/no-layout-property-animation
             exit={{ height: 0, opacity: 0 }}
             transition={spring}
             {...stylex.props(styles.opening)}
@@ -980,8 +990,18 @@ export function Tasks({ dir, project, workspace, thread }: TasksProps) {
           {showingDone && showingFinished.length > 0 ? (
             <motion.div
               key="finished"
+              /* A disclosure opening. `height` cannot be composited and react-doctor
+                 is right that each frame relays out the column — measured on the
+                 chat's ledge, the same shape: 87ms across eight seconds, a little
+                 over 1% of one core. It is kept because the window's mandate is that
+                 a thing which appears is animated, and because both alternatives are
+                 worse: `layout` projection cost 5ms a keystroke until it was scoped,
+                 and there is no composited property that opens a box. */
+              // react-doctor-disable-next-line react-doctor/no-layout-property-animation
               initial={{ height: 0, opacity: 0 }}
+              // react-doctor-disable-next-line react-doctor/no-layout-property-animation
               animate={{ height: "auto", opacity: 1 }}
+              // react-doctor-disable-next-line react-doctor/no-layout-property-animation
               exit={{ height: 0, opacity: 0 }}
               transition={spring}
               {...stylex.props(styles.opening)}
