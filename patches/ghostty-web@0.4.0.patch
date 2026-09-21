@@ -1,8 +1,14 @@
+diff --git a/node_modules/ghostty-web/.bun-tag-a42ac11b4f082c b/.bun-tag-a42ac11b4f082c
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/node_modules/ghostty-web/.bun-tag-b7208e32b38a474 b/.bun-tag-b7208e32b38a474
 new file mode 100644
 index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+diff --git a/node_modules/ghostty-web/.bun-tag-d81c01f5b84498d0 b/.bun-tag-d81c01f5b84498d0
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/dist/ghostty-web.js b/dist/ghostty-web.js
-index a4ca427b95288e70c782ce303013cd644893dcec..1371eb653eaadeac479416d7e21f8cdb27eaa034 100644
+index a4ca427b95288e70c782ce303013cd644893dcec..b3b069093db97c5a34ee689a1cd0f1be3db9fb84 100644
 --- a/dist/ghostty-web.js
 +++ b/dist/ghostty-web.js
 @@ -1363,7 +1363,7 @@ class $ {
@@ -28,11 +34,20 @@ index a4ca427b95288e70c782ce303013cd644893dcec..1371eb653eaadeac479416d7e21f8cdb
    writeInternal(A, B) {
      var g;
 -    this.wasmTerm.write(A), this.processTerminalResponses(), typeof A == "string" && A.includes("\x07") ? this.bellEmitter.fire() : A instanceof Uint8Array && A.includes(7) && this.bellEmitter.fire(), (g = this.linkDetector) == null || g.invalidateCache(), this.viewportY !== 0 && this.scrollToBottom(), typeof A == "string" && A.includes("\x1B]") && this.checkForTitleChange(A), B && requestAnimationFrame(B);
-+    this.awpDirtyAt = awpNow(), this.wasmTerm.write(A), this.processTerminalResponses(), typeof A == "string" && A.includes("\x07") ? this.bellEmitter.fire() : A instanceof Uint8Array && A.includes(7) && this.bellEmitter.fire(), (g = this.linkDetector) == null || g.invalidateCache(), this.viewportY !== 0 && this.scrollToBottom(), typeof A == "string" && A.includes("\x1B]") && this.checkForTitleChange(A), B && requestAnimationFrame(B);
++    awpDirty(this), this.wasmTerm.write(A), this.processTerminalResponses(), typeof A == "string" && A.includes("\x07") ? this.bellEmitter.fire() : A instanceof Uint8Array && A.includes(7) && this.bellEmitter.fire(), (g = this.linkDetector) == null || g.invalidateCache(), this.viewportY !== 0 && this.scrollToBottom(), typeof A == "string" && A.includes("\x1B]") && this.checkForTitleChange(A), B && requestAnimationFrame(B);
    }
    /**
     * Write data with newline
-@@ -2639,9 +2639,12 @@ class IA {
+@@ -2624,7 +2624,7 @@ class IA {
+    */
+   dispose() {
+     if (!this.isDisposed) {
+-      this.isDisposed = !0, this.isOpen = !1, this.animationFrameId && (cancelAnimationFrame(this.animationFrameId), this.animationFrameId = void 0), this.scrollAnimationFrame && (cancelAnimationFrame(this.scrollAnimationFrame), this.scrollAnimationFrame = void 0), this.mouseMoveThrottleTimeout && (clearTimeout(this.mouseMoveThrottleTimeout), this.mouseMoveThrottleTimeout = void 0), this.pendingMouseMove = void 0;
++      this.isDisposed = !0, this.isOpen = !1, this.animationFrameId && (cancelAnimationFrame(this.animationFrameId), this.animationFrameId = void 0), this.awpTimeoutId !== void 0 && (clearTimeout(this.awpTimeoutId), this.awpTimeoutId = void 0), this.scrollAnimationFrame && (cancelAnimationFrame(this.scrollAnimationFrame), this.scrollAnimationFrame = void 0), this.mouseMoveThrottleTimeout && (clearTimeout(this.mouseMoveThrottleTimeout), this.mouseMoveThrottleTimeout = void 0), this.pendingMouseMove = void 0;
+       for (const A of this.addons)
+         A.dispose();
+       this.addons = [], this.cleanupComponents(), this.dataEmitter.dispose(), this.resizeEmitter.dispose(), this.bellEmitter.dispose(), this.selectionChangeEmitter.dispose(), this.keyEmitter.dispose(), this.titleChangeEmitter.dispose(), this.scrollEmitter.dispose(), this.renderEmitter.dispose(), this.cursorMoveEmitter.dispose();
+@@ -2639,11 +2639,15 @@ class IA {
    startRenderLoop() {
      const A = () => {
        if (!this.isDisposed && this.isOpen) {
@@ -44,11 +59,14 @@ index a4ca427b95288e70c782ce303013cd644893dcec..1371eb653eaadeac479416d7e21f8cdb
 +          const B = this.wasmTerm.getCursor();
 +          B.y !== this.lastCursorY && (this.lastCursorY = B.y, this.cursorMoveEmitter.fire());
 +        }
-+        this.animationFrameId = requestAnimationFrame(A);
++        awpSchedule(this, A);
        }
      };
++    this.awpRun = A;
      A();
-@@ -2961,3 +2964,173 @@ export {
+   }
+   /**
+@@ -2961,3 +2965,232 @@ export {
    CA as getGhostty,
    oA as init
  };
@@ -190,6 +208,11 @@ index a4ca427b95288e70c782ce303013cd644893dcec..1371eb653eaadeac479416d7e21f8cdb
 +//                           the floor for anything unaccounted for
 +const AWP_BUSY_MS = 150;
 +const AWP_IDLE_MS = 200;
++// How long a sleeping loop waits before looking again. Two frames, not the
++// 200ms heartbeat: this is the floor on how late anything the write path does
++// not announce — a scroll, a drag-selection, the cursor blink — can be drawn.
++// It costs a timer, and no rAF, so it commits no compositor frame.
++const AWP_COLD_MS = 32;
 +
 +const awpNow = () => (typeof performance === "object" ? performance.now() : Date.now());
 +
@@ -197,23 +220,23 @@ index a4ca427b95288e70c782ce303013cd644893dcec..1371eb653eaadeac479416d7e21f8cdb
 +  const now = awpNow();
 +  if (term.awpViewportY !== term.viewportY) {
 +    term.awpViewportY = term.viewportY;
-+    term.awpRenderedAt = now;
++    term.awpRenderedAt = now, term.awpHotAt = now;
 +    return true;
 +  }
 +  // A scrollbar mid-fade animates on a timer with nothing written behind it.
 +  if (term.scrollbarOpacity > 0) {
-+    term.awpRenderedAt = now;
++    term.awpRenderedAt = now, term.awpHotAt = now;
 +    return true;
 +  }
 +  // Selection is dragged with the pointer and writes nothing either. Guarded
 +  // with `?.` because it is one more name in a minified bundle: if it is not
 +  // there the clock below still covers it, a little less smoothly.
 +  if (term.selectionManager?.isSelecting === true) {
-+    term.awpRenderedAt = now;
++    term.awpRenderedAt = now, term.awpHotAt = now;
 +    return true;
 +  }
 +  if (now - (term.awpDirtyAt ?? 0) < AWP_BUSY_MS) {
-+    term.awpRenderedAt = now;
++    term.awpRenderedAt = now, term.awpHotAt = now;
 +    return true;
 +  }
 +  if (now - (term.awpRenderedAt ?? 0) >= AWP_IDLE_MS) {
@@ -221,4 +244,58 @@ index a4ca427b95288e70c782ce303013cd644893dcec..1371eb653eaadeac479416d7e21f8cdb
 +    return true;
 +  }
 +  return false;
++}
++
++// --- awp: a frame loop that sleeps when there is nothing to draw -----------
++//
++// `awpShouldRender` gates the drawing, but the loop asked for a frame 120
++// times a second whatever the answer was — and a rAF request is a compositor
++// commit per frame whether or not a pixel changes. Measured against a
++// terminal with no canvas on screen and not one draw call in it: 500 commits
++// in five seconds.
++//
++// Hot is "the gate said yes for a reason", which is every branch of it but
++// the idle heartbeat — mark a new branch `awpHotAt` or it will sleep through
++// whatever that branch was added for. It stays hot for AWP_BUSY_MS after the
++// last one, so a fading scrollbar or a drag that pauses for a frame does not
++// drop to the timer and stutter back.
++//
++// Cold falls back to a timer at the heartbeat the gate already keeps, so
++// nothing rests on the dirty flag being perfect: a write nobody announced is
++// still drawn within AWP_IDLE_MS.
++function awpSchedule(term, run) {
++  if (term.awpTimeoutId !== undefined) {
++    clearTimeout(term.awpTimeoutId);
++    term.awpTimeoutId = undefined;
++  }
++  if (awpNow() - (term.awpHotAt ?? 0) < AWP_BUSY_MS) {
++    term.animationFrameId = requestAnimationFrame(run);
++    return;
++  }
++  // Kept apart from `animationFrameId`: `dispose` hands that one to
++  // `cancelAnimationFrame`, which does not cancel a timeout.
++  term.awpTimeoutId = setTimeout(() => {
++    term.awpTimeoutId = undefined;
++    run();
++  }, AWP_COLD_MS);
++}
++
++// --- awp: ink arriving wakes the loop ---------------------------------------
++//
++// Without this, output written while the loop is cold waits for the next cold
++// tick before it is even considered — latency bought straight out of the
++// thing the terminal is for. The write path knows exactly when ink arrived,
++// so it says so, and the loop goes back to rAF for as long as it keeps
++// arriving.
++function awpDirty(term) {
++  const now = awpNow();
++  term.awpDirtyAt = now;
++  term.awpHotAt = now;
++  if (term.awpTimeoutId !== undefined) {
++    clearTimeout(term.awpTimeoutId);
++    term.awpTimeoutId = undefined;
++    if (term.awpRun !== undefined && !term.isDisposed && term.isOpen) {
++      term.animationFrameId = requestAnimationFrame(term.awpRun);
++    }
++  }
 +}
