@@ -308,8 +308,8 @@ const styles = stylex.create({
    * The whole band is the target, not just line one.
    *
    * A row is two lines and the name is the top one, so two thirds of a row
-   * somebody is aiming at did nothing — and line two is where the slug, the
-   * phase and the project are, which is the half a person reads to decide
+   * somebody is aiming at did nothing — and line two is where the slug and
+   * the project are, which is the half a person reads to decide
    * *which* row they want. Pointing at the thing you just read and having it
    * not respond is the shape of a control that looks broken.
    *
@@ -322,10 +322,10 @@ const styles = stylex.create({
    * It positions against `row`, which is already `relative` for the accent
    * edge — so the target is exactly the band that lights up on hover.
    *
-   * What it costs: the `title` on line two's pull request number and phase.
-   * The overlay is above them, so the row's own tooltip — the address — is
-   * what a hover reports now. Both facts are still drawn; it is the second
-   * reading of them that goes.
+   * What it costs: the `title` on line two's pull request number. The
+   * overlay is above it, so the row's own tooltip — the address — is what a
+   * hover reports now. The number is still drawn; it is the second reading
+   * of it that goes.
    *
    * Not applied to a shut row. A disabled button swallows the press rather
    * than passing it on, so an overlay there would be a dead sheet over the
@@ -446,7 +446,6 @@ const styles = stylex.create({
   // Where the work is in the configured dev loop. Never truncated — `impl…`
   // says nothing that `implement` does not, and the whole word is nine
   // characters.
-  phase: { flexShrink: 0, whiteSpace: "nowrap" },
   // The one thing on line two allowed to truncate. A project name is short and
   // a kind is shorter; a slug is the long one, and it is also the one whose
   // beginning carries the information.
@@ -836,31 +835,15 @@ function Row({
               </span>
             )}
             {slug !== undefined && <span {...stylex.props(styles.slug)}>{slug}</span>}
-            {/* Fixed-width and first among the details, in that order for the
-                reason the two-line layout exists at all: a number and a phase
-                cannot truncate usefully, so they take their space and the slug
-                above takes what is left. */}
+            {/* Fixed-width and first among the details, for the reason the
+                two-line layout exists at all: a number cannot truncate
+                usefully, so it takes its space and the slug above takes what
+                is left. The dev-loop phase was drawn here too, and was
+                removed: the Go hook reports "explore" for any conversation
+                without a task list, which is most of them. */}
             {pr !== undefined && (
               <span {...stylex.props(styles.pr)} title={`pull request #${pr}`}>
                 {`#${pr}`}
-              </span>
-            )}
-            {facts?.phase !== undefined && (
-              <span
-                {...stylex.props(styles.phase)}
-                // Counted where there is a count. `3/7` beside `implement` is
-                // the difference between knowing the work is underway and
-                // knowing how far — and it is one of the few facts on this
-                // strip that changes while somebody watches it.
-                title={
-                  facts.done !== undefined && facts.total !== undefined
-                    ? `${facts.phase} · ${facts.done} of ${facts.total}`
-                    : facts.phase
-                }
-              >
-                {facts.done !== undefined && facts.total !== undefined
-                  ? `${facts.phase} ${facts.done}/${facts.total}`
-                  : facts.phase}
               </span>
             )}
             {/* Said, because the row is otherwise identical to a running one
