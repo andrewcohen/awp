@@ -82,8 +82,11 @@ import type {
   WorkspaceStatus,
 } from "@awp-kit/protocol";
 import { INSTALL, adapterPath, claudePath, parseMessage } from "./acp";
+import { agentEnv, repoRoot } from "./agent-env";
 import { workspacePath } from "./jobs/create-workspace";
+import { Jj } from "./jj";
 import { daemonUrl, mcpEntry, serverSpec } from "./mcp";
+import { Projects } from "./projects";
 import { Settings } from "./settings";
 import { childEnv } from "./zmx-session";
 
@@ -372,6 +375,12 @@ export interface ChatOptions {
    * shape and this is the finding that killed it.
    */
   readonly fork?: boolean;
+  /**
+   * Set over the daemon's own environment — `AWP_WORKSPACE` and
+   * `AWP_REPO_ROOT`, from {@link agentEnv}. Absent means inherited, which for
+   * those two is the workspace the daemon was launched from.
+   */
+  readonly env?: Readonly<Record<string, string>>;
 }
 
 interface Pending {
@@ -901,6 +910,17 @@ export const permissionOf = (params: Record<string, unknown>, id: string): ChatU
 };
 
 /**
+ * What the adapter process is started with: the daemon's environment, then the
+ * workspace's, then the executable. Exported for the test that a daemon
+ * launched from inside another workspace does not lend it to every chat.
+ */
+export const adapterEnv = (
+  claude: string,
+  env: Readonly<Record<string, string>> = {},
+  base: Record<string, string | undefined> = process.env,
+): Record<string, string> => ({ ...childEnv(base), ...env, CLAUDE_CODE_EXECUTABLE: claude });
+
+/**
  * Open one adapter process and hold a conversation in it.
  *
  * The Scope is the process: when the last window on this workspace closes, the
@@ -936,7 +956,7 @@ export const conversation = (
           // Code refuses to run inside Claude Code; the executable is set
           // after it, because that key is a path rather than a parent
           // describing itself.
-          env: { ...childEnv(), CLAUDE_CODE_EXECUTABLE: claude },
+          env: adapterEnv(claude, options.env),
           stdin: { stream: Stream.fromQueue(outbox), endOnDone: false },
         }),
       ),
@@ -2055,6 +2075,8 @@ export const make = Effect.gen(function* () {
   // answer; the ones already running keep theirs, which is the same rule the
   // agent's own command line follows.
   const config = yield* Settings;
+  const jj = yield* Jj;
+  const projects = yield* Projects;
 
   // ── who this daemon is, in a sentence somebody can act on ──────────────
   //
@@ -2305,8 +2327,18 @@ export const make = Effect.gen(function* () {
         // thing it was meant to prevent.
         const entered = typeof known === "string" ? yield* claimed(known) : undefined;
 
+        // A root that will not resolve empties both rather than failing the
+        // chat: an agent that reports nothing is honest, and one reporting as
+        // the daemon's own workspace is not.
+        const dir = workspacePath(project, workspace);
+        const root = yield* repoRoot(project, dir).pipe(
+          Effect.provideService(Jj, jj),
+          Effect.provideService(Projects, projects),
+          Effect.orElseSucceed(() => undefined),
+        );
         const held = yield* conversation(spawner, {
-          cwd: workspacePath(project, workspace),
+          cwd: dir,
+          env: root === undefined ? agentEnv("", "") : agentEnv(workspace, root),
           ...(defaults.model === undefined ? {} : { model: defaults.model }),
           ...(defaults.effort === undefined ? {} : { effort: defaults.effort }),
           ...(defaults.mode === undefined ? {} : { mode: defaults.mode }),
@@ -2779,5 +2811,5 @@ export const make = Effect.gen(function* () {
 export const layer: Layer.Layer<
   Chat,
   never,
-  ChildProcessSpawner.ChildProcessSpawner | Db | Settings
+  ChildProcessSpawner.ChildProcessSpawner | Db | Settings | Jj | Projects
 > = Layer.effect(Chat)(make);

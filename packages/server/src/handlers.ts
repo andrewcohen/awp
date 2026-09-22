@@ -45,6 +45,7 @@ import { execFileSync } from "node:child_process";
 import { homedir, userInfo } from "node:os";
 import { basename } from "node:path";
 import { Clock, Effect, FileSystem, Option, Path, Ref, Schema, Stream } from "effect";
+import { agentEnv } from "./agent-env";
 import { Chat } from "./chat";
 import { Faces } from "./faces";
 import { ReviewQueueFeed } from "./review-queue-feed";
@@ -1193,7 +1194,7 @@ export const layer = AwpRpcs.toLayer(
               // The same two the create job sets, and for the same reason: the
               // status hooks in a person's Claude Code settings are gated on
               // them, so an agent started without them reports nothing at all.
-              env: { AWP_WORKSPACE: workspace, AWP_REPO_ROOT: root },
+              env: agentEnv(workspace, root),
             })
             .pipe(Effect.mapError((error) => new SessionStartFailed({ reason: error.reason })));
 

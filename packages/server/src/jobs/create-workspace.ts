@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { type JobError, type JobKind, type JobRef, type JobStep, permanent } from "@awp-kit/jobs";
 import { type CreateWorkspace, CreateWorkspace as CreateWorkspaceSchema } from "@awp-kit/protocol";
 import { Effect } from "effect";
+import { agentEnv } from "../agent-env";
 import type { Github } from "../github";
 import type { Jj } from "../jj";
 import type { Multiplexer } from "../multiplexer";
@@ -642,7 +643,7 @@ export const createWorkspace = (deps: WorkspaceDeps): JobKind<CreateWorkspace> =
             //
             // The repo root and not the workspace directory: the state file is
             // keyed by the repository.
-            env: { AWP_WORKSPACE: workspace, AWP_REPO_ROOT: input.repo },
+            env: agentEnv(workspace, input.repo),
           })
           .pipe(Effect.mapError(refused("could not start the session")));
       }),
