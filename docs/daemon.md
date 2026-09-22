@@ -607,26 +607,60 @@ what let it be placed by arrival order in a list arrival order does not
 describe. A queued message floats at the tail, everything the agent is still
 producing is inserted **above** it, and a turn ending un-queues it.
 
-#### A subagent is a tool call, and `_meta` says which
+#### A subagent is a tool call, and `_meta` is the wrong place to ask what kind
 
 There is **no subagent update kind in ACP** — no nesting, no separate stream,
 and a subagent's own messages never arrive. Worth writing down so nobody goes
-looking. What arrives is one tool call that sits at `in_progress` for minutes,
-and the facts ride in `_meta.claudeCode.toolResponse` on its progress beats:
+looking. What arrives is one tool call that sits at `in_progress` for minutes.
+
+The first version of this read everything off
+`_meta.claudeCode.toolResponse` on the progress beats, and shipped, and the
+window then reported a nineteen-second spawn by its description alone. The
+adapter forwards what the SDK hands it, so the question is what the CLI mints.
+Read out of the 2.1.278 bundle, `tool_progress` is produced in exactly four
+places:
 
 ```
-  subagentType         which kind was spawned    →  `spawned  a code-reviewer`
-  elapsedTimeSeconds   how long                  →  `2m14s`, past ten seconds
-  subagentRetry        attempt · max_retries ·   →  `attempt 2 of 5,
-                       retry_delay_ms                retrying in 30s`
+  repl_tool_call    a REPL call             no subagent_type
+  bash_progress     a command's progress    no subagent_type
+  tool_heartbeat    still going             no subagent_type   ← a working spawn
+  agent_api_retry   rate-limited            subagent_type: e.data.agentType
 ```
 
-The retry counters are the least obvious and the ones worth having: the
-adapter's own comment says it forwards them "so clients can show why a spawn
-looks stalled". They are the SDK's fields in the SDK's spelling, so they are
-read as `max_retries` first and camelCase second rather than assumed. A
-subagent behind a rate limit and a subagent doing slow work are otherwise the
-same picture, and only one of them is worth waiting for.
+So `subagentType` is a field only a **failing** spawn ever sends. A subagent
+that is merely working sends heartbeats, which carry an elapsed and nothing
+else — the window could name a subagent that was rate-limited and never one
+that was fine, which is precisely the wrong half of the cases.
+
+What the spawn is was never a thing to be reported, because it is an
+**argument**: `subagent_type` is an input to the `Task` tool, and the adapter
+puts the whole input on the notification as `rawInput` (`acp-agent.js:6323`).
+It is there on the first `tool_call`, before the call has done anything, and it
+cannot arrive late. The `toolResponse` reading is kept behind it for the retry
+path and for a transcript replayed by an adapter that has moved the field
+again.
+
+```
+  rawInput.subagent_type   which kind was spawned  →  `a code-reviewer`
+  elapsedTimeSeconds       how long                →  `2m14s`, past ten seconds
+  subagentRetry            attempt · max_retries · →  `attempt 2 of 5,
+                           retry_delay_ms              retrying in 30s`
+```
+
+The retry counters are worth having for the reason the adapter's own comment
+gives — it forwards them "so clients can show why a spawn looks stalled". They
+are the SDK's fields in the SDK's spelling, so they are read as `max_retries`
+first and camelCase second rather than assumed. A subagent behind a rate limit
+and a subagent doing slow work are otherwise the same picture, and only one of
+them is worth waiting for.
+
+**The general shape, which is the part that outlives this CLI version.** A
+field that is present on the failure path and absent on the success path reads
+as working code for as long as nothing fails, and the test that covers it will
+be written from the failure — `chat.test.ts` had one asserting `subagentType`
+was kept, and it passed throughout. Ask where a fact is _decided_: an argument
+is known before the work starts, and a report is only as reliable as the code
+path that emits it.
 
 #### A turn edge says when the daemon SENT, not when the agent got there
 

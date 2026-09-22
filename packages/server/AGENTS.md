@@ -415,12 +415,12 @@ carrying intent rather than mechanism. **The command stays reachable**, because
 approving `rm -rf` from a description alone is the decision nobody should be asked
 to make.
 
-**A subagent is a tool call, and `_meta` says which.** There is no subagent update
-kind in ACP — no nesting, and a subagent's own messages never arrive; what arrives
-is one tool call at `in_progress` for minutes. The retry counters are the ones
-worth having: a subagent behind a rate limit and one doing slow work are otherwise
-the same picture. Read as `max_retries` first and camelCase second — they are the
-SDK's fields in the SDK's spelling.
+**A subagent is a tool call, and its type is an argument, not a reported fact.**
+ACP has no subagent update kind: its own messages never arrive, and what does is
+one call at `in_progress` for minutes. `subagentType` rides the rate-limit-retry
+beat alone, so `_meta` names a failing spawn and never a working one; the type is
+`rawInput.subagent_type`, there from the start. The counters on that beat keep
+the SDK's spelling: `max_retries` first, camelCase second.
 
 ### Two sets of slash commands, and only one is intercepted
 

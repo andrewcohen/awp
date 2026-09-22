@@ -1219,10 +1219,28 @@ const doing = (items: ReadonlyArray<Item>, turn: number): string | undefined => 
       return item.status === "running" ? "compacting" : undefined;
     }
     if (item?.kind !== "ran" || item.turn !== turn) continue;
-    if (going(item.status)) return toolTitleOf(item);
+    if (going(item.status)) return spawned(item) ?? toolTitleOf(item);
   }
   return undefined;
 };
+
+/**
+ * `code-reviewer · Review the diff`, when the live call is a spawn.
+ *
+ * A subagent is the one call that regularly outlives the wait it is worth
+ * naming for, and the description it carries reads exactly like any other
+ * row's first line — so for the several minutes something else was doing the
+ * work, the ledge said the agent was doing it itself.
+ *
+ * Both halves, because neither is enough on its own here. The pill has one
+ * line and no columns, so it cannot do what the row does with a label beside
+ * a subject; and the type alone is regularly `subagent`, which says a spawn
+ * is running and nothing about which one.
+ */
+const spawned = (item: Ran): string | undefined =>
+  item.subagent === undefined || item.subagent === ""
+    ? undefined
+    : `${verb(item)} · ${toolTitleOf(item)}`;
 
 /**
  * Past this, how long a finished tool call took is worth printing, in seconds.
@@ -1749,7 +1767,7 @@ const Tool = ({
   // titled `Terminal` by the adapter, which names nothing and repeats the
   // verb. See its note — the real command lands on the same id a moment
   // later.
-  const said = toolTitle(item.subagent === undefined ? toolTitleOf(item) : `a ${item.subagent}`);
+  const said = toolTitle(toolTitleOf(item));
   // Openable for anything held back, not only for output. A twelve-line
   // heredoc drawn as its first line with no way to see the other eleven is a
   // row that has quietly lost the command — and so is a row drawn as what
@@ -1817,17 +1835,16 @@ const Tool = ({
           {...stylex.props(styles.command)}
         >
           {/* Nothing at all for a command, which is most rows — and no
-              empty span either, or the gap it leaves is the column that
-              was just taken out. */}
-          {/* Nothing at all for a command, which is most rows — and no
               empty span either, or the gap it leaves is the column that was
               just taken out.
 
-              Nothing for a spawn either: the subject beside it already
-              reads `a code-reviewer`, and the label made that
-              `code-reviewer a code-reviewer`. A label is only worth a word
-              when it says something the row does not. */}
-          {item.subagent === undefined && verb(item) !== "" && (
+              A spawn is the case this column is best at: the label says
+              what was handed off to and the subject says what it was asked
+              for. Drawing the type *instead of* the subject was tried and
+              is worse — the row read `a general-purpose`, which is the
+              default type and names nothing, in place of the one line
+              saying what the subagent is actually doing. */}
+          {verb(item) !== "" && (
             <span {...stylex.props(typeset.label, styles.verb)}>{verb(item)}</span>
           )}
           {/* ── a delegated call, labelled ────────────────────────────────

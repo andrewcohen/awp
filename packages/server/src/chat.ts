@@ -586,15 +586,38 @@ const delegatedTo = (update: Record<string, unknown>): Record<string, unknown> =
   const meta = update["_meta"] as Record<string, unknown> | undefined;
   const claude = meta?.["claudeCode"] as Record<string, unknown> | undefined;
   const response = claude?.["toolResponse"] as Record<string, unknown> | undefined;
+  // ── the type is an argument, and only a failure reports it as a fact ─────
+  //
+  // `subagentType` was read from `toolResponse` alone, and measured against
+  // the CLI's own bundle (2.1.278) that is a field only a *failing* spawn
+  // ever sends: `tool_progress` is minted in four places — a repl call, bash
+  // progress, a heartbeat, and `agent_api_retry` — and only the last sets
+  // `subagent_type`, off the retry's `agentType`. A subagent that is merely
+  // working sends heartbeats, which carry an elapsed and no type at all. So
+  // the window could name a subagent that was rate-limited and never one that
+  // was fine, which is the wrong half.
+  //
+  // What the spawn was is known before it starts, because it is an argument
+  // to the tool: `Task`'s input holds `subagent_type`, and the adapter puts
+  // the input on the notification verbatim as `rawInput`. Read first from
+  // there — it arrives with the call rather than minutes into it — and keep
+  // the `toolResponse` reading behind it, which is the retry path and a
+  // transcript replayed by an adapter that has moved the field again.
+  const input = update["rawInput"] as Record<string, unknown> | undefined;
+  const asked = input?.["subagent_type"];
+  const declared = typeof asked === "string" && asked !== "" ? { subagent: asked } : {};
   if (response === undefined) {
-    return {};
+    return declared;
   }
   const retry = response["subagentRetry"] as Record<string, unknown> | undefined;
   const tried = numberOf(retry?.["attempt"]);
   const of = numberOf(retry?.["max_retries"] ?? retry?.["maxRetries"]);
   const inMs = numberOf(retry?.["retry_delay_ms"] ?? retry?.["retryDelayMs"]);
   return {
-    ...(typeof response["subagentType"] === "string" ? { subagent: response["subagentType"] } : {}),
+    ...declared,
+    ...(typeof response["subagentType"] === "string" && response["subagentType"] !== ""
+      ? { subagent: response["subagentType"] }
+      : {}),
     ...(numberOf(response["elapsedTimeSeconds"]) === undefined
       ? {}
       : { elapsed: response["elapsedTimeSeconds"] }),

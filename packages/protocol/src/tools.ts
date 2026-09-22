@@ -39,6 +39,21 @@ export interface Named {
 /** `mcp__<server>__<tool>`, whose interesting half is the last one. */
 const MCP = /^mcp__[^_]+(?:_[^_]+)*__(?<tool>.+)$/u;
 
+/**
+ * Agent types that name nothing, and are most of what is actually spawned.
+ *
+ * `general-purpose` is the default a spawn gets when nobody chose a type, and
+ * it was drawn verbatim: `a general-purpose`, reported as "not useful
+ * information lol". A type is worth its word when it is `code-reviewer` or
+ * `explore` — when it is the catch-all, the true and useful thing to say is
+ * that this is a subagent at all.
+ *
+ * Narrow on purpose. Anything not on this list keeps its own name, so a type
+ * this repo has not heard of reads as itself rather than being flattened into
+ * the same word as the default — which is the failure being repaired.
+ */
+const ANONYMOUS: ReadonlySet<string> = new Set(["general-purpose", "claude", "agent", "default"]);
+
 /** Two words where one will do. Nothing else is renamed. */
 const SHORTER: Readonly<Record<string, string>> = {
   webfetch: "fetch",
@@ -63,7 +78,8 @@ const SHORTER: Readonly<Record<string, string>> = {
  */
 export const toolVerb = (call: Named): string => {
   if (call.subagent !== undefined && call.subagent !== "") {
-    return call.subagent.toLowerCase();
+    const kind = call.subagent.toLowerCase();
+    return ANONYMOUS.has(kind) ? "subagent" : kind;
   }
   const name = call.toolName;
   if (name === undefined || name === "") {

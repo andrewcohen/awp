@@ -283,6 +283,41 @@ describe("updateOf", () => {
     ).toMatchObject({ subagent: "code-reviewer", elapsed: 134 });
   });
 
+  it("takes the type from the call's own input, which a working spawn is the only source of", () => {
+    // Measured against the CLI's bundle, 2.1.278: `subagent_type` is set on
+    // exactly one of the four `tool_progress` messages it mints — the
+    // `agent_api_retry` one. A subagent that is merely working sends
+    // heartbeats, which carry an elapsed and no type, so reading `toolResponse`
+    // alone named a rate-limited spawn and never a healthy one. The type is an
+    // argument to `Task`, and the adapter forwards the input as `rawInput`.
+    expect(
+      updateOf({
+        update: {
+          sessionUpdate: "tool_call",
+          toolCallId: "toolu_01",
+          title: "Count to ten slowly",
+          rawInput: { subagent_type: "code-reviewer", description: "Count to ten slowly" },
+          _meta: { claudeCode: { toolName: "Task" } },
+        },
+      }),
+    ).toMatchObject({ subagent: "code-reviewer" });
+  });
+
+  it("lets a heartbeat's elapsed land on a call whose type came from its input", () => {
+    // The two facts arrive on different updates and the window merges by id,
+    // so neither may blank the other: an elapsed with no type must not erase
+    // the type, which is what an unconditional spread of `toolResponse` did.
+    expect(
+      updateOf({
+        update: {
+          sessionUpdate: "tool_call_update",
+          toolCallId: "toolu_01",
+          _meta: { claudeCode: { toolName: "Task", toolResponse: { elapsedTimeSeconds: 19 } } },
+        },
+      })?.subagent,
+    ).toBeUndefined();
+  });
+
   it("keeps the retry counters, which are why a spawn looks stalled", () => {
     // snake_case, because they are the SDK's own fields and the adapter passes
     // them through untouched. Reading only camelCase finds nothing and says

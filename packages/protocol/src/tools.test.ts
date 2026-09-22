@@ -37,6 +37,19 @@ describe("what a tool call is called", () => {
     expect(toolVerb({ subagent: "code-reviewer", toolName: "Task" })).toBe("code-reviewer");
   });
 
+  it("says `subagent` for the types that name nothing, and keeps the rest", () => {
+    // `general-purpose` is the type a spawn gets when nobody chose one, so it
+    // is most of what is actually spawned — and drawn verbatim it reads `a
+    // general-purpose`, which is the default's name rather than information.
+    expect(toolVerb({ subagent: "general-purpose", toolName: "Task" })).toBe("subagent");
+    expect(toolVerb({ subagent: "Claude", toolName: "Task" })).toBe("subagent");
+    // Narrow: a type this repo has not heard of is itself, not flattened into
+    // the same word as the default, which is the failure being repaired.
+    expect(toolVerb({ subagent: "harbor-works-auditor", toolName: "Task" })).toBe(
+      "harbor-works-auditor",
+    );
+  });
+
   it("falls back to the kind, and then to a word", () => {
     // An older daemon, or a row replayed from a transcript written by one. A
     // coarse label beats no label.
