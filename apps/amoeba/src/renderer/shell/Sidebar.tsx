@@ -630,10 +630,14 @@ function Row({
       : workspace.sessions.some((session) => session.name === selected);
   const primary = openable(workspace);
   const several = workspace.sessions.length > 1;
-  // Nothing is running here, and it is one of ours. A foreign row IS its
-  // session, so it has nothing else to be and stays shut.
-  const stopped = workspace.sessions.length === 0 && workspace.pair !== undefined;
-  const shut = primary === undefined && !stopped;
+  // No session here, and it is one of ours — opened by address rather than by
+  // session. A foreign row IS its session, so it has nothing else to be and
+  // stays shut.
+  const sessionless = workspace.sessions.length === 0 && workspace.pair !== undefined;
+  const shut = primary === undefined && !sessionless;
+  // Said only when nothing is running at all. An open chat is running: its
+  // adapter is the daemon's child, so zmx never lists it.
+  const stopped = sessionless && facts?.chat !== true;
 
   // Whichever half of project/workspace the name did not use. A `default`
   // workspace is the repository's, so the project is the name and `default`

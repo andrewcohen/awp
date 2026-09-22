@@ -203,6 +203,7 @@ const facts: WorkspaceFacts = {
   workspace: "lantern",
   displayName: "the lantern rewrite",
   status: "working",
+  chat: false,
   unread: true,
   pr: 412,
   bookmark: "andrew/lantern",

@@ -15,6 +15,7 @@ import {
   untilQuiet,
   updateOf,
   oneAtATime,
+  withOpen,
   withStatus,
 } from "./chat";
 
@@ -1195,6 +1196,14 @@ describe("a status that did not change", () => {
     expect(withStatus(all, "thicket/lantern", "waiting")).not.toBe(all);
     expect(withStatus(all, "orchard/harbor-works", "working")).not.toBe(all);
     expect(withStatus(all, "thicket/lantern", undefined)).not.toBe(all);
+  });
+
+  it("holds for the set of open adapters too", () => {
+    const all: ReadonlySet<string> = new Set(["thicket/lantern"]);
+    expect(withOpen(all, "thicket/lantern", true)).toBe(all);
+    expect(withOpen(all, "orchard/harbor-works", false)).toBe(all);
+    expect(withOpen(all, "thicket/lantern", false)).not.toBe(all);
+    expect(withOpen(all, "orchard/harbor-works", true)).not.toBe(all);
   });
 
   // There is deliberately no test at the stream level. `SubscriptionRef`

@@ -296,6 +296,24 @@ export const withStatus = (
   return next;
 };
 
+/** {@link withStatus} for the set of open adapters: the same set back when nothing moved. */
+export const withOpen = (
+  all: ReadonlySet<string>,
+  key: string,
+  open: boolean,
+): ReadonlySet<string> => {
+  if (all.has(key) === open) {
+    return all;
+  }
+  const next = new Set(all);
+  if (open) {
+    next.add(key);
+  } else {
+    next.delete(key);
+  }
+  return next;
+};
+
 /** The statuses that mean a call is over, whatever it did. */
 const ENDED = new Set(["completed", "failed", "cancelled"]);
 
@@ -1885,6 +1903,15 @@ export class Chat extends Context.Service<
     readonly statuses: () => Stream.Stream<ReadonlyMap<string, WorkspaceStatus>>;
 
     /**
+     * Which workspaces have an adapter running, now and whenever that changes.
+     *
+     * Separate from `statuses` because an open chat that is idle is absent
+     * there, and a sidebar reading only zmx called such a workspace "no
+     * session" while its agent was running.
+     */
+    readonly running: () => Stream.Stream<ReadonlySet<string>>;
+
+    /**
      * Whether this workspace's chat already has a conversation of its own.
      *
      * The stored pointer, not the adapter: `RcMap` releases a conversation two
@@ -2234,6 +2261,10 @@ export const make = Effect.gen(function* () {
   const setStatus = (key: string, status: WorkspaceStatus | undefined) =>
     SubscriptionRef.update(statuses, (all) => withStatus(all, key, status));
 
+  const opened = yield* SubscriptionRef.make<ReadonlySet<string>>(new Set());
+  const setOpen = (key: string, open: boolean) =>
+    SubscriptionRef.update(opened, (all) => withOpen(all, key, open));
+
   /**
    * How to tell a workspace's watcher that a question has been answered.
    *
@@ -2453,7 +2484,10 @@ export const make = Effect.gen(function* () {
         // The row keeps no state of its own once the adapter has gone: an
         // answer that outlived its conversation is a claim about a process
         // that is not running.
-        yield* Effect.addFinalizer(() => setStatus(key, undefined));
+        yield* setOpen(key, true);
+        yield* Effect.addFinalizer(() =>
+          Effect.andThen(setStatus(key, undefined), setOpen(key, false)),
+        );
         forget.set(key, (id: string) =>
           Effect.andThen(
             Ref.update(asks, (all) => {
@@ -2803,6 +2837,14 @@ export const make = Effect.gen(function* () {
         Stream.concat(
           Stream.fromEffect(SubscriptionRef.get(statuses)),
           SubscriptionRef.changes(statuses),
+        ),
+      ),
+
+    running: () =>
+      Stream.changes(
+        Stream.concat(
+          Stream.fromEffect(SubscriptionRef.get(opened)),
+          SubscriptionRef.changes(opened),
         ),
       ),
   };

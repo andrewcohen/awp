@@ -133,6 +133,8 @@ export const factsIn = (contents: string): ReadonlyArray<WorkspaceFacts> => {
         // state expressible at all, and an unknown string would arrive as a row
         // with no dot and no explanation.
         status: Option.getOrUndefined(statusOf(entry.Status)),
+        // The file cannot know; the daemon lays its own answer over this.
+        chat: false,
         unread: entry.Unread === true,
         pr: entry.PRNumber !== undefined && entry.PRNumber > 0 ? entry.PRNumber : undefined,
         bookmark: text(entry.Bookmark),

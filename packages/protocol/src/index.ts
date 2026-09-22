@@ -211,6 +211,13 @@ export const WorkspaceFacts = Schema.Struct({
   displayName: Schema.UndefinedOr(Schema.String),
   status: Schema.UndefinedOr(WorkspaceStatus),
   /**
+   * A chat adapter is running for this workspace, idle or not.
+   *
+   * The daemon's word, because an adapter is its child and not a zmx session:
+   * a workspace whose only agent is its chat has nothing in `zmx ls`.
+   */
+  chat: Schema.Boolean,
+  /**
    * The agent said something that has not been looked at.
    *
    * A boolean and not a count: what it drives is a dot, and "how many things

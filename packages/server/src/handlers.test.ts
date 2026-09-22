@@ -440,6 +440,7 @@ const run = <A>(body: (rpc: Client) => Effect.Effect<A, unknown, Scope.Scope>, f
             },
             fresh: () => Effect.succeed("fresh-1"),
             statuses: () => Stream.empty,
+            running: () => Stream.empty,
             answer: () => Effect.void,
             config: () => Effect.succeed([]),
             set: () => Effect.succeed([]),
@@ -3252,6 +3253,7 @@ const factsRow = (workspace: string, status: WorkspaceStatus | undefined): Works
   workspace,
   displayName: undefined,
   status,
+  chat: false,
   unread: false,
   pr: undefined,
   bookmark: undefined,
@@ -3302,5 +3304,23 @@ describe("factsWith", () => {
       new Map([["thicket\nlantern", "waiting" as const]]),
     );
     expect(merged.map((one) => one.workspace)).toEqual(["lantern", "orchard-tools"]);
+  });
+  it("marks a workspace whose chat is open, idle or not", () => {
+    // An idle chat is absent from the status map, and its adapter is not a
+    // zmx session — so without this the sidebar called it "no session".
+    const merged = handlers.factsWith(
+      [factsRow("lantern", "idle"), factsRow("orchard-tools", undefined)],
+      new Map(),
+      new Set(["thicket\nlantern"]),
+    );
+    expect(merged.map((one) => [one.workspace, one.chat, one.status])).toEqual([
+      ["lantern", true, "idle"],
+      ["orchard-tools", false, undefined],
+    ]);
+  });
+
+  it("adds a row for an open chat the file has never heard of", () => {
+    const merged = handlers.factsWith([], new Map(), new Set(["thicket\nlantern"]));
+    expect(merged).toEqual([expect.objectContaining({ workspace: "lantern", chat: true })]);
   });
 });

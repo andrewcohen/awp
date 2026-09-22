@@ -472,36 +472,40 @@ const liveKey = (project: string, workspace: string) => `${project}\n${workspace
 export const factsWith = (
   rows: ReadonlyArray<WorkspaceFacts>,
   live: ReadonlyMap<string, WorkspaceStatus>,
+  open: ReadonlySet<string> = new Set(),
 ): ReadonlyArray<WorkspaceFacts> => {
   const seen = new Set<string>();
   const merged = rows.map((row) => {
     const at = liveKey(row.project, row.workspace);
     seen.add(at);
     const now = live.get(at);
-    return now === undefined ? row : { ...row, status: now };
+    const chat = open.has(at);
+    return now === undefined && chat === row.chat
+      ? row
+      : { ...row, status: now ?? row.status, chat };
   });
+  const unseen = new Set([...live.keys(), ...open].filter((at) => !seen.has(at)));
   return [
     ...merged,
-    ...[...live.entries()]
-      .filter(([at]) => !seen.has(at))
-      .map(([at, status]) => {
-        const [project, workspace] = at.split("\n");
-        return {
-          project: project ?? "",
-          workspace: workspace ?? "",
-          displayName: undefined,
-          status,
-          unread: false,
-          pr: undefined,
-          bookmark: undefined,
-          prompt: undefined,
-          phase: undefined,
-          task: undefined,
-          done: undefined,
-          total: undefined,
-          lastActiveAt: undefined,
-        } satisfies WorkspaceFacts;
-      }),
+    ...[...unseen].map((at) => {
+      const [project, workspace] = at.split("\n");
+      return {
+        project: project ?? "",
+        workspace: workspace ?? "",
+        displayName: undefined,
+        status: live.get(at),
+        chat: open.has(at),
+        unread: false,
+        pr: undefined,
+        bookmark: undefined,
+        prompt: undefined,
+        phase: undefined,
+        task: undefined,
+        done: undefined,
+        total: undefined,
+        lastActiveAt: undefined,
+      } satisfies WorkspaceFacts;
+    }),
   ];
 };
 
@@ -2571,8 +2575,9 @@ export const layer = AwpRpcs.toLayer(
        * would be a second implementation of it.
        */
       WorkspaceFactsChanges: () =>
-        Stream.map(Stream.zipLatest(facts.changes(), chat.statuses()), ([rows, live]) =>
-          factsWith(rows, live),
+        Stream.map(
+          Stream.zipLatestAll(facts.changes(), chat.statuses(), chat.running()),
+          ([rows, live, open]) => factsWith(rows, live, open),
         ),
 
       /**
