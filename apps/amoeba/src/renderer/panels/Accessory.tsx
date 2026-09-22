@@ -15,6 +15,7 @@ import { debugTools } from "../debug";
 import type { ColorScheme } from "@awp-kit/pane";
 import type { GadgetHead } from "@awp-kit/protocol";
 import { rememberPanel, rememberedPanels } from "../routing/remembered";
+import { pageKey, usePages } from "../data/usePages";
 import { typeset } from "../design/typeset";
 import { colors, space } from "../design/tokens.stylex";
 
@@ -399,7 +400,29 @@ export function Accessory({ onFold, ...context }: PanelContext & { readonly onFo
   // Checked against `shown` rather than `panels`, which is what makes the second
   // case work: the PR tab exists for some selections and not others.
   const stored = byThread[key];
-  const open = stored !== undefined && shown.some((panel) => panel.id === stored) ? stored : first;
+  const chose = stored !== undefined && shown.some((panel) => panel.id === stored) ? stored : first;
+
+  // ── a navigation moves the column, and writing a gadget does not ─────────
+  //
+  // The two are not the same event. A gadget is one more of a set that will
+  // still be there in an hour, so taking the column for it is a theft; a page
+  // *replaces* what the web panel was showing, so whoever asked for it has
+  // already thrown away what was there and moving to it costs nothing. An
+  // agent that browses to a dev server, or the port button on a service in the
+  // shell panel, is asking for the page to be looked at — landing it behind
+  // whichever tab happens to be open is the same as not navigating at all.
+  //
+  // Derived, and the pick records the `at` it was made against — the same
+  // shape as the gadget strip's, for the same reason: an effect correcting a
+  // stored value renders the wrong panel for a frame first. A navigation since
+  // the pick moves that number and the column is on the web panel; picking
+  // another tab takes the number and the column stays where it was put.
+  const { asked } = usePages();
+  const [dismissed, setDismissed] = useState<number>(() => asked?.at ?? 0);
+  // Gated on the thread, because `asked` is one atom for the whole window: a
+  // page opened for the work in another column must not move this one.
+  const navigated = asked !== undefined && pageKey(asked.thread) === key && asked.at !== dismissed;
+  const open = navigated ? "web" : chose;
 
   return (
     <Tabs.Root
@@ -407,6 +430,7 @@ export function Accessory({ onFold, ...context }: PanelContext & { readonly onFo
       onValueChange={(value) => {
         const chosen = String(value);
         setByThread((was) => ({ ...was, [key]: chosen }));
+        setDismissed(asked?.at ?? 0);
         rememberPanel(thread, chosen);
       }}
       {...stylex.props(styles.column)}
