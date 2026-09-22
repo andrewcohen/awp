@@ -121,24 +121,6 @@ export const shellNumber = (kind: string): number | undefined => {
   return found?.[1] === undefined ? undefined : Number(found[1]);
 };
 
-/**
- * Which service a kind names, or `undefined` for a kind that is not one.
- *
- * **What comes back may be a shortened name, and no caller can tell.**
- * `MAX_KIND` is 16, so `service_` leaves eight characters and a longer
- * declaration is shortened on its way into a session name. That is fine for a
- * label on a tab, which is all this is for — a caller matching a session back
- * to a *declaration* must reduce the config's own spelling the same way and
- * compare, which is what the daemon does and what `naming.test.ts` pins.
- *
- * Strict about the prefix for the reason {@link shellNumber} is: on the
- * daemon's side an answer here would decide whether a session may be killed.
- */
-export const serviceName = (kind: string): string | undefined => {
-  const found = /^service_(.+)$/u.exec(kind.trim());
-  return found?.[1];
-};
-
 export const SessionInfo = Schema.Struct({
   name: Schema.String,
   pid: Schema.Int,

@@ -1,18 +1,24 @@
 import type { ColorScheme } from "@awp-kit/pane";
 import type { SessionInfo } from "@awp-kit/protocol";
+import { serviceKind } from "@awp-kit/protocol";
 import { Tabs } from "@base-ui/react/tabs";
+import { ArrowClockwiseIcon } from "@phosphor-icons/react/ArrowClockwise";
 import { ArrowSquareOutIcon } from "@phosphor-icons/react/ArrowSquareOut";
+import { PlayIcon } from "@phosphor-icons/react/Play";
 import { PlusIcon } from "@phosphor-icons/react/Plus";
+import { StopIcon } from "@phosphor-icons/react/Stop";
 import { TerminalWindowIcon } from "@phosphor-icons/react/TerminalWindow";
 import { XIcon } from "@phosphor-icons/react/X";
 import * as stylex from "@stylexjs/stylex";
 import { useEffect, useState } from "react";
 import { Nothing } from "./Nothing";
-import { servicesOf, shellsOf } from "./shells";
+import { shellsOf } from "./shells";
 import { Pane } from "./Pane";
 import {
   closeShell,
   listServices,
+  startService,
+  stopService,
   listSessions,
   onReconnect,
   openPage,
@@ -111,6 +117,16 @@ const styles = stylex.create({
     opacity: 0.7,
     fontVariantNumeric: "tabular-nums",
   },
+  /**
+   * A declared service that is not running.
+   *
+   * Dimmed rather than hidden, which is the whole reason the strip is built
+   * from the declaration list instead of from the sessions: "stopped" and
+   * "never declared" are different facts, and only one of them is something a
+   * person can act on. The mark stays, so the row does not change shape when
+   * it comes up.
+   */
+  tabOff: { opacity: 0.45 },
   spacer: { flex: 1 },
   /** Opens the service on screen in the web panel. Accent, not muted: it is
       the one control here that does something somebody came to the strip for. */
@@ -174,6 +190,12 @@ const styles = stylex.create({
   },
 });
 
+/** One declared service, as the daemon answers for it. */
+type Service = Awaited<ReturnType<typeof listServices>>[number];
+
+/** How often the strip re-asks. See the effect. */
+const REFRESH_MS = 3000;
+
 export function Shell({
   project,
   workspace,
@@ -184,17 +206,27 @@ export function Shell({
   readonly scheme: ColorScheme;
 }) {
   const [sessions, setSessions] = useState<ReadonlyArray<SessionInfo>>([]);
+  /** Every service this checkout declares, running or not. */
+  const [services, setServices] = useState<ReadonlyArray<Service>>([]);
   const [picked, setPicked] = useState<string | undefined>(undefined);
   const [opening, setOpening] = useState(false);
+  /** The service a start or stop is in flight for, so it is pressed once. */
+  const [busy, setBusy] = useState("");
   const [failure, setFailure] = useState("");
-  /** What port each declared service is on, by its configured name. */
-  const [ports, setPorts] = useState<ReadonlyMap<string, number>>(new Map());
 
-  // Listed on mount rather than subscribed to. There is no session feed — see
-  // `useSessions`, where the same decision is argued out — and this panel is
-  // unmounted whenever another tab is selected, so opening it *is* the ask.
-  // Nothing else on this machine opens a shell in somebody's workspace, so the
-  // only writer is the button below, which re-lists for itself.
+  // ── one poll, because nothing here is an event ───────────────────────────
+  //
+  // Three things this strip draws change with nothing to announce them: a
+  // session started from somewhere else, a service that stopped, and the port
+  // a server binds seconds after its session starts. There is no session feed
+  // — see `useSessions` — and a port is not a change anybody can push.
+  //
+  // So it asks on a timer, and the timer's cost is bounded by the thing that
+  // used to be the argument against it: Base UI unmounts a hidden tab, so this
+  // runs only while somebody is looking at it. The earlier version stopped
+  // once every port was known, which was cheaper and wrong — a service started
+  // by the agent while the panel was open never appeared, and tabbing away and
+  // back was the only way to see it.
   useEffect(() => {
     let alive = true;
     const load = (): void => {
@@ -209,132 +241,92 @@ export function Shell({
             setFailure(said(error));
           }
         });
+      if (project === undefined || workspace === undefined) {
+        return;
+      }
+      listServices(project, workspace)
+        .then((found) => {
+          if (alive) {
+            setServices(found);
+          }
+        })
+        .catch(() => {
+          // Silent, and deliberately not the same as the listing above. A
+          // checkout with no `.awp/config.json` is the ordinary case, and the
+          // column's one failure line is for something somebody can act on.
+        });
     };
     load();
+    const timer = setInterval(load, REFRESH_MS);
     // A list is an answer, not a feed: a daemon that restarted took every
     // session's attachment with it and nothing arrives to say so.
     const stop = onReconnect(load);
     return () => {
       alive = false;
+      clearInterval(timer);
       stop();
     };
-  }, []);
+  }, [project, workspace]);
 
   const shells = shellsOf(sessions, project, workspace);
-  // ── a service is on this strip because a service is a session ─────────────
+  // ── the strip is the declaration, not the session list ───────────────────
   //
-  // The panel already renders any session by name, so a declared service that
-  // is up costs one more tab and buys the thing a person actually wants from a
-  // dev server: its own output, including the line where it says which port it
-  // took. It is also the honest answer to "is it up" — a live session *is* a
-  // running server, which is the property `ShellOpen` and this share.
-  //
-  // Only the running ones. A service that is declared and stopped belongs to
-  // whatever lists declarations, because that list can tell "stopped" from
-  // "never declared" and this one cannot.
-  const services = servicesOf(sessions, project, workspace);
-  const running = services.map((one) => one.session.name).join(",");
-  // ── the port is asked for, because a port is not an event ────────────────
-  //
-  // A server binds seconds after its session starts and nothing tells the
-  // daemon when it did, so there is nothing to push and this is a poll.
-  //
-  // It stops. `ServiceList` runs `pgrep` and `lsof` per declared service, so
-  // an interval that never ends is subprocesses forever for a number that does
-  // not change once it is known — this asks every two seconds until every
-  // running service has answered, and then stops. A service that restarts on a
-  // new port is missed until this panel is opened again, which is the trade:
-  // it is unmounted whenever another tab is selected, so opening it is already
-  // the ask.
-  // react-doctor-disable-next-line react-doctor/effect-needs-cleanup
-  useEffect(() => {
-    // The cleanup below owns the timer; react-doctor cannot see that it does,
-    // because the `setTimeout` is assigned inside a `.then` and the link from
-    // the allocation to the `clearTimeout` runs through a promise. Both races
-    // are covered and it is worth writing out, because the suppression is
-    // otherwise a claim nobody checked:
-    //
-    //   `.then` resolves BEFORE the cleanup   timer is set, cleanup clears it
-    //   `.then` resolves AFTER the cleanup    `alive` is false, so it returns
-    //                                         without setting one
-    //
-    // Which is why `alive` is not merely about `setPorts` on an unmounted
-    // component: it is what stops a new timer being created after the only
-    // thing that could clear it has run.
-    let alive = true;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const ask = (): void => {
-      // The key is the guard as well as the dependency: no running services is
-      // nothing to ask about, and a service starting changes this string, which
-      // is what re-asks. `services` itself is a fresh array every render.
-      //
-      // Guarded here rather than with an early return, so this effect has one
-      // exit and it is the cleanup — the shape `react-doctor/effect-needs-
-      // cleanup` is about, and it is right: a guard that returns nothing is a
-      // path where a timer set by a *previous* run is never cleared.
-      if (project === undefined || workspace === undefined || running === "") {
-        return;
-      }
-      listServices(project, workspace)
-        .then((found) => {
-          if (!alive) {
-            return;
-          }
-          setPorts(
-            new Map(found.flatMap((one) => (one.port === undefined ? [] : [[one.name, one.port]]))),
-          );
-          const waiting = found.some((one) => one.running && one.port === undefined);
-          if (waiting) {
-            timer = setTimeout(ask, 2000);
-          }
-        })
-        .catch(() => {
-          // Silent. A port nobody could read is a tab without a number on it,
-          // which is the state this started in — putting the column's one
-          // failure line in front of somebody for it would be reporting a
-          // problem they do not have.
-        });
-    };
-    ask();
-    return () => {
-      alive = false;
-      if (timer !== undefined) {
-        clearTimeout(timer);
-      }
-    };
-  }, [project, workspace, running]);
-
-  const every = [
-    ...shells.map((one) => ({ session: one.session, say: `shell ${String(one.n)}` })),
-    ...services.map((one) => ({ session: one.session, say: one.name })),
+  // A service that is up is a session and could be found among them, which is
+  // how this started. It cannot tell a service that stopped from one that was
+  // never declared, and those are the two states where somebody wants the
+  // strip most: the second is nothing to say, the first is a thing to press.
+  const declared = [...services].toSorted((a, b) => a.name.localeCompare(b.name));
+  // A service's tab is named for the service and not for its session, because
+  // a stopped one has no session and the value has to survive it starting.
+  // `serviceKind` is the daemon's own spelling of the same thing, so the two
+  // cannot drift apart.
+  const tabs = [
+    ...shells.map((one) => ({ value: one.session.name, session: one.session.name })),
+    ...declared.map((one) => ({
+      value: serviceKind(one.name),
+      session: one.running ? one.session : undefined,
+    })),
   ];
-  // Derived rather than corrected by an effect. A picked shell that has gone —
-  // closed here, or exited under somebody's `exit` — falls back to the first
-  // rather than selecting nothing, which is what Base UI draws for a value none
-  // of its tabs carry: no panel at all, which reads as the column being broken.
-  const open =
-    every.find((one) => one.session.name === picked)?.session.name ?? every[0]?.session.name;
-  // ── two questions, and conflating them drew the wrong panel ──────────────
-  //
-  // `showing` is what the pane attaches to, so it is whatever tab is open —
-  // a service's session as readily as a shell's, because attaching to one is
-  // how its log gets tailed. Scoped to shells it drew "no shell here yet" over
-  // a service that was running perfectly.
-  //
-  // `closable` is what the control on the strip acts on, and that is shells
-  // only: a service is *stopped*, a different call meaning a different thing,
-  // and closing a tab must not take down something another window is watching.
-  const showing = every.find((one) => one.session.name === open);
+  // Derived rather than corrected by an effect. A picked tab that has gone —
+  // a shell closed here, or exited under somebody's `exit` — falls back to the
+  // first rather than selecting nothing, which is what Base UI draws for a
+  // value none of its tabs carry: no panel at all, which reads as the column
+  // being broken.
+  const open = tabs.find((one) => one.value === picked)?.value ?? tabs[0]?.value;
+  // What the pane attaches to, which is a service's session as readily as a
+  // shell's: attaching is how a dev server's log gets tailed. Undefined for a
+  // service that is declared and down, which is a panel with something to say
+  // rather than a terminal.
+  const showing = tabs.find((one) => one.value === open)?.session;
+  // Three questions the tab cannot answer alone, and each control reads one:
+  // `closable` is shells only — a service is *stopped*, a different call
+  // meaning a different thing — and `onService` is the other side of that.
   const closable = shells.find((one) => one.session.name === open);
-  // A service on screen that has bound something. Both halves are needed and
-  // neither is implied: a shell has no port, and a service that is still
-  // starting has none yet.
-  const onService = services.find((one) => one.session.name === open);
-  const onPort = onService === undefined ? undefined : ports.get(onService.name);
+  const onService = declared.find((one) => serviceKind(one.name) === open);
+  const from = sessions.find((one) => one.name === onService?.session)?.startDir;
   const openable =
-    onService === undefined || onPort === undefined
+    onService?.port === undefined || from === undefined
       ? undefined
-      : { from: onService.session.startDir, url: `http://localhost:${String(onPort)}` };
+      : { from, url: `http://localhost:${String(onService.port)}` };
+
+  // Re-asks what exists. Shared by every control here and by a shell exiting
+  // under somebody's `exit` or ctrl-D, because those are the same event reached
+  // by different routes and the panel's response to all of them is the same
+  // question.
+  const relist = (): void => {
+    listSessions()
+      .then(setSessions)
+      .catch((error: unknown) => {
+        setFailure(said(error));
+      });
+    if (project !== undefined && workspace !== undefined) {
+      listServices(project, workspace)
+        .then(setServices)
+        .catch(() => {
+          // See the effect.
+        });
+    }
+  };
 
   const add = (): void => {
     if (project === undefined || workspace === undefined || opening) {
@@ -359,15 +351,35 @@ export function Shell({
       });
   };
 
-  // Re-asks what exists. Shared by the close button and by a shell exiting
-  // under somebody's `exit` or ctrl-D, because the two are the same event
-  // reached by different routes and the panel's response to both is the same
-  // question.
-  const relist = (): void => {
-    listSessions()
-      .then(setSessions)
+  // ── start, stop and restart are one shape ────────────────────────────────
+  //
+  // Each is a call naming a declared service and then the same question — what
+  // exists now — because none of them is announced: stopping a service ends a
+  // session nothing feeds back, and starting one binds a port some seconds
+  // later. Restart is the pair in order rather than a third call, so there is
+  // one place where "stopped, then started" is what it means.
+  //
+  // The refusal is the daemon's sentence, in the column's one failure line. A
+  // name this checkout does not declare is the case it is written for, and it
+  // names what the checkout *does* declare.
+  const act = (name: string, work: (project: string, workspace: string) => Promise<unknown>) => {
+    if (project === undefined || workspace === undefined || busy !== "") {
+      return;
+    }
+    setBusy(name);
+    setFailure("");
+    work(project, workspace)
+      .then(() => {
+        // Selected before the listing arrives, the same as `+`: pressing start
+        // is asking to watch the thing start.
+        setPicked(serviceKind(name));
+        relist();
+      })
       .catch((error: unknown) => {
         setFailure(said(error));
+      })
+      .finally(() => {
+        setBusy("");
       });
   };
 
@@ -418,35 +430,39 @@ export function Shell({
 
         {/* After the shells and before `+`, so the control that adds one stays
             beside the things it adds to. A service is not opened from here —
-            it is declared in `.awp/config.json` and started by name, by
-            somebody or by the agent, which is what keeps the set of commands
-            this window can run to the set somebody wrote down. */}
-        {services.map(({ session, name }) => {
-          const port = ports.get(name);
+            it is declared in `.awp/config.json` and started by name, which is
+            what keeps the set of commands this window can run to the set
+            somebody wrote down. The controls on the right start and stop the
+            one on screen; neither of them can name anything else. */}
+        {declared.map((one) => {
+          const value = serviceKind(one.name);
           return (
             <Tabs.Tab
-              key={session.name}
-              value={session.name}
+              key={value}
+              value={value}
               title={
-                port === undefined
-                  ? `${name} — running, no port yet`
-                  : `${name} — running on ${String(port)}`
+                one.running
+                  ? `${one.name} — running${one.port === undefined ? ", no port yet" : ` on ${String(one.port)}`}`
+                  : `${one.name} — stopped. ${one.command}`
               }
               {...stylex.props(
                 typeset.control,
                 styles.tab,
                 styles.service,
-                session.name === open && styles.tabOn,
+                !one.running && styles.tabOff,
+                value === open && styles.tabOn,
               )}
             >
-              {name}
+              {one.name}
               {/* Text, not a link, and the control that opens it is on the
                   strip — a Base UI tab *is* a `<button>`, which is the same
                   argument that put the close out here rather than on each tab.
                   Absent rather than a placeholder while a server is still
                   binding: a number that appears is read as news, where `:—`
                   turning into `:5273` is a thing to notice twice. */}
-              {port !== undefined && <span {...stylex.props(styles.port)}>:{String(port)}</span>}
+              {one.port !== undefined && (
+                <span {...stylex.props(styles.port)}>:{String(one.port)}</span>
+              )}
             </Tabs.Tab>
           );
         })}
@@ -465,28 +481,68 @@ export function Shell({
 
         <span {...stylex.props(styles.spacer)} />
 
-        {/* ── the close is a control on the strip, not a cross on each tab ───
+        {/* ── one set of controls, acting on what is on screen ──────────────
 
-            Three reasons, and the first is the one that decides it. A Base UI
-            tab *is* a `<button>`, so a button inside one is a button inside a
-            button — invalid markup, and clicks that belong to two owners. A
-            cross on every tab is also a row of things to get rid of, and one
-            under the pointer on the way to the tab beside it ends a shell
-            somebody was aiming past.
+            Every control here is outside the tab set and acts on the open tab,
+            for the reason the close was: a Base UI tab *is* a `<button>`, so a
+            button inside one is a button inside a button — invalid markup and
+            clicks with two owners. A row of them on every tab is also a row of
+            things to press by accident on the way to the tab beside it, and
+            two of these stop a server somebody else is watching.
 
-            So: one control, acting on the shell that is on screen, which is
-            the only one where "close this" needs no explaining. Outside the
-            tab set deliberately — it selects nothing, and the arrow keys
-            stepping onto it would have Base UI looking for a panel that is
-            not there. */}
-        {/* ── opening it is a control on the strip, for the reason the close is ──
+            Never more than two at once: a service that is up offers restart
+            and stop, one that is down offers start. */}
+        {onService !== undefined && !onService.running && (
+          <button
+            type="button"
+            data-nav-item
+            disabled={busy !== ""}
+            aria-label={`start ${onService.name}`}
+            title={`start ${onService.name} — ${onService.command}`}
+            onClick={() => {
+              act(onService.name, (p, w) => startService(p, w, onService.name));
+            }}
+            {...stylex.props(styles.open)}
+          >
+            <PlayIcon size={12} weight="fill" aria-hidden />
+          </button>
+        )}
 
-            Same argument, one line of it: a Base UI tab is a `<button>`, so
-            the port cannot be a link inside one. This acts on the service that
-            is on screen, which is the only one where "open this" needs no
-            explaining.
+        {onService?.running === true && (
+          <>
+            <button
+              type="button"
+              data-nav-item
+              disabled={busy !== ""}
+              aria-label={`restart ${onService.name}`}
+              title={`restart ${onService.name}`}
+              onClick={() => {
+                act(onService.name, async (p, w) => {
+                  await stopService(p, w, onService.name);
+                  return startService(p, w, onService.name);
+                });
+              }}
+              {...stylex.props(styles.add)}
+            >
+              <ArrowClockwiseIcon size={12} aria-hidden />
+            </button>
+            <button
+              type="button"
+              data-nav-item
+              disabled={busy !== ""}
+              aria-label={`stop ${onService.name}`}
+              title={`stop ${onService.name}`}
+              onClick={() => {
+                act(onService.name, (p, w) => stopService(p, w, onService.name));
+              }}
+              {...stylex.props(styles.shut)}
+            >
+              <StopIcon size={12} weight="fill" aria-hidden />
+            </button>
+          </>
+        )}
 
-            Through `openPage` rather than into the panel's own state, because
+        {/* Through `openPage` rather than into the panel's own state, because
             the other subscribers are the point — a second window on this
             thread, and the agent, are looking at the same page, and the daemon
             is the only place that can tell all of them. `startDir` is the
@@ -531,27 +587,30 @@ export function Shell({
       {showing === undefined ? (
         <Nothing
           mark={<TerminalWindowIcon size={22} weight="duotone" />}
-          say="no shell here yet"
-          hint="+ opens one in this workspace's checkout. It is a zmx session, so it outlives the window and is still there after a reload"
+          say={onService === undefined ? "no shell here yet" : `${onService.name} is not running`}
+          hint={
+            onService === undefined
+              ? "+ opens one in this workspace's checkout. It is a zmx session, so it outlives the window and is still there after a reload"
+              : `${onService.command} — start it with the control on the strip. It runs in a session of its own, so it outlives this window and the agent both`
+          }
         />
       ) : (
-        <Tabs.Panel value={showing.session.name} {...stylex.props(styles.panel)}>
+        <Tabs.Panel value={open ?? ""} {...stylex.props(styles.panel)}>
           {/* Keyed by the session, so moving between shells remounts the pane
               and re-attaches rather than writing a second session's bytes into
               the screen the first left behind. */}
           <Pane
-            key={showing.session.name}
+            key={showing}
             slot="accessory"
-            session={showing.session.name}
+            session={showing}
             fixture=""
             scheme={scheme}
-            // ctrl-D is a close, and nothing else reports it. The strip is
-            // drawn from a listing taken at mount, so a shell somebody exited
-            // left a tab behind and a pane frozen on its last frame — the
-            // session is `ended`, which `shellsOf` drops, but only once this
-            // panel asks again. This is the ask, and it is the *only* notice:
-            // there is no session feed, and the Attach stream ending is a
-            // success rather than a failure.
+            // ctrl-D is a close, and nothing else reports it. A shell somebody
+            // exited leaves a tab behind and a pane frozen on its last frame —
+            // the session is `ended`, which `shellsOf` drops, but only once
+            // this panel asks again. This is the notice: the Attach stream
+            // ending is a success rather than a failure, so nothing else reads
+            // it as one.
             onEnded={relist}
           />
         </Tabs.Panel>

@@ -1,4 +1,4 @@
-import { type SessionInfo, serviceName, shellNumber } from "@awp-kit/protocol";
+import { type SessionInfo, shellNumber } from "@awp-kit/protocol";
 
 // Which of a machine's sessions are one workspace's shells.
 //
@@ -44,46 +44,4 @@ export const shellsOf = (
       return n === undefined ? [] : [{ session, n }];
     })
     .toSorted((a, b) => a.n - b.n);
-};
-
-/**
- * The services of one workspace that are running, by name.
- *
- * Here beside {@link shellsOf} because it is the same arithmetic over the same
- * list, and because the strip draws both: a service **is** a session, so the
- * panel that renders a session by name already renders this one. What it buys
- * is the scrollback — a dev server's own output, including the line where it
- * says which port it took.
- *
- * **Ended ones are left out**, for exactly the reason a dead shell is: zmx
- * keeps a session listed after its command exits, and a tab attached to one
- * draws a frozen screen and takes no keys. A service that has stopped is drawn
- * by whatever lists *declared* services, which knows the difference between
- * "stopped" and "never declared"; this list cannot, and should not guess.
- *
- * The name may be shortened — see `serviceName`. It is a label here, not a key.
- */
-export const servicesOf = (
-  sessions: ReadonlyArray<SessionInfo>,
-  project: string | undefined,
-  workspace: string | undefined,
-): ReadonlyArray<{ readonly session: SessionInfo; readonly name: string }> => {
-  if (project === undefined || workspace === undefined) {
-    return [];
-  }
-  return sessions
-    .flatMap((session) => {
-      const identity = session.identity;
-      if (
-        identity === undefined ||
-        identity.project !== project ||
-        identity.workspace !== workspace ||
-        session.ended
-      ) {
-        return [];
-      }
-      const name = serviceName(identity.kind);
-      return name === undefined ? [] : [{ session, name }];
-    })
-    .toSorted((a, b) => a.name.localeCompare(b.name));
 };

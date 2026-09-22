@@ -1286,6 +1286,26 @@ export const layer = AwpRpcs.toLayer(
           }
 
           const session = sessionName(project, workspace, serviceKind(name));
+          // ── an ended session of this name is in the way, not out of it ────
+          //
+          // A service's name is fixed — one `service_<name>` per workspace,
+          // where a shell picks the next free number — so there is no second
+          // slot to fall into. zmx keeps a session listed after its command
+          // exits, and `start` leaves an existing name exactly as it was: a
+          // dev server that crashed, or that somebody stopped with ctrl-C in
+          // the pane, therefore makes every later start a success that runs
+          // nothing. The same kill `ShellOpen` does, for the same reason, and
+          // ours by construction — the name is generated from this pair and
+          // this kind, so nothing else answers to it.
+          const before = yield* mux
+            .lookup(session)
+            .pipe(Effect.mapError((error) => new SessionStartFailed({ reason: error.reason })));
+          if (before?.ended === true) {
+            yield* mux
+              .kill(session)
+              .pipe(Effect.mapError((error) => new SessionStartFailed({ reason: error.reason })));
+          }
+
           // Idempotent, because `Multiplexer.start` is: a service already up
           // answers with the session it is already in. A second dev server on a
           // taken port is a failure several steps from here, in somebody else's
