@@ -13,6 +13,7 @@ import type {
   ChatDelivery,
   ChatUpdate,
   CommentSide,
+  DiffFiles,
   Effort,
   Face,
   Gadget,
@@ -782,6 +783,25 @@ export const readDiff = (from: string, revision?: string, about?: DiffAbout): Pr
       revision === STACK
         ? rpc.Diff({ from, stack: true, ...pair(about) })
         : rpc.Diff({ from, revision, ...pair(about) }),
+    ),
+  );
+
+/**
+ * One file of a patch `readDiff` answered, whole at both ends — what expanding
+ * the context between hunks draws from. Asked with the same revision and pair,
+ * so the daemon resolves the ends by the rule the patch used.
+ */
+export const readDiffFiles = (
+  from: string,
+  revision: string | undefined,
+  about: DiffAbout,
+  paths: { readonly oldPath: string; readonly newPath: string },
+): Promise<DiffFiles> =>
+  runtime.runPromise(
+    Effect.flatMap(AwpClient, (rpc) =>
+      revision === STACK
+        ? rpc.DiffFiles({ from, stack: true, ...pair(about), ...paths })
+        : rpc.DiffFiles({ from, revision, ...pair(about), ...paths }),
     ),
   );
 

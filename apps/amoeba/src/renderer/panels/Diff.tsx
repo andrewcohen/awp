@@ -8,7 +8,12 @@ import { CaretLineUpIcon } from "@phosphor-icons/react/CaretLineUp";
 import { ArrowsInLineVerticalIcon } from "@phosphor-icons/react/ArrowsInLineVertical";
 import { ArrowsOutLineVerticalIcon } from "@phosphor-icons/react/ArrowsOutLineVertical";
 import { CodeView, type CodeViewHandle, type CodeViewItem } from "@pierre/diffs/react";
-import type { CodeViewLineSelection, DiffLineAnnotation, SelectedLineRange } from "@pierre/diffs";
+import type {
+  CodeViewLineSelection,
+  DiffLineAnnotation,
+  FileDiffMetadata,
+  SelectedLineRange,
+} from "@pierre/diffs";
 import * as stylex from "@stylexjs/stylex";
 import { GitDiffIcon } from "@phosphor-icons/react/GitDiff";
 import { Nothing } from "./Nothing";
@@ -22,7 +27,14 @@ import {
   useRef,
   useState,
 } from "react";
-import { STACK, listRevisions, readDiff, said, watchWorkspace } from "../data/daemon";
+import {
+  STACK,
+  listRevisions,
+  readDiff,
+  readDiffFiles,
+  said,
+  watchWorkspace,
+} from "../data/daemon";
 import { THEME } from "./highlighting";
 import { FOLD_MS } from "../shell/columns";
 import { contentOf, statOf, subjectOf, versionOf } from "./patch";
@@ -670,6 +682,97 @@ const styles = stylex.create({
   warn: { color: colors.warn },
 });
 
+/** One file of a patch, as CodeView takes it. */
+type Parsed = ReadonlyArray<{
+  readonly id: string;
+  readonly type: "diff";
+  readonly content: number;
+  readonly fileDiff: FileDiffMetadata;
+}>;
+
+const NO_FILES: Parsed = [];
+
+/**
+ * The last few patches parsed, by revision and text.
+ *
+ * **One patch must be the same objects on every render**, because the library
+ * keeps state *on* them: expanding context mutates a `fileDiff` in place from
+ * partial to whole. A fresh parse per render handed CodeView partial objects
+ * again, and the next change of an item's `version` — selecting a line to
+ * comment on — adopted one, folding the file back to its hunks with the new
+ * composer inside a collapsed region. The React Compiler does not memoize the
+ * parse; the served module calls `parsePatchFiles` on every render.
+ *
+ * A few rather than one, so stepping back to a revision keeps what was opened
+ * in it. The key is the whole text, so a working copy that changed misses.
+ */
+const PARSED_KEEP = 8;
+const parsedCache = new Map<string, Parsed>();
+
+const filesOf = (patch: string, at: string): Parsed => {
+  const key = `${at}\n${patch}`;
+  const hit = parsedCache.get(key);
+  if (hit !== undefined) {
+    return hit;
+  }
+
+  const files = parsePatchFiles(patch, at).flatMap((one) =>
+    one.files.map((fileDiff, index) => {
+      // ── the cache key has to move when the file does ────────────────────
+      //
+      // The renderer decides whether two diffs are the same thing by their
+      // `cacheKey` — `areDiffTargetsEqual` is `a === b || a.cacheKey ===
+      // b.cacheKey` — and `parsePatchFiles` builds that key from position
+      // alone: `<prefix>-<patch index>-<file index>`. The prefix here was the
+      // revision, which is correct for a *committed* revision, because that
+      // is immutable, and wrong for the working copy, which is not.
+      //
+      // So a file that changed on disk came back under the key it already
+      // had. The worker's cached token stream for the previous content was
+      // handed to `processDiffResult` alongside hunks parsed from the new
+      // one, and the line arrays were then indexed past their ends:
+      //
+      //   deletionLines[deletionLine.lineIndex]   undefined
+      //   additionLines[additionLine.lineIndex]   undefined
+      //   → "deletionLine and additionLine are null, something is wrong"
+      //
+      // which is thrown, not logged, so the panel went out through its
+      // boundary. It needed a *second* patch to happen at all, which is why
+      // it never appeared on opening the tab and why it only started once the
+      // daemon began pushing patches on its own instead of waiting for a
+      // refresh button.
+      //
+      // Keyed per file rather than per patch on purpose: a change to one file
+      // leaves the other nine keys alone, so their highlighting is still
+      // reused. A hash of the whole patch would be correct and would
+      // re-tokenize every file on every keystroke an agent makes.
+      fileDiff.cacheKey = `${at}|${index}|${contentOf(fileDiff)}`;
+
+      return {
+        // The path and its position, because CodeView keys its items by id
+        // and a patch is allowed to carry the same path twice — a file split
+        // across two diff entries by a mode change is the ordinary way that
+        // happens. The path alone would silently drop the second.
+        id: `${fileDiff.name}-${index}`,
+        type: "diff" as const,
+        // The file's content, because neither the id nor the cache key above
+        // reaches the item's DOM cache — `version` is what does. Without it a
+        // changed file keeps the rows it already drew.
+        content: contentOf(fileDiff),
+        fileDiff,
+      };
+    }),
+  );
+  parsedCache.set(key, files);
+  for (const old of parsedCache.keys()) {
+    if (parsedCache.size <= PARSED_KEEP) {
+      break;
+    }
+    parsedCache.delete(old);
+  }
+  return files;
+};
+
 export function Diff({
   dir,
   project,
@@ -1116,77 +1219,9 @@ export function Diff({
   // Parsed here rather than inside the renderer, because the item list is what
   // CodeView takes and the cache key prefix has to be stable per revision: it
   // is what lets a re-render of the same patch reuse work instead of
-  // re-highlighting every file.
-  //
-  // No `useMemo`, and it used to have one. The viewed marks are read during
-  // render — they are derived from the workspace and revision on screen, the
-  // same shape the folds use — and a state write during render is something
-  // React Compiler cannot see past, so it could no longer prove the memo held
-  // and said so:
-  //
-  //   react(preserve-manual-memoization): Existing memoization could not be
-  //   preserved
-  //
-  // That is the compiler doing its job. It memoizes this on its own, which is
-  // what `_c(n)` in the served module is, and react-doctor was already asking
-  // for the manual one to go. Two tools agreeing is enough.
-  const parsed = ((): ReadonlyArray<{
-    readonly id: string;
-    readonly type: "diff";
-    readonly content: number;
-    readonly fileDiff: ReturnType<typeof parsePatchFiles>[number]["files"][number];
-  }> => {
-    if (patch === undefined || patch === "") {
-      return [];
-    }
-    return parsePatchFiles(patch, at ?? WORKING_COPY).flatMap((one) =>
-      one.files.map((fileDiff, index) => {
-        // ── the cache key has to move when the file does ────────────────────
-        //
-        // The renderer decides whether two diffs are the same thing by their
-        // `cacheKey` — `areDiffTargetsEqual` is `a === b || a.cacheKey ===
-        // b.cacheKey` — and `parsePatchFiles` builds that key from position
-        // alone: `<prefix>-<patch index>-<file index>`. The prefix here was the
-        // revision, which is correct for a *committed* revision, because that
-        // is immutable, and wrong for the working copy, which is not.
-        //
-        // So a file that changed on disk came back under the key it already
-        // had. The worker's cached token stream for the previous content was
-        // handed to `processDiffResult` alongside hunks parsed from the new
-        // one, and the line arrays were then indexed past their ends:
-        //
-        //   deletionLines[deletionLine.lineIndex]   undefined
-        //   additionLines[additionLine.lineIndex]   undefined
-        //   → "deletionLine and additionLine are null, something is wrong"
-        //
-        // which is thrown, not logged, so the panel went out through its
-        // boundary. It needed a *second* patch to happen at all, which is why
-        // it never appeared on opening the tab and why it only started once the
-        // daemon began pushing patches on its own instead of waiting for a
-        // refresh button.
-        //
-        // Keyed per file rather than per patch on purpose: a change to one file
-        // leaves the other nine keys alone, so their highlighting is still
-        // reused. A hash of the whole patch would be correct and would
-        // re-tokenize every file on every keystroke an agent makes.
-        fileDiff.cacheKey = `${at ?? WORKING_COPY}|${index}|${contentOf(fileDiff)}`;
-
-        return {
-          // The path and its position, because CodeView keys its items by id
-          // and a patch is allowed to carry the same path twice — a file split
-          // across two diff entries by a mode change is the ordinary way that
-          // happens. The path alone would silently drop the second.
-          id: `${fileDiff.name}-${index}`,
-          type: "diff" as const,
-          // The file's content, because neither the id nor the cache key above
-          // reaches the item's DOM cache — `version` is what does. Without it a
-          // changed file keeps the rows it already drew.
-          content: contentOf(fileDiff),
-          fileDiff,
-        };
-      }),
-    );
-  })();
+  // re-highlighting every file. See `filesOf` for why it is cached.
+  const parsed =
+    patch === undefined || patch === "" ? NO_FILES : filesOf(patch, at ?? WORKING_COPY);
 
   // ── a stack comment is anchored to the working copy, and that is exact ──
   //
@@ -1998,6 +2033,32 @@ export function Diff({
                 // and the part beside it is text.
                 lineHoverHighlight: "number",
                 unsafeCSS: GUTTER_CSS,
+                // ── expanding the context between hunks ─────────────────────
+                //
+                // A patch carries three lines either side of a change, so a
+                // diff parsed from one is `isPartial` and the library draws its
+                // separators with nothing to expand into. Handing it both ends
+                // of the file whole is what turns them into controls; it asks
+                // on the first press, once per file, and throws the answer away
+                // itself if the patch has moved on by the time it lands.
+                //
+                // `prevName` is the old side's path, which a rename makes
+                // differ. A pure rename wants the old side *absent* — its lines
+                // are the new side's — and the library throws if it is not.
+                loadDiffFiles: (fileDiff) => {
+                  const oldPath = fileDiff.prevName ?? fileDiff.name;
+                  return readDiffFiles(
+                    dir,
+                    at,
+                    { project, workspace },
+                    { oldPath, newPath: fileDiff.name },
+                  ).then((files) => {
+                    const newFile = { name: fileDiff.name, contents: files.new };
+                    return fileDiff.type === "rename-pure"
+                      ? { oldFile: null, newFile }
+                      : { oldFile: { name: oldPath, contents: files.old }, newFile };
+                  });
+                },
                 // The hover control: a `+` beside the line under the pointer.
                 // Off by default, and without it the only way to start a comment
                 // is to already know that a line number is clickable — which is a

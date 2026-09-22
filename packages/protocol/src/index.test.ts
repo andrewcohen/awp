@@ -440,6 +440,7 @@ const handlers = AwpRpcs.toLayer({
   ChatSet: () => Effect.succeed([]),
   Revisions: () => Effect.succeed([revision]),
   Diff: () => Effect.succeed(patch),
+  DiffFiles: () => Effect.succeed({ old: "one\n", new: "one\ntwo\n" }),
   WorkspaceChanges: () => Stream.fromArray([{ at: 1_787_000_000_000 }]),
   ReviewList: () => Effect.succeed([comment]),
   ReviewAdd: () => Effect.succeed(comment),

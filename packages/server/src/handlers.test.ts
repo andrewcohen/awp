@@ -31,7 +31,7 @@ import {
 } from "./review-queue-feed";
 import * as handlers from "./handlers";
 import { IntentError, WorkspaceIntent } from "./intent";
-import { type DiffOf, Jj, JjError, type RevisionsIn } from "./jj";
+import { type DiffOf, type FileAt, Jj, JjError, type RevisionsIn } from "./jj";
 import { ServicePorts } from "./service-port";
 import * as settings from "./settings";
 import { Multiplexer, type Session } from "./multiplexer";
@@ -565,6 +565,12 @@ const run = <A>(body: (rpc: Client) => Effect.Effect<A, unknown, Scope.Scope>, f
               fakes.noTrunk === true && options.from !== undefined
                 ? Effect.fail({ _tag: "JjError", op: "diff", reason: "trunk() is ambiguous" })
                 : Effect.succeed(JSON.stringify(options)),
+            // The same trick: a file's contents are the revision and path it was
+            // read at, so a test can see which ends the handler resolved.
+            fileAt: ({ revision, path }: FileAt) =>
+              fakes.noTrunk === true && revision.includes("trunk()")
+                ? Effect.fail(new JjError({ op: "show", reason: "trunk() is ambiguous" }))
+                : Effect.succeed(`${revision}:${path}`),
           } as unknown as Jj["Service"]),
         ),
         Layer.provide(
@@ -1368,6 +1374,48 @@ describe("the diff a workspace is asked for", () => {
     });
     // Echoed, so a client can drop a reply for a commit it has moved off.
     expect(answer.revision).toBe("kmnpqrs");
+  });
+
+  // ── both ends of one file, for expanding context ────────────────────────
+  //
+  // Resolved by the rule `Diff` used, or the expanded lines are from a
+  // different file than the hunks they are drawn between.
+  it("reads a named revision's file against its parent", async () => {
+    const ends = await run((rpc) =>
+      rpc.DiffFiles({ from: "/w/rowan", revision: "kmnpqrs", oldPath: "a.ts", newPath: "a.ts" }),
+    );
+    expect(ends).toEqual({ old: "kmnpqrs-:a.ts", new: "kmnpqrs:a.ts" });
+  });
+
+  it("reads the working copy's file against its parent, and follows a rename", async () => {
+    const ends = await run((rpc) =>
+      rpc.DiffFiles({ from: "/w/rowan", oldPath: "was.ts", newPath: "is.ts" }),
+    );
+    expect(ends).toEqual({ old: "@-:was.ts", new: "@:is.ts" });
+  });
+
+  it("reads a stack's old end at the base the patch was measured from", async () => {
+    const ends = await run(
+      (rpc) =>
+        rpc.DiffFiles({
+          from: "/w/rowan",
+          stack: true,
+          project: "rowan",
+          workspace: "discounts",
+          oldPath: "a.ts",
+          newPath: "a.ts",
+        }),
+      { nearestBookmark: "ccc" },
+    );
+    expect(ends).toEqual({ old: "ccc:a.ts", new: "@:a.ts" });
+  });
+
+  it("reads a stack's old end at @- when there is no main line, as the patch did", async () => {
+    const ends = await run(
+      (rpc) => rpc.DiffFiles({ from: "/w/rowan", stack: true, oldPath: "a.ts", newPath: "a.ts" }),
+      { noTrunk: true },
+    );
+    expect(ends).toEqual({ old: "@-:a.ts", new: "@:a.ts" });
   });
 });
 

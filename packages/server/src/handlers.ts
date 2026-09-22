@@ -1683,6 +1683,33 @@ export const layer = AwpRpcs.toLayer(
         );
       },
 
+      // The ends `Diff` compared, by the same rule, read without a snapshot.
+      //
+      //   stack      stackBase → @     and `@-` when the base will not
+      //                                resolve, which is the patch `Diff`
+      //                                falls back to — see NO_TRUNK
+      //   @ / named  <rev>-    → <rev>
+      //
+      // A merge's `<rev>-` is two commits and `file show` refuses it; that
+      // arrives as DiffUnavailable and the file is simply not expandable.
+      DiffFiles: ({ from, revision, stack, project, workspace, oldPath, newPath }) => {
+        const show = (at: string, path: string) => jj.fileAt({ dir: from, revision: at, path });
+        const at =
+          stack === true || revision === undefined || revision === WORKING_COPY
+            ? WORKING_COPY
+            : revision;
+        const old =
+          stack === true
+            ? stackBase({ dir: from, project, workspace }).pipe(
+                Effect.flatMap((base) => show(base, oldPath)),
+                Effect.catchTag("JjError", () => show(`${NO_TRUNK}-`, oldPath)),
+              )
+            : show(`${at}-`, oldPath);
+        return Effect.all({ old, new: show(at, newPath) }, { concurrency: 2 }).pipe(
+          Effect.mapError((error) => new DiffUnavailable({ reason: error.reason })),
+        );
+      },
+
       /**
        * A tick per burst of writes under the workspace.
        *

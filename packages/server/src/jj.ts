@@ -125,6 +125,14 @@ export interface DiffOf {
   readonly snapshot: boolean;
 }
 
+/** One file's contents at one revision. See {@link Jj} `fileAt`. */
+export interface FileAt {
+  readonly dir: string;
+  readonly revision: string;
+  /** Relative to the workspace root — the spelling a git patch uses. */
+  readonly path: string;
+}
+
 export interface AddWorkspace {
   readonly repo: string;
   /** The workspace's name in the repo, which is how it is forgotten later. */
@@ -189,6 +197,15 @@ export class Jj extends Context.Service<
      * the snapshot rule, which is the interesting half.
      */
     readonly diff: (options: DiffOf) => Effect.Effect<string, JjError>;
+
+    /**
+     * A file as it stood at a revision: `jj file show`.
+     *
+     * Never snapshots. The one caller reads the two ends of a patch it already
+     * has, and the patch's own snapshot is what the far end must agree with —
+     * a fresh one could hand back lines the patch's hunks do not describe.
+     */
+    readonly fileAt: (options: FileAt) => Effect.Effect<string, JjError>;
 
     readonly bookmarks: (repo: string) => Effect.Effect<ReadonlyArray<JjBookmark>, JjError>;
 

@@ -2080,6 +2080,21 @@ export const Patch = Schema.Struct({
 
 export type Patch = (typeof Patch)["Type"];
 
+/**
+ * Both ends of one file in a patch, whole — what lets a reader see past the
+ * three lines of context a hunk carries.
+ *
+ * Read at the ends the patch was taken between, with no fresh snapshot: the
+ * working copy's end is whatever the patch's own snapshot recorded, so the
+ * lines agree with the hunks drawn over them.
+ */
+export const DiffFiles = Schema.Struct({
+  old: Schema.String,
+  new: Schema.String,
+});
+
+export type DiffFiles = (typeof DiffFiles)["Type"];
+
 // ── failures a client is expected to handle ────────────────────────────────
 //
 // Schema-backed so they survive the wire as themselves rather than as a string.
@@ -4014,6 +4029,29 @@ export class AwpRpcs extends RpcGroup.make(
       workspace: Schema.optional(Schema.String),
     },
     success: Patch,
+    error: DiffUnavailable,
+  }),
+
+  /**
+   * One file of a {@link AwpRpcs Diff} patch, whole, at both of its ends.
+   *
+   * Asked with the same `revision`/`stack`/pair the patch was, so the daemon
+   * resolves the ends by the same rule — a stack's old end is `stackBase`, not
+   * trunk. Only for a file that exists on both sides: an added or deleted one
+   * is already whole in the patch.
+   */
+  Rpc.make("DiffFiles", {
+    payload: {
+      from: Schema.String,
+      revision: Schema.optional(Schema.String),
+      stack: Schema.optional(Schema.Boolean),
+      project: Schema.optional(Schema.String),
+      workspace: Schema.optional(Schema.String),
+      /** The path on the old side, which a rename makes differ from `newPath`. */
+      oldPath: Schema.String,
+      newPath: Schema.String,
+    },
+    success: DiffFiles,
     error: DiffUnavailable,
   }),
 

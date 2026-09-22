@@ -1,6 +1,6 @@
 import { Effect, FileSystem, Layer, Path, Result } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
-import { type AddWorkspace, type DiffOf, Jj, type RevisionsIn, JjError } from "./jj";
+import { type AddWorkspace, type DiffOf, type FileAt, Jj, type RevisionsIn, JjError } from "./jj";
 import {
   REVISION_TEMPLATE,
   localBookmarks,
@@ -150,6 +150,27 @@ const make = Effect.gen(function* () {
       ]);
     });
 
+  // `root-file:` and quoted, because a bare argument is a fileset *expression*
+  // relative to the daemon's cwd — which is another repository — and a path
+  // holding a space or a parenthesis is a syntax error in one.
+  const fileAt = ({ dir, revision, path: file }: FileAt) =>
+    Effect.gen(function* () {
+      const op = `show ${file} at ${revision}`;
+      yield* required(op, "directory", dir);
+      yield* required(op, "revision", revision);
+      yield* required(op, "path", file);
+      return yield* run(op, [
+        "-R",
+        dir,
+        "--ignore-working-copy",
+        "file",
+        "show",
+        "-r",
+        revision,
+        `root-file:"${file.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`,
+      ]);
+    });
+
   return {
     workspaceRoot,
 
@@ -183,6 +204,8 @@ const make = Effect.gen(function* () {
     revisions,
 
     diff,
+
+    fileAt,
 
     addWorkspace: ({ repo, name, destination, revision }: AddWorkspace) =>
       Effect.gen(function* () {

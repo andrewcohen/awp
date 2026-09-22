@@ -330,3 +330,28 @@ describe("revisions and diffs", () => {
     expect(String((error as { readonly reason: string }).reason)).toContain("directory is empty");
   });
 });
+
+describe("a file at a revision", () => {
+  // Its own repository, for the reason the block above gives.
+  const home = join(scratch, "files");
+  // A space, a quote and a parenthesis: each is a syntax error in a bare
+  // fileset, which is what `jj file show` takes.
+  const odd = 'odd "name" (x).txt';
+
+  beforeAll(() => {
+    execFileSync("jj", ["git", "init", home], { stdio: "pipe" });
+    writeFileSync(join(home, odd), "one\ntwo\n");
+    execFileSync("jj", ["-R", home, "commit", "-m", "an oddly named file"], { stdio: "pipe" });
+  });
+
+  test("reads the file whole, byte for byte, whatever it is called", async () => {
+    expect(await on((jj) => jj.fileAt({ dir: home, revision: "@-", path: odd }))).toBe(
+      "one\ntwo\n",
+    );
+  });
+
+  test("a file the revision does not have is a failure, not an empty file", async () => {
+    const error = await failure((jj) => jj.fileAt({ dir: home, revision: "@--", path: odd }));
+    expect(error).toBeDefined();
+  });
+});
