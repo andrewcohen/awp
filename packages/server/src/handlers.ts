@@ -34,6 +34,8 @@ import {
   serviceKind,
   shellKind,
   shellNumber,
+  isRepositoryMember,
+  RepositoryHeld,
   ThreadNotFound,
   ThreadStartFailed,
   type WorkspaceFacts,
@@ -3113,6 +3115,16 @@ export const layer = AwpRpcs.toLayer(
           if (thread === undefined) {
             return yield* Effect.fail(new ThreadNotFound({ thread: payload.thread }));
           }
+          // A thread holding a `default` workspace holds the repository
+          // itself, and step 3 of the job would forget it and remove the
+          // directory — see `holdsRepository`. The window draws no `archive…`
+          // on such a thread; this is the same rule where it can be enforced.
+          const repository = thread.members.find(isRepositoryMember);
+          if (repository !== undefined) {
+            return yield* Effect.fail(
+              new RepositoryHeld({ thread: thread.id, project: repository.project }),
+            );
+          }
           // The title is added here rather than sent by the client: the daemon
           // has just looked the thread up, and a client-supplied caption is a
           // second copy of something already in hand.
@@ -3132,6 +3144,14 @@ export const layer = AwpRpcs.toLayer(
           const thread = all.find((one) => one.id === payload.thread);
           if (thread === undefined) {
             return yield* Effect.fail(new ThreadNotFound({ thread: payload.thread }));
+          }
+          // The same refusal, one member narrower: reclaiming the repository's
+          // own checkout removes the clone the project's every other workspace
+          // was made from.
+          if (isRepositoryMember(payload.member)) {
+            return yield* Effect.fail(
+              new RepositoryHeld({ thread: thread.id, project: payload.member.project }),
+            );
           }
           const job = yield* jobs
             .enqueue(archiveThreadRef, {

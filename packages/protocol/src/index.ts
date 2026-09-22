@@ -415,6 +415,18 @@ export const ThreadMember = Schema.Struct({
 export type ThreadMember = (typeof ThreadMember)["Type"];
 
 /**
+ * The workspace a repository has before anyone makes another one.
+ *
+ * jj's name for the checkout the repository itself stands in, so it is the one
+ * member of a thread that awp did not create and cannot recreate.
+ */
+export const REPOSITORY_WORKSPACE = "default";
+
+/** Whether a member is the repository's own checkout rather than one awp made. */
+export const isRepositoryMember = (member: ThreadMember): boolean =>
+  member.workspace === REPOSITORY_WORKSPACE;
+
+/**
  * A pull request a thread is about.
  *
  * ── why this is recorded rather than read off a directory name ─────────────
@@ -503,6 +515,19 @@ export const Thread = Schema.Struct({
 export type Thread = (typeof Thread)["Type"];
 
 /**
+ * Whether a thread holds the repository's own checkout.
+ *
+ * Archiving reclaims what a thread holds: it kills the sessions, forgets the
+ * workspace and removes the directory. For `default` that directory is the
+ * repository — the clone every other workspace of the project is made from —
+ * and nothing in awp can put it back. So the act is refused rather than warned
+ * about, and both the daemon and the window ask this same question: the window
+ * to draw no `archive…` at all, the daemon because a refusal a client can
+ * re-derive is a rule with two implementations.
+ */
+export const holdsRepository = (thread: Thread): boolean => thread.members.some(isRepositoryMember);
+
+/**
  * Which of the agent column's two faces a workspace is worked in.
  *
  * ── it was a renderer preference, and that was the bug ────────────────────
@@ -527,6 +552,17 @@ export type Face = (typeof Face)["Type"];
 
 export class ThreadNotFound extends Schema.TaggedError<ThreadNotFound>()("ThreadNotFound", {
   thread: Schema.String,
+}) {}
+
+/**
+ * The archive would take the repository itself.
+ *
+ * See {@link holdsRepository}. Carries the project so the sentence can name
+ * what was going to be removed.
+ */
+export class RepositoryHeld extends Schema.TaggedError<RepositoryHeld>()("RepositoryHeld", {
+  thread: Schema.String,
+  project: Schema.String,
 }) {}
 
 /**
@@ -3353,7 +3389,7 @@ export class AwpRpcs extends RpcGroup.make(
     // client's to decide at all.
     payload: { thread: Schema.String, deleteBookmarks: Schema.Boolean },
     success: Schema.Struct({ job: Schema.String }),
-    error: ThreadNotFound,
+    error: Schema.Union([ThreadNotFound, RepositoryHeld]),
   }),
 
   /**
@@ -3379,7 +3415,7 @@ export class AwpRpcs extends RpcGroup.make(
       deleteBookmarks: Schema.Boolean,
     },
     success: Schema.Struct({ job: Schema.String }),
-    error: ThreadNotFound,
+    error: Schema.Union([ThreadNotFound, RepositoryHeld]),
   }),
 
   /**

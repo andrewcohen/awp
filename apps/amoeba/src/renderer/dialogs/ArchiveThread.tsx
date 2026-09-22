@@ -1,6 +1,6 @@
 import { AlertDialog } from "@base-ui/react/alert-dialog";
 import { Menu } from "@base-ui/react/menu";
-import type { Thread } from "@awp-kit/protocol";
+import { holdsRepository, type Thread } from "@awp-kit/protocol";
 import * as stylex from "@stylexjs/stylex";
 import { type ReactNode, useState } from "react";
 import { AddProject } from "./AddProject";
@@ -250,19 +250,32 @@ export function useThreadMenu({
           add project to thread…
         </Menu.Item>
 
-        {/* The ellipsis says there is more; the item's own ellipsis says
+        {/* ── absent on a thread holding the repository ────────────
+
+    Archiving reclaims: the checkout is forgotten and the
+    directory removed. For a `default` workspace that directory
+    is the repository every other workspace of the project was
+    made from, and nothing here can put it back — see
+    `holdsRepository`. The daemon refuses it too; this is so
+    nobody is offered it in the first place, because a control
+    that only ever answers with a refusal is a control that
+    should not have been drawn.
+
+    The ellipsis says there is more; the item's own ellipsis says
     it will ask first, which is the convention everywhere else a
     menu opens a dialog. */}
-        <Menu.Item
-          onClick={() => {
-            setBookmarks(false);
-            setFailure(undefined);
-            setAsking(true);
-          }}
-          {...stylex.props(menuItem, menuDanger)}
-        >
-          archive…
-        </Menu.Item>
+        {holdsRepository(thread) ? null : (
+          <Menu.Item
+            onClick={() => {
+              setBookmarks(false);
+              setFailure(undefined);
+              setAsking(true);
+            }}
+            {...stylex.props(menuItem, menuDanger)}
+          >
+            archive…
+          </Menu.Item>
+        )}
       </>
     );
 
@@ -271,70 +284,75 @@ export function useThreadMenu({
       <>
         <AddProject thread={thread} open={adding} onOpenChange={setAdding} onStarted={onChanged} />
 
-        <AlertDialog.Root open={asking} onOpenChange={setAsking}>
-          <AlertDialog.Portal>
-            <AlertDialog.Backdrop {...stylex.props(styles.backdrop)} />
-            <AlertDialog.Popup {...stylex.props(typeset.prose, styles.popup)}>
-              <AlertDialog.Title {...stylex.props(typeset.heading, styles.title)}>
-                Archive {title}?
-              </AlertDialog.Title>
+        {/* The dialog goes with the item that opens it: a thread holding the
+            repository has no `archive…`, so this has nothing that could ask
+            for it. `add project to thread…` above is unaffected. */}
+        {holdsRepository(thread) ? null : (
+          <AlertDialog.Root open={asking} onOpenChange={setAsking}>
+            <AlertDialog.Portal>
+              <AlertDialog.Backdrop {...stylex.props(styles.backdrop)} />
+              <AlertDialog.Popup {...stylex.props(typeset.prose, styles.popup)}>
+                <AlertDialog.Title {...stylex.props(typeset.heading, styles.title)}>
+                  Archive {title}?
+                </AlertDialog.Title>
 
-              <AlertDialog.Description {...stylex.props(styles.said)}>
-                {thread.members.length === 0
-                  ? "It holds no workspaces, so this only puts it away."
-                  : `Its ${thread.members.length === 1 ? "checkout is" : `${thread.members.length} checkouts are`} removed from disk and their sessions are killed. This cannot be undone.`}
-              </AlertDialog.Description>
+                <AlertDialog.Description {...stylex.props(styles.said)}>
+                  {thread.members.length === 0
+                    ? "It holds no workspaces, so this only puts it away."
+                    : `Its ${thread.members.length === 1 ? "checkout is" : `${thread.members.length} checkouts are`} removed from disk and their sessions are killed. This cannot be undone.`}
+                </AlertDialog.Description>
 
-              {thread.members.length > 0 && (
-                <div {...stylex.props(typeset.address, styles.list)}>
-                  {thread.members.map((member) => (
-                    <span key={`${member.project}/${member.workspace}`}>
-                      {member.project}/{member.workspace}
-                    </span>
-                  ))}
-                </div>
-              )}
+                {thread.members.length > 0 && (
+                  <div {...stylex.props(typeset.address, styles.list)}>
+                    {thread.members.map((member) => (
+                      <span key={`${member.project}/${member.workspace}`}>
+                        {member.project}/{member.workspace}
+                      </span>
+                    ))}
+                  </div>
+                )}
 
-              {thread.members.length > 0 && (
-                <>
-                  <label {...stylex.props(styles.choice)}>
-                    <input
-                      type="checkbox"
-                      checked={bookmarks}
-                      onChange={(event) => setBookmarks(event.target.checked)}
-                      {...stylex.props(styles.box)}
-                    />
-                    delete their bookmarks too
-                  </label>
-                  {/* Said only when it is being asked for. A warning that is
+                {thread.members.length > 0 && (
+                  <>
+                    <label {...stylex.props(styles.choice)}>
+                      <input
+                        type="checkbox"
+                        checked={bookmarks}
+                        onChange={(event) => setBookmarks(event.target.checked)}
+                        {...stylex.props(styles.box)}
+                      />
+                      delete their bookmarks too
+                    </label>
+                    {/* Said only when it is being asked for. A warning that is
                     always on screen is a warning nobody reads by the third
                     time. */}
-                  <p {...stylex.props(bookmarks ? styles.warn : styles.keep, styles.said)}>
-                    {bookmarks
-                      ? "A bookmark is a name for a commit, not part of the checkout — deleting it can leave commits nothing points at."
-                      : "The bookmarks stay, so the commits are still there under their names."}
-                  </p>
-                </>
-              )}
+                    <p {...stylex.props(bookmarks ? styles.warn : styles.keep, styles.said)}>
+                      {bookmarks
+                        ? "A bookmark is a name for a commit, not part of the checkout — deleting it can leave commits nothing points at."
+                        : "The bookmarks stay, so the commits are still there under their names."}
+                    </p>
+                  </>
+                )}
 
-              {failure !== undefined && <div {...stylex.props(styles.failure)}>{failure}</div>}
+                {failure !== undefined && <div {...stylex.props(styles.failure)}>{failure}</div>}
 
-              <div {...stylex.props(styles.buttons)}>
-                <AlertDialog.Close {...stylex.props(typeset.label, styles.button)}>
-                  cancel
-                </AlertDialog.Close>
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={go}
-                  {...stylex.props(typeset.label, styles.button, styles.danger)}
-                >
-                  {busy ? "archiving…" : "archive"}
-                </button>
-              </div>
-            </AlertDialog.Popup>
-          </AlertDialog.Portal>
-        </AlertDialog.Root>
+                <div {...stylex.props(styles.buttons)}>
+                  <AlertDialog.Close {...stylex.props(typeset.label, styles.button)}>
+                    cancel
+                  </AlertDialog.Close>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={go}
+                    {...stylex.props(typeset.label, styles.button, styles.danger)}
+                  >
+                    {busy ? "archiving…" : "archive"}
+                  </button>
+                </div>
+              </AlertDialog.Popup>
+            </AlertDialog.Portal>
+          </AlertDialog.Root>
+        )}
       </>
     );
 

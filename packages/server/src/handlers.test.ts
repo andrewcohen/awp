@@ -9,6 +9,7 @@ import {
   type Face,
   MessageRefused,
   NotAWorkspace,
+  RepositoryHeld,
   type ReviewComment,
   type WorkspaceFacts,
   type WorkspaceStatus,
@@ -776,6 +777,55 @@ describe("the thread a checkout belongs to", () => {
     );
 
     expect(got.thread).toBeUndefined();
+  });
+
+  it("refuses to archive a thread holding the repository's own checkout", async () => {
+    // Step 3 of archive-thread forgets the workspace and removes its
+    // directory. For `default` that directory is the repository the project's
+    // every other workspace was made from, and no step of this puts it back.
+    const outcome = await run((rpc) =>
+      Effect.gen(function* () {
+        const made = yield* rpc.ThreadCreate({ title: "the repository itself" });
+        yield* rpc.ThreadAttach({
+          thread: made.id,
+          member: { project: "rowan", workspace: "default" },
+        });
+        return yield* Effect.result(
+          rpc.ThreadArchiveStart({ thread: made.id, deleteBookmarks: false }),
+        );
+      }),
+    );
+
+    expect(Result.isFailure(outcome)).toBe(true);
+    if (Result.isFailure(outcome)) {
+      expect(outcome.failure).toBeInstanceOf(RepositoryHeld);
+      expect((outcome.failure as RepositoryHeld).project).toBe("rowan");
+    }
+  });
+
+  it("refuses to reclaim the repository's own checkout, thread and all", async () => {
+    // The narrower act is the same act: one member, and it is the clone.
+    const outcome = await run((rpc) =>
+      Effect.gen(function* () {
+        const made = yield* rpc.ThreadCreate({ title: "two halves" });
+        yield* rpc.ThreadAttach({
+          thread: made.id,
+          member: { project: "rowan", workspace: "default" },
+        });
+        return yield* Effect.result(
+          rpc.ThreadReclaimStart({
+            thread: made.id,
+            member: { project: "rowan", workspace: "default" },
+            deleteBookmarks: false,
+          }),
+        );
+      }),
+    );
+
+    expect(Result.isFailure(outcome)).toBe(true);
+    if (Result.isFailure(outcome)) {
+      expect(outcome.failure).toBeInstanceOf(RepositoryHeld);
+    }
   });
 
   it("pointing the web panel records the page against the thread that claims the checkout", async () => {

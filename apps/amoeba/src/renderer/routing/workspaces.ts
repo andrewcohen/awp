@@ -1,4 +1,9 @@
-import type { SessionInfo, Thread, WorkspaceStatus } from "@awp-kit/protocol";
+import {
+  REPOSITORY_WORKSPACE,
+  type SessionInfo,
+  type Thread,
+  type WorkspaceStatus,
+} from "@awp-kit/protocol";
 
 // The sidebar lists workspaces. zmx lists sessions. This is the difference.
 //
@@ -23,9 +28,6 @@ import type { SessionInfo, Thread, WorkspaceStatus } from "@awp-kit/protocol";
  * one session opens that one whatever it is, so this only decides between them.
  */
 export const PRIMARY = "agent";
-
-/** The workspace a repository has before anyone makes another one. */
-const DEFAULT = "default";
 
 export type Workspace = {
   /** `project.workspace`, or the session name for one of someone else's. */
@@ -149,7 +151,7 @@ export const groupByWorkspace = (
     const id = found[0]?.identity;
     const project = id?.project ?? "";
     const workspace = id?.workspace ?? "";
-    const isDefault = workspace === DEFAULT;
+    const isDefault = workspace === REPOSITORY_WORKSPACE;
     return {
       key,
       address: key,
@@ -159,7 +161,7 @@ export const groupByWorkspace = (
       // opened later beside it must not decide the workspace has no label.
       label: found.map((session) => session.identity?.label).find((one) => one !== undefined),
       name: isDefault ? project : workspace,
-      otherIdent: isDefault ? DEFAULT : project,
+      otherIdent: isDefault ? REPOSITORY_WORKSPACE : project,
       sessions: found.toSorted(byKind),
       since: startedAt(found),
       foreign: false,
@@ -273,14 +275,14 @@ const claimant = (threads: ReadonlyArray<Thread>, workspace: Workspace): Thread 
  * everywhere else here.
  */
 const unstarted = (member: { readonly project: string; readonly workspace: string }): Workspace => {
-  const isDefault = member.workspace === DEFAULT;
+  const isDefault = member.workspace === REPOSITORY_WORKSPACE;
   return {
     key: `${member.project}.${member.workspace}`,
     address: `${member.project}.${member.workspace}`,
     pair: { project: member.project, workspace: member.workspace },
     label: undefined,
     name: isDefault ? member.project : member.workspace,
-    otherIdent: isDefault ? DEFAULT : member.project,
+    otherIdent: isDefault ? REPOSITORY_WORKSPACE : member.project,
     sessions: [],
     since: 0,
     foreign: false,

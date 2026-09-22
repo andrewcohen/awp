@@ -71,10 +71,10 @@
     "typescript": "7.0.2",
     "vitest": "4.1.11"
   },
-  "trustedDependencies": [
-    "electron"
-  ],
   "patchedDependencies": {
     "ghostty-web@0.4.0": "patches/ghostty-web@0.4.0.patch"
-  }
+  },
+  "trustedDependencies": [
+    "electron"
+  ]
 }

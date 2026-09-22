@@ -1,6 +1,6 @@
 import { AlertDialog } from "@base-ui/react/alert-dialog";
 import { Menu } from "@base-ui/react/menu";
-import type { ThreadMember } from "@awp-kit/protocol";
+import { isRepositoryMember, type ThreadMember } from "@awp-kit/protocol";
 import * as stylex from "@stylexjs/stylex";
 import { type ReactNode, useState } from "react";
 import { reclaimWorkspace, said } from "../data/daemon";
@@ -147,8 +147,12 @@ export function useWorkspaceMenu({
 
   const where = member === undefined ? "" : `${member.project}/${member.workspace}`;
 
+  // A `default` workspace is the repository's own checkout, and reclaiming it
+  // would remove the clone the project's every other workspace was made from.
+  // Refused by the daemon and drawn by nobody — see `holdsRepository` in the
+  // contract, which is the thread-sized half of the same rule.
   const items: Items = () =>
-    thread === undefined || member === undefined ? null : (
+    thread === undefined || member === undefined || isRepositoryMember(member) ? null : (
       <Menu.Item
         onClick={() => {
           setBookmarks(false);
@@ -162,7 +166,7 @@ export function useWorkspaceMenu({
     );
 
   const dialogs =
-    thread === undefined || member === undefined ? null : (
+    thread === undefined || member === undefined || isRepositoryMember(member) ? null : (
       <AlertDialog.Root open={asking} onOpenChange={setAsking}>
         <AlertDialog.Portal>
           <AlertDialog.Backdrop {...stylex.props(styles.backdrop)} />
