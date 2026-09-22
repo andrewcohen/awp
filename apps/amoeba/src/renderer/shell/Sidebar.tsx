@@ -504,7 +504,7 @@ const styles = stylex.create({
 //
 // So a row that wants nothing says nothing, and the ink that is left means
 // "this one". Liveness is not lost with it — the kinds chip on line two
-// already says what is running, and a stopped row says so in words.
+// already says what is running, and a row with nothing running says nothing.
 //
 // The mark is drawn transparent rather than removed. The box stays, so the
 // names stay on one left edge whatever the row is doing, and `color` is
@@ -634,9 +634,6 @@ function Row({
   // stays shut.
   const sessionless = workspace.sessions.length === 0 && workspace.pair !== undefined;
   const shut = primary === undefined && !sessionless;
-  // Said only when nothing is running at all. An open chat is running: its
-  // adapter is the daemon's child, so zmx never lists it.
-  const stopped = sessionless && facts?.chat !== true;
 
   // Whichever half of project/workspace the name did not use. A `default`
   // workspace is the repository's, so the project is the name and `default`
@@ -846,19 +843,9 @@ function Row({
                 {`#${pr}`}
               </span>
             )}
-            {/* Said, because the row is otherwise identical to a running one
-                and the dot alone is a colour somebody has to have learned.
-                The kinds chip would say nothing here — there are none. */}
-            {stopped && (
-              <>
-                {(other !== "" || slug !== undefined) && (
-                  <span aria-hidden {...stylex.props(styles.sep)}>
-                    ·
-                  </span>
-                )}
-                <span {...stylex.props(styles.kind)}>no session</span>
-              </>
-            )}
+            {/* Nothing is said for a row with nothing running. "no session"
+                was, and it was the only ink on the most ordinary row there
+                is: opening it works either way, and the chat is the agent. */}
             {(other !== "" || slug !== undefined) && listed.length > 0 && (
               <span aria-hidden {...stylex.props(styles.sep)}>
                 ·
