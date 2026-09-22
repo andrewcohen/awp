@@ -302,12 +302,23 @@ export function Shell({
   // `closable` is shells only — a service is *stopped*, a different call
   // meaning a different thing — and `onService` is the other side of that.
   const closable = shells.find((one) => one.session.name === open);
+  // ── what makes the pane re-attach, and a name is not it ──────────────────
+  //
+  // A shell's name is taken back only by `+`, so keying the pane by it was
+  // right for as long as shells were all this drew. A service's name is a
+  // fixed slot — one `service_<name>` per workspace — so a restart produces a
+  // session with the *same* name and a different process: React kept the pane
+  // mounted, its attachment had died with the old session, and the terminal
+  // sat on the last frame of a server that is not running any more. The pid
+  // changes exactly when the process does, which is the question being asked.
+  const live = sessions.find((one) => one.name === showing);
+  const attached = live === undefined ? showing : `${showing ?? ""}#${String(live.pid)}`;
   const onService = declared.find((one) => serviceKind(one.name) === open);
   const from = sessions.find((one) => one.name === onService?.session)?.startDir;
   const openable =
     onService?.port === undefined || from === undefined
       ? undefined
-      : { from, url: `http://localhost:${String(onService.port)}` };
+      : { from, port: onService.port, url: `http://localhost:${String(onService.port)}` };
 
   // Re-asks what exists. Shared by every control here and by a shell exiting
   // under somebody's `exit` or ctrl-D, because those are the same event reached
@@ -560,9 +571,17 @@ export function Shell({
                 setFailure(said(error));
               });
             }}
-            {...stylex.props(styles.open)}
+            {...stylex.props(typeset.control, styles.open)}
           >
             <ArrowSquareOutIcon size={12} aria-hidden />
+            {/* ── the number is on the control, and also on the tab ─────────
+                Not a repetition of one fact but two different ones. On the tab
+                it is what a service *is* — read without selecting it, which is
+                the whole reason a strip has more than one. Here it is what the
+                press will do, and the first version left that to an arrow: a
+                port drawn on a tab reads as the thing to click, so clicking
+                the tab and having it merely select was the ordinary mistake. */}
+            <span {...stylex.props(styles.port)}>:{String(openable.port)}</span>
           </button>
         )}
 
@@ -600,7 +619,7 @@ export function Shell({
               and re-attaches rather than writing a second session's bytes into
               the screen the first left behind. */}
           <Pane
-            key={showing}
+            key={attached}
             slot="accessory"
             session={showing}
             fixture=""
