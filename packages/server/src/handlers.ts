@@ -2578,26 +2578,14 @@ export const layer = AwpRpcs.toLayer(
       /**
        * What is known about each workspace, from both places that know.
        *
-       * ── two sources, and neither can prove the other wrong ──────────────
+       *   the file    ~/.awp/workspace-state.json: names, bookmarks, pull
+       *               requests. Its status fields were hook-written and are
+       *               no longer read — see workspace-state.ts
+       *   the chat    this daemon's own ACP conversations: the only status
        *
-       *   the file    ~/.awp/workspace-state.json, written by Claude Code
-       *               hooks in the Go implementation. Knows about the agent
-       *               running in a workspace's TERMINAL.
-       *   the chat    this daemon's own ACP conversations. Knows about the
-       *               agent in THIS WINDOW.
-       *
-       * A workspace can have both, so this is a precedence and not an
-       * override. The chat reports only `working` and `waiting` — never
-       * `idle` — precisely so that a chat nobody is using cannot claim the
-       * terminal's agent has stopped.
-       *
-       *   waiting   a question somebody has to answer. Wins outright: it is
-       *             the one state that is about the person rather than the
-       *             machine, and it is the reason the strip has a colour at
-       *             all.
-       *   working   wins over whatever the file last said, because the file
-       *             is a hook's last write and this is live.
-       *   absent    the file's own answer stands, unchanged.
+       * The chat reports `working` and `waiting` and never `idle`, so absent
+       * means no status. The file used to fill that gap with a hook's last
+       * write, which froze at `working` once the hooks were removed mid-turn.
        *
        * Merged in the daemon for the same reason the project list is: only
        * this process holds both halves, and a client re-deriving the rule

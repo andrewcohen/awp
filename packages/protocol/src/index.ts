@@ -172,16 +172,12 @@ export type SessionInfo = (typeof SessionInfo)["Type"];
 //
 // ── the source is not on the wire, deliberately ────────────────────────────
 //
-// Today these come from `~/.awp/workspace-state.json`, written by the Go
-// implementation: Claude Code hooks shell out to `awp internal report-status`
-// on every tool call and every stop, and that writes the file. That is a
-// stopgap for half these fields — ACP replaces it with a live notification from
-// the agent itself — so the *field* is on the wire and the source is a ranked
-// list inside the daemon:
-//
-//   1  ACP session updates       when it lands
-//   2  the Go state file         today
-//   3  zmx output recency        crude, but never absent
+// The status comes from the daemon's ACP conversations, live. The names, the
+// bookmark and the pull request come from `~/.awp/workspace-state.json`, which
+// the Go implementation wrote; its hook-written fields — status, unread, prompt
+// and the dev loop — are no longer read, because the hooks are gone and what
+// they left is frozen. So the *field* is on the wire and the source is the
+// daemon's to choose.
 //
 // A client that knew which one answered would be a client that has to be
 // changed when the answer improves.

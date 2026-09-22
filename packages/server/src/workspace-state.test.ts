@@ -47,40 +47,46 @@ describe("factsIn", () => {
         "/code/thicket": {
           lantern: {
             DisplayName: "the lantern rewrite",
-            Status: "working",
-            Unread: true,
             PRNumber: 412,
             Bookmark: "andrew/lantern",
-            ActivePrompt: "make the lamp light",
             LastActiveAt: "2026-08-20T15:39:22.924871-04:00",
-            DevLoop: { Phase: "implement", Task: "wire the switch", Done: 3, Total: 7 },
           },
         },
       }),
     );
     expect(one).toMatchObject({
       displayName: "the lantern rewrite",
-      status: "working",
-      unread: true,
       pr: 412,
       bookmark: "andrew/lantern",
-      prompt: "make the lamp light",
-      phase: "implement",
-      task: "wire the switch",
-      done: 3,
-      total: 7,
     });
     expect(one?.lastActiveAt?.toISOString()).toBe("2026-08-20T19:39:22.924Z");
   });
 
-  test("an unknown status is dropped rather than passed through", () => {
-    // A client switching on a closed union is what makes a hue per state
-    // expressible at all. An unrecognised word would arrive as a row with no
-    // dot and no explanation — worse than a row that says nothing on purpose.
+  test("what the status hooks wrote is not read, because nothing writes it now", () => {
+    // The hooks were removed mid-turn once: `working` was written, `idle` never
+    // was, and the row said working for as long as anybody looked. The chat is
+    // the live source; the file's copy can only be a frozen one.
     const [one] = factsIn(
-      JSON.stringify({ "/code/thicket": { lantern: { Status: "pondering" } } }),
+      JSON.stringify({
+        "/code/thicket": {
+          lantern: {
+            Status: "working",
+            Unread: true,
+            ActivePrompt: "make the lamp light",
+            DevLoop: { Phase: "implement", Task: "wire the switch", Done: 3, Total: 7 },
+          },
+        },
+      }),
     );
-    expect(one?.status).toBeUndefined();
+    expect(one).toMatchObject({
+      status: undefined,
+      unread: false,
+      prompt: undefined,
+      phase: undefined,
+      task: undefined,
+      done: undefined,
+      total: undefined,
+    });
   });
 
   test("keys this file does not know about are ignored", () => {
@@ -89,10 +95,12 @@ describe("factsIn", () => {
     // worse than one that ignored it.
     const [one] = factsIn(
       JSON.stringify({
-        "/code/thicket": { lantern: { Status: "idle", PinGroup: "a", SomethingNew: { x: 1 } } },
+        "/code/thicket": {
+          lantern: { Bookmark: "andrew/lantern", PinGroup: "a", SomethingNew: { x: 1 } },
+        },
       }),
     );
-    expect(one).toMatchObject({ project: "thicket", status: "idle" });
+    expect(one).toMatchObject({ project: "thicket", bookmark: "andrew/lantern" });
   });
 
   test("a blank string is absent, not empty", () => {
@@ -121,13 +129,6 @@ describe("factsIn", () => {
     );
     expect(one?.lastActiveAt).toBeUndefined();
   });
-
-  test("unread is a boolean either way", () => {
-    // Absent means false, because what it drives is a dot and a dot is drawn or
-    // it is not. Optional here would push that decision onto every client.
-    const [one] = factsIn(JSON.stringify({ "/code/thicket": { lantern: {} } }));
-    expect(one?.unread).toBe(false);
-  });
 });
 
 describe("WorkspaceState.read", () => {
@@ -145,8 +146,8 @@ describe("WorkspaceState.read", () => {
   });
 
   test("reads a real file", async () => {
-    const path = write(JSON.stringify({ "/code/thicket": { lantern: { Status: "waiting" } } }));
-    expect(await read(path)).toMatchObject([{ project: "thicket", status: "waiting" }]);
+    const path = write(JSON.stringify({ "/code/thicket": { lantern: { DisplayName: "lamp" } } }));
+    expect(await read(path)).toMatchObject([{ project: "thicket", displayName: "lamp" }]);
   });
 });
 
@@ -154,14 +155,14 @@ describe("WorkspaceState.changes", () => {
   test("says what it knows before anything has changed", async () => {
     // A stream that only spoke on change would leave a window blank until
     // somebody happened to run an agent, which for an idle machine is never.
-    const path = write(JSON.stringify({ "/code/thicket": { lantern: { Status: "idle" } } }));
+    const path = write(JSON.stringify({ "/code/thicket": { lantern: { DisplayName: "lamp" } } }));
     const first = await Effect.runPromise(
       Effect.gen(function* () {
         const state = yield* WorkspaceState;
         return yield* Stream.runHead(state.changes());
       }).pipe(Effect.provide(layer(path)), Effect.provide(NodeFileSystem.layer), Effect.scoped),
     );
-    expect(Option.getOrElse(first, () => [])).toMatchObject([{ status: "idle" }]);
+    expect(Option.getOrElse(first, () => [])).toMatchObject([{ displayName: "lamp" }]);
   });
 
   test("a directory that is not there does not stop the first answer", async () => {

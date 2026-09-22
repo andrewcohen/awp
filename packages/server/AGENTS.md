@@ -449,19 +449,14 @@ it; `forkNext` is in memory, and a refusal clears it.
 does. **Join the chunks before asserting on them**: the answer arrives as `"he"`
 then `"ron"`.
 
-## Two sources for one status, and neither can prove the other idle
+## Status is the chat's, and the state file's copy is not read
 
-```
-  ~/.awp/workspace-state.json   the `claude` running in a workspace's TERMINAL
-  the chat                      the ACP conversation open in THIS WINDOW
-```
-
-A workspace can have both, so `factsWith` is a precedence: `waiting` (the one
-state about the person) beats `working` (a turn in flight) beats the file, which
-is a hook's last write.
-
-**The chat never reports `idle`**, and that is the half that matters: an idle chat
-is no evidence about the agent in the terminal.
+`~/.awp/workspace-state.json` still supplies names, bookmarks and pull requests.
+Its status fields were written by `claude` hooks, and **the hooks were removed
+mid-turn**: `working` was written, `idle` never was, and because **the chat never
+reports `idle`** — an idle chat is no evidence about anything — the file's frozen
+answer stood for good. So `Status`, `Unread`, `ActivePrompt` and `DevLoop` are not
+read, and a workspace with no live chat has no status.
 
 Folded from the conversation's own updates rather than asked for. One wrinkle:
 **there is no update for a permission being answered** — the reply is the reply —
