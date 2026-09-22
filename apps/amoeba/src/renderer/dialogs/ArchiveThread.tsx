@@ -32,15 +32,20 @@ import { colors, layer, lift, text, timing } from "../design/tokens.stylex";
 // one: an alert dialog has no dismiss-by-clicking-outside, and its default
 // focus is the cancel.
 //
-// ── the bookmark is the checkbox, and it is off ────────────────────────────
+// ── the bookmark is the checkbox, and it is on ─────────────────────────────
 //
 // A bookmark is not part of a workspace. It is a name for a commit, kept in
-// the repository, so it outlives the checkout being removed — keeping it is
-// what keeps the work addressable by name, and deleting it can leave commits
-// with nothing pointing at them for jj to collect later.
+// the repository, so it outlives the checkout being removed — and that is the
+// reason it is checked rather than the reason it is not. Archiving a thread is
+// the act that says this piece of work is over; the bookmark left behind is a
+// name in the repository for something nobody is going back to, and the ones
+// that accumulate are exactly the ones nobody archived deliberately.
 //
-// Everywhere else in awp, forgetting takes nothing with it. This is the one
-// place a person can ask for the opposite, so they have to ask.
+// It is still a checkbox, because the cost is real and stated beside it:
+// deleting a bookmark can leave commits with nothing pointing at them for jj
+// to collect later. Everywhere else in awp, forgetting takes nothing with it —
+// so this is the one place that is not true, said in the dialog rather than
+// assumed.
 
 const styles = stylex.create({
   backdrop: {
@@ -159,7 +164,10 @@ export function useThreadMenu({
 } {
   const [asking, setAsking] = useState(false);
   const [adding, setAdding] = useState(false);
-  const [bookmarks, setBookmarks] = useState(false);
+  // On by default — see the note at the top. Not reset when the dialog closes:
+  // somebody who turned it off has said something about how they archive, and
+  // the direction that persists is the safe one.
+  const [bookmarks, setBookmarks] = useState(true);
   const [failure, setFailure] = useState<string | undefined>();
   const [busy, setBusy] = useState(false);
 
